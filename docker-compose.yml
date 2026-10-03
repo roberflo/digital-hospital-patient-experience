@@ -1,0 +1,40 @@
+name: recepcion
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: recepcion
+      POSTGRES_USER: recepcion
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+    volumes: [postgres:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U recepcion -d recepcion']
+      interval: 5s
+      timeout: 5s
+      retries: 15
+    restart: unless-stopped
+  api:
+    build: ./backend
+    env_file: .env
+    environment:
+      ConnectionStrings__Database: Host=db;Database=recepcion;Username=recepcion;Password=${POSTGRES_PASSWORD}
+      KEY_DIRECTORY: /keys
+      INITIALIZE_DATABASE: ${INITIALIZE_DATABASE:-true}
+    volumes: [keys:/keys]
+    ports: ['127.0.0.1:5215:8080']
+    depends_on:
+      db: {condition: service_healthy}
+    restart: unless-stopped
+  web:
+    build: ./frontend
+    env_file: .env
+    environment:
+      API_URL: http://api:8080
+      NEXTAUTH_SECRET: ${AUTH_SECRET}
+      NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3215}
+    ports: ['127.0.0.1:3215:3000']
+    depends_on: [api]
+    restart: unless-stopped
+volumes:
+  postgres:
+  keys:

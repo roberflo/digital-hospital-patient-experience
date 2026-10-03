@@ -1,0 +1,78 @@
+using Microsoft.EntityFrameworkCore;
+using Recepcion.Integrations;
+namespace Recepcion;
+public static class CrmEndpoints {
+    public static void Audit(CrmDb db,TenantScope t,CurrentUser u,string action,Guid id) => db.Audits.Add(new Audit{TenantId=t.Id,Actor=u.Subject,Action=action,Resource=id.ToString()});
+    public static void MapCrm(this WebApplication app) {
+        var api=app.MapGroup("/api").RequireAuthorization();
+        api.MapGet("/me",async(CrmDb db,TenantScope t,CurrentUser u)=>new{u.Subject,u.Name,u.Role,tenant=await db.Tenants.Where(x=>x.Id==t.Id).Select(x=>new{x.Id,x.Name,x.TimeZone,x.AgentEnabled}).SingleAsync()});
+        api.MapGet("/overview",async(CrmDb db)=>new{contacts=await db.Contacts.CountAsync(),conversations=await db.Conversations.CountAsync(x=>x.Status!="closed"),human=await db.Conversations.CountAsync(x=>x.Status=="human"),agent=await db.Conversations.CountAsync(x=>x.Status=="agent"),opportunities=await db.Opportunities.CountAsync(x=>x.Stage!="won"&&x.Stage!="lost"),pending=await db.Jobs.CountAsync(x=>x.Status=="pending"),failed=await db.Jobs.CountAsync(x=>x.Status=="failed"||x.Status=="uncertain")});
+        api.MapGet("/contacts",async(CrmDb db,string? q,int? page)=>{
+            var rows=await db.Contacts.OrderByDescending(x=>x.CreatedAt).Take(2000).ToListAsync();
+            return rows.Where(x=>string.IsNullOrEmpty(q)||x.Name.Contains(q,StringComparison.OrdinalIgnoreCase)||x.Phone.Contains(q)).Skip(Math.Max(0,(page??1)-1)*100).Take(100);
+        });
+        api.MapPost("/contacts",async(ContactInput b,CrmDb db,TenantScope t,CurrentUser u,IConfiguration c)=>{
+            var row=new Contact{TenantId=t.Id};SetContact(row,b,c);db.Add(row);Audit(db,t,u,"contact.created",row.Id);await db.SaveChangesAsync();return Results.Created($"/api/contacts/{row.Id}",row);
+        });
+        api.MapPut("/contacts/{id:guid}",async(Guid id,ContactInput b,CrmDb db,TenantScope t,CurrentUser u,IConfiguration c)=>{
+            var row=await db.Contacts.SingleOrDefaultAsync(x=>x.Id==id);if(row is null)return Results.NotFound();
+            if(row.Phone!=Rules.Phone(b.Phone))row.PatientId=null;SetContact(row,b,c);Audit(db,t,u,"contact.updated",id);await db.SaveChangesAsync();return Results.Ok(row);
+        });
+        api.MapPost("/contacts/{id:guid}/patient",async(Guid id,PatientLinkInput b,CrmDb db,TenantScope t,CurrentUser u,HospitalClient h)=>{
+            var row=await db.Contacts.SingleOrDefaultAsync(x=>x.Id==id);if(row is null)return Results.NotFound();
+            await h.GetVerifiedPatientAsync(t.Id,b.PatientId,row.Phone);row.PatientId=b.PatientId;Audit(db,t,u,"patient.linked",id);await db.SaveChangesAsync();return Results.Ok(row);
+        });
+        api.MapGet("/companies",async(CrmDb db)=>await db.Companies.OrderBy(x=>x.Name).Take(200).ToListAsync());
+        api.MapPost("/companies",async(CompanyInput b,CrmDb db,TenantScope t,CurrentUser u)=>{
+            var row=new Company{TenantId=t.Id,Name=Rules.Required(b.Name),Industry=b.Industry??"",Email=b.Email??"",Phone=b.Phone??""};db.Add(row);Audit(db,t,u,"company.created",row.Id);await db.SaveChangesAsync();return Results.Ok(row);
+        });
+        api.MapPut("/companies/{id:guid}",async(Guid id,CompanyInput b,CrmDb db,TenantScope t,CurrentUser u)=>{
+            var row=await db.Companies.SingleOrDefaultAsync(x=>x.Id==id);if(row is null)return Results.NotFound();row.Name=Rules.Required(b.Name);row.Industry=b.Industry??"";row.Email=b.Email??"";row.Phone=b.Phone??"";Audit(db,t,u,"company.updated",id);await db.SaveChangesAsync();return Results.Ok(row);
+        });
+        api.MapGet("/opportunities",async(CrmDb db)=>await db.Opportunities.OrderByDescending(x=>x.UpdatedAt).Take(500).ToListAsync());
+        api.MapPost("/opportunities",async(OpportunityInput b,CrmDb db,TenantScope t,CurrentUser u)=>{
+            if(!await db.Contacts.AnyAsync(x=>x.Id==b.ContactId))return Results.NotFound();ValidateStage(b.Stage);if(b.Value<0)throw new ArgumentException("Valor inválido");
+            var row=new Opportunity{TenantId=t.Id,ContactId=b.ContactId,Title=Rules.Required(b.Title),Value=b.Value,Stage=b.Stage};db.Add(row);Audit(db,t,u,"opportunity.created",row.Id);await db.SaveChangesAsync();return Results.Ok(row);
+        });
+        api.MapPatch("/opportunities/{id:guid}",async(Guid id,StageInput b,CrmDb db,TenantScope t,CurrentUser u)=>{
+            var row=await db.Opportunities.SingleOrDefaultAsync(x=>x.Id==id);if(row is null)return Results.NotFound();ValidateStage(b.Stage);row.Stage=b.Stage;row.UpdatedAt=DateTimeOffset.UtcNow;Audit(db,t,u,"opportunity.stage",id);await db.SaveChangesAsync();return Results.Ok(row);
+        });
+        api.MapGet("/activities",async(CrmDb db,Guid? contactId,Guid? conversationId)=>await db.Activities.Where(x=>(contactId==null||x.ContactId==contactId)&&(conversationId==null||x.ConversationId==conversationId)).OrderByDescending(x=>x.CreatedAt).Take(150).ToListAsync());
+        api.MapPost("/activities",async(ActivityInput b,CrmDb db,TenantScope t,CurrentUser u)=>{
+            if(b.ContactId is {} cid&&!await db.Contacts.AnyAsync(x=>x.Id==cid))return Results.NotFound();
+            if(b.ConversationId is {} vid&&!await db.Conversations.AnyAsync(x=>x.Id==vid))return Results.NotFound();
+            var row=new Activity{TenantId=t.Id,ContactId=b.ContactId,ConversationId=b.ConversationId,Body=Rules.Required(b.Body,10000),Kind="note",Actor=u.Name};db.Add(row);Audit(db,t,u,"activity.created",row.Id);await db.SaveChangesAsync();return Results.Ok(row);
+        });
+        api.MapGet("/members",async(CrmDb db)=>await db.Members.Select(x=>new{x.Subject,x.Name,x.Role,x.Disabled}).ToListAsync());
+        api.MapPatch("/members/{id}",async(string id,MemberInput b,CrmDb db,CurrentUser u,TenantScope t)=>{
+            u.RequireAdmin();if(id==u.Subject)throw new ArgumentException("No puedes desactivar tu propia cuenta");var row=await db.Members.SingleOrDefaultAsync(x=>x.Subject==id);if(row is null)return Results.NotFound();row.Disabled=b.Disabled;Audit(db,t,u,"member.access",row.Id);await db.SaveChangesAsync();return Results.Ok();
+        });
+        api.MapGet("/settings",async(CrmDb db,TenantScope t,CurrentUser u,HospitalClient h,IConfiguration c)=>{
+            u.RequireAdmin();var tenant=await db.Tenants.SingleAsync(x=>x.Id==t.Id);
+            return new{tenant.Name,tenant.Guide,tenant.TimeZone,tenant.AgentEnabled,tenant.GoogleCalendarId,googleConnected=tenant.GoogleRefreshToken!=null,hospitalConfigured=h.IsConfigured(t.Id),kapsoConfigured=!string.IsNullOrEmpty(c["KAPSO_API_KEY"]),aiConfigured=!string.IsNullOrEmpty(c["NVIDIA_API_KEY"]),sendEnabled=c["SEND_ENABLED"]=="true",aiModel=c["AI_MODEL"]??"nvidia/nemotron-3-super-120b-a12b"};
+        });
+        api.MapPut("/settings",async(SettingsInput b,CrmDb db,TenantScope t,CurrentUser u)=>{
+            u.RequireAdmin();if(b.Guide.Length>30000)throw new ArgumentException("Guía demasiado extensa");
+            try{TimeZoneInfo.FindSystemTimeZoneById(b.TimeZone);}catch(TimeZoneNotFoundException){throw new ArgumentException("Zona horaria inválida");}
+            var row=await db.Tenants.SingleAsync(x=>x.Id==t.Id);row.Name=Rules.Required(b.Name);row.Guide=b.Guide;row.TimeZone=b.TimeZone;row.AgentEnabled=b.AgentEnabled;row.GoogleCalendarId=string.IsNullOrWhiteSpace(b.GoogleCalendarId)?null:b.GoogleCalendarId;
+            Audit(db,t,u,"settings.updated",t.Id);await db.SaveChangesAsync();return Results.Ok();
+        });
+        api.MapGet("/audit",async(CrmDb db,CurrentUser u)=>{u.RequireSupervisor();return await db.Audits.OrderByDescending(x=>x.CreatedAt).Take(200).ToListAsync();});
+        api.MapGet("/jobs",async(CrmDb db,CurrentUser u)=>{u.RequireSupervisor();return await db.Jobs.OrderByDescending(x=>x.CreatedAt).Take(100).ToListAsync();});
+        api.MapPost("/platform/tenants",async(TenantInput b,CrmDb db,CurrentUser u)=>{
+            if(u.Role!="platform_admin")throw new AccessDeniedException();if(b.Id==Guid.Empty)throw new ArgumentException("ID de tenant requerido");
+            db.Tenants.Add(new Tenant{Id=b.Id,Name=Rules.Required(b.Name)});await db.SaveChangesAsync();return Results.Created("/api/platform/tenants",new{b.Id,b.Name});
+        });
+    }
+    static void SetContact(Contact row,ContactInput b,IConfiguration c){row.Name=Rules.Required(b.Name);row.Phone=Rules.Phone(b.Phone);row.PhoneHash=Rules.PhoneHash(b.Phone,c["PHONE_HASH_KEY"]!);row.Email=b.Email??"";row.Tags=b.Tags??"";if(row.Email.Length>320||row.Tags.Length>500)throw new ArgumentException("Campo demasiado largo");}
+    static void ValidateStage(string stage){if(stage is not("new" or "contacted" or "scheduled" or "won" or "lost"))throw new ArgumentException("Etapa inválida");}
+}
+public record ContactInput(string Name,string Phone,string? Email,string? Tags);
+public record CompanyInput(string Name,string? Industry,string? Email,string? Phone);
+public record OpportunityInput(string Title,Guid ContactId,decimal Value,string Stage);
+public record StageInput(string Stage);
+public record ActivityInput(string Body,Guid? ContactId,Guid? ConversationId);
+public record PatientLinkInput(Guid PatientId);
+public record MemberInput(bool Disabled);
+public record SettingsInput(string Name,string Guide,string TimeZone,bool AgentEnabled,string? GoogleCalendarId);
+public record TenantInput(Guid Id,string Name);
