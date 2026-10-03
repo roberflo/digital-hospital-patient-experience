@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+node_modules/
+.next/
+bin/
+obj/
+artifacts/
+.DS_Store
+playwright-report/
+test-results/
+secrets/
