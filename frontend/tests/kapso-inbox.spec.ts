@@ -296,3 +296,45 @@ test('switching hospital number clears the open chat and scopes provider request
   ).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Paciente de prueba' })).toHaveCount(0);
 });
+
+test('expired manual send restores WhatsApp draft and conversation after signing in', async ({
+  page,
+  context,
+}) => {
+  await realtime(page);
+  await login(page);
+  await page.route('**/api/conversations?*', (route) =>
+    route.fulfill({ json: { data: [base], manualSendEnabled: true } }),
+  );
+  await page.route('**/api/conversations/*/messages*', (route) =>
+    route.fulfill({ json: { conversation: base, data: [inbound] } }),
+  );
+  let attempts = 0;
+  await page.route('**/api/messages?*', async (route) => {
+    attempts++;
+    await context.clearCookies();
+    return route.fulfill({ status: 401, json: { error: 'Sesión expirada' } });
+  });
+  await page.goto('/inbox');
+  await page.getByRole('button', { name: 'Abrir conversación con Paciente de prueba' }).click();
+  await page.getByLabel('Mensaje', { exact: true }).fill('Borrador WhatsApp sintético');
+  await page.getByRole('button', { name: 'Enviar mensaje', exact: true }).click();
+  const dialog = page.getByRole('dialog').filter({ hasText: 'Tu sesión terminó' });
+  await expect(dialog).toBeVisible();
+  const popup = context.waitForEvent('page');
+  await dialog.getByRole('link', { name: 'Iniciar sesión y continuar' }).click();
+  const auth = await popup;
+  await auth.getByLabel('Contraseña', { exact: true }).fill('demo-recepcion');
+  await auth.getByRole('button', { name: 'Entrar al espacio' }).click();
+  await expect(auth.getByRole('heading', { name: 'Ya puedes continuar' })).toBeVisible();
+  await expect(dialog).not.toBeVisible();
+  await expect(page.getByLabel('Mensaje', { exact: true })).toHaveValue(
+    'Borrador WhatsApp sintético',
+  );
+  await expect(
+    page.getByRole('heading', { name: 'Paciente de prueba', exact: true }),
+  ).toBeVisible();
+  expect(attempts).toBe(1);
+  await page.unrouteAll({ behavior: 'wait' });
+  await auth.close();
+});

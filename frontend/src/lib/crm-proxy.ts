@@ -1,4 +1,5 @@
 import 'server-only';
+import { refreshSession, RefreshSessionError } from './refresh-session';
 import { getToken, encode } from 'next-auth/jwt';
 import { NextRequest, NextResponse } from 'next/server';
 const ALLOWED = new Set([
@@ -42,25 +43,21 @@ export async function proxy(req: NextRequest, { params }: { params: Promise<{ pa
         { status: 401 },
       );
     try {
-      const refresh = await fetch(`${process.env.KEYCLOAK_ISSUER}/protocol/openid-connect/token`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          grant_type: 'refresh_token',
-          refresh_token: token.refreshToken,
-          client_id: process.env.KEYCLOAK_CLIENT_ID!,
-          client_secret: process.env.KEYCLOAK_CLIENT_SECRET!,
-        }),
-        cache: 'no-store',
-      });
-      if (!refresh.ok) throw new Error();
-      const value = await refresh.json();
-      token.accessToken = value.access_token;
-      token.refreshToken = value.refresh_token ?? token.refreshToken;
-      token.accessExpires = Date.now() + value.expires_in * 1000;
+      const renewed = await refreshSession(token.refreshToken);
+      token.accessToken = renewed.accessToken;
+      token.refreshToken = renewed.refreshToken;
+      token.accessExpires = renewed.accessExpires;
       refreshed = true;
-    } catch {
-      return NextResponse.json({ title: 'Sesión expirada' }, { status: 401 });
+    } catch (error) {
+      return NextResponse.json(
+        {
+          title:
+            error instanceof RefreshSessionError
+              ? error.message
+              : 'No se pudo renovar la sesión. Inténtalo de nuevo.',
+        },
+        { status: error instanceof RefreshSessionError ? error.status : 503 },
+      );
     }
   }
   const headers = new Headers({ Authorization: `Bearer ${token.accessToken}` });

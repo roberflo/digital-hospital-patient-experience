@@ -1,4 +1,11 @@
 'use client';
+import {
+  sessionFetch,
+  isSessionPaused,
+  SessionExpiredError,
+  SESSION_EXPIRED,
+  SESSION_RESUMED,
+} from '@/lib/session-client';
 import Link from 'next/link';
 import useSWR from 'swr';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -75,7 +82,7 @@ class RequestError extends Error {
   }
 }
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, { ...init, cache: 'no-store' });
+  const response = await sessionFetch(url, { ...init, cache: 'no-store' });
   const body = await response.json();
   if (!response.ok)
     throw new RequestError(
@@ -95,7 +102,7 @@ export default function KapsoInbox() {
   }, []);
   const numbers = channels?.filter((c) => /^\d+$/.test(c.phoneNumberId)) || [];
   const current = numbers.find((c) => c.phoneNumberId === chosen) || numbers[0];
-  if (error)
+  if (error && !channels)
     return (
       <main className="p-8">
         <p role="alert">{error.message}</p>
@@ -161,12 +168,30 @@ function InboxForNumber({ number, selector }: { number: string; selector: React.
   const sendingRef = useRef(false);
   const [manualSend, setManualSend] = useState(false);
   const [live, setLive] = useState(false);
+  const [sessionPaused, setSessionPaused] = useState(isSessionPaused);
+  useEffect(() => {
+    const pause = () => {
+      setSessionPaused(true);
+      setLive(false);
+    };
+    const resume = () => {
+      setSessionPaused(false);
+      setError('');
+    };
+    window.addEventListener(SESSION_EXPIRED, pause);
+    window.addEventListener(SESSION_RESUMED, resume);
+    return () => {
+      window.removeEventListener(SESSION_EXPIRED, pause);
+      window.removeEventListener(SESSION_RESUMED, resume);
+    };
+  }, []);
   const [now, setNow] = useState(Date.now());
   const scroller = useRef<HTMLDivElement>(null);
   const shouldScroll = useRef(true);
   const revoked = useRef(false);
   const fail = useCallback((e: unknown) => {
-    if (e instanceof RequestError && [401, 403].includes(e.status)) {
+    if (e instanceof SessionExpiredError || (e instanceof RequestError && e.status === 401)) return;
+    if (e instanceof RequestError && e.status === 403) {
       revoked.current = true;
       selectedRef.current = null;
       setSelected(null);
@@ -222,6 +247,7 @@ function InboxForNumber({ number, selector }: { number: string; selector: React.
     [numberQuery],
   );
   useEffect(() => {
+    if (sessionPaused) return;
     let alive = true;
     const update = async () => {
       try {
@@ -293,7 +319,7 @@ function InboxForNumber({ number, selector }: { number: string; selector: React.
       clearInterval(poll);
       source.close();
     };
-  }, [refreshList, refreshChat, fail, numberQuery]);
+  }, [refreshList, refreshChat, fail, numberQuery, sessionPaused]);
   useEffect(() => {
     if (shouldScroll.current && scroller.current)
       scroller.current.scrollTop = scroller.current.scrollHeight;
@@ -377,6 +403,13 @@ function InboxForNumber({ number, selector }: { number: string; selector: React.
         );
       await refreshList();
     } catch (e) {
+      if (
+        selectedRef.current?.id === current.id &&
+        (e instanceof SessionExpiredError || (e instanceof RequestError && e.status === 401))
+      ) {
+        setText((draft) => draft || value);
+        setMessages((old) => old.filter((m) => m.id !== pending));
+      }
       if (selectedRef.current?.id === current.id)
         setMessages((old) =>
           old.map((m) =>

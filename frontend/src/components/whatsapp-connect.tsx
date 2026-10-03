@@ -1,4 +1,5 @@
 'use client';
+import { sessionFetch } from '@/lib/session-client';
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import useSWR from 'swr';
@@ -14,7 +15,7 @@ type Channel = {
 };
 type Sync = { connected: number; added: number; webhooksReady: number; warnings: string[] };
 async function api<T>(path: string, method = 'GET'): Promise<T> {
-  const response = await fetch('/api/crm' + path, {
+  const response = await sessionFetch('/api/crm' + path, {
     method,
     cache: 'no-store',
     ...(method === 'POST' ? { headers: { 'Content-Type': 'application/json' }, body: '{}' } : {}),

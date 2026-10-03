@@ -46,6 +46,11 @@ flowchart LR
 
 El navegador no recibe tokens de proveedor. El tenant procede del JWT firmado; en webhooks se resuelve por el número registrado. El teléfono y el vínculo al paciente se comprueban contra Hospital antes de cada consulta privada. Los PDFs pasan en memoria, sin enlaces públicos permanentes.
 
+La sesión vencida muestra un aviso único y pausa las consultas. El usuario inicia sesión en otra pestaña y vuelve al mismo formulario o conversación, con sus borradores en memoria. No cerrar ni recargar la pestaña original: no se guardan borradores clínicos en el almacenamiento del navegador. La recuperación valida usuario y hospital; una cuenta diferente abre un espacio limpio. No se reenvían mensajes ni operaciones fallidas. Los accesos directos conservan una ruta de retorno local validada.
+
+El BFF agrupa renovaciones simultáneas del token de Keycloak dentro de un proceso Node y distingue `invalid_grant` (401) de fallos temporales de conexión/proveedor (503). El caché de renovación es acotado y efímero; varias réplicas necesitan un coordinador compartido de sesiones/renovación. Se mantienen los tiempos de expiración existentes.
+
+
 ## Verificación
 
 ```sh

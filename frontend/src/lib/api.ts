@@ -1,10 +1,11 @@
+import { sessionFetch } from './session-client';
 export async function api<T = unknown>(
   path: string,
   method = 'GET',
   body?: unknown,
   requestKey?: string,
 ): Promise<T> {
-  const res = await fetch('/api/crm' + path, {
+  const res = await sessionFetch('/api/crm' + path, {
     method,
     headers:
       body instanceof FormData
@@ -22,7 +23,7 @@ export async function api<T = unknown>(
       message = p.title ?? message;
     } catch {}
     if (res.status === 401) message = 'Tu sesión expiró. Vuelve a iniciar sesión.';
-    throw new Error(message);
+    throw Object.assign(new Error(message), { status: res.status });
   }
   if (res.status === 204) return undefined as T;
   const text = await res.text();

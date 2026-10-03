@@ -10,8 +10,9 @@ export const DialogDescription = D.Description;
 export function DialogContent({
   children,
   className,
+  showClose = true,
   ...props
-}: React.ComponentProps<typeof D.Content>) {
+}: React.ComponentProps<typeof D.Content> & { showClose?: boolean }) {
   return (
     <D.Portal>
       <D.Overlay className="fixed inset-0 z-50 bg-slate-950/35 backdrop-blur-[2px]" />
@@ -23,9 +24,14 @@ export function DialogContent({
         {...props}
       >
         {children}
-        <D.Close className="absolute right-4 top-4 rounded p-1 hover:bg-muted" aria-label="Cerrar">
-          <X size={18} />
-        </D.Close>
+        {showClose && (
+          <D.Close
+            className="absolute right-4 top-4 rounded p-1 hover:bg-muted"
+            aria-label="Cerrar"
+          >
+            <X size={18} />
+          </D.Close>
+        )}
       </D.Content>
     </D.Portal>
   );

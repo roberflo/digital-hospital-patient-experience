@@ -3,7 +3,15 @@ import { signIn } from 'next-auth/react';
 import { useState } from 'react';
 import { HeartPulse, ArrowRight, MessageCircle, CalendarCheck, ShieldCheck } from 'lucide-react';
 import { Button } from './ui/button';
-export default function Login({ demo, hospitalDemo }: { demo: boolean; hospitalDemo: boolean }) {
+export default function Login({
+  demo,
+  hospitalDemo,
+  returnTo = '/',
+}: {
+  demo: boolean;
+  hospitalDemo: boolean;
+  returnTo?: string;
+}) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   return (
@@ -44,7 +52,9 @@ export default function Login({ demo, hospitalDemo }: { demo: boolean; hospitalD
       <section className="login-form">
         <div className="login-box">
           <span className="pill">TU ESPACIO DE TRABAJO</span>
-          <h2>Bienvenido a recepción</h2>
+          <h2>
+            {returnTo === '/session-restored' ? 'Recupera tu sesión' : 'Bienvenido a recepción'}
+          </h2>
           <p>Inicia sesión para continuar con la atención.</p>
           {demo ? (
             <form
@@ -58,7 +68,7 @@ export default function Login({ demo, hospitalDemo }: { demo: boolean; hospitalD
                   password: f.get('password'),
                   redirect: false,
                 });
-                if (r?.ok) window.location.href = '/';
+                if (r?.ok) window.location.href = returnTo;
                 else {
                   setError('No fue posible iniciar sesión. Comprueba tus datos.');
                   setBusy(false);
@@ -94,7 +104,10 @@ export default function Login({ demo, hospitalDemo }: { demo: boolean; hospitalD
               </Button>
             </form>
           ) : (
-            <Button className="w-full" onClick={() => signIn('keycloak', { callbackUrl: '/' })}>
+            <Button
+              className="w-full"
+              onClick={() => signIn('keycloak', { callbackUrl: returnTo })}
+            >
               Continuar con mi cuenta del hospital
               <ArrowRight />
             </Button>
