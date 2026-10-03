@@ -10,3 +10,6 @@ artifacts/
 playwright-report/
 test-results/
 secrets/
+backups/
+*.tsbuildinfo
+integrations/hospital/staged/

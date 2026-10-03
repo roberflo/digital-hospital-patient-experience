@@ -40,6 +40,25 @@ public sealed class HospitalClient(HttpClient http, IConfiguration configuration
     public Task<JsonElement> GetAgendaDayAsync(Guid tenantId, DateOnly day, CancellationToken ct = default) =>
         ReadAsync<JsonElement>(tenantId, $"v1/agenda/day?clinicalDay={day:yyyy-MM-dd}", ct);
 
+    public async Task<JsonElement> GetPatientAppointmentsAsync(Guid tenantId, Guid patientId,
+        string phone, DateOnly day, CancellationToken ct = default)
+    {
+        await GetVerifiedPatientAsync(tenantId, patientId, phone, ct);
+        var agenda = await GetAgendaDayAsync(tenantId, day, ct);
+        // Filter inside the trusted adapter before anything reaches a patient or model.
+        var rows = agenda.GetProperty("rows").EnumerateArray()
+            .Where(x => x.GetProperty("patientId").GetGuid() == patientId)
+            .Select(x => new
+            {
+                appointmentId = x.GetProperty("appointmentId").GetGuid(),
+                startsAt = x.GetProperty("scheduledStart").GetDateTimeOffset(),
+                durationMinutes = x.GetProperty("durationMinutes").GetInt32(),
+                doctor = x.GetProperty("clinicianName").GetString(),
+                status = x.GetProperty("status").GetString()
+            }).ToArray();
+        return JsonSerializer.SerializeToElement(rows, Json);
+    }
+
     public async Task<HospitalAppointmentCreated> CreateAppointmentAsync(Guid tenantId,
         string senderPhone, HospitalAppointmentCreate input, CancellationToken ct = default)
     {
@@ -179,7 +198,8 @@ public sealed class HospitalClient(HttpClient http, IConfiguration configuration
         {
             Content = new FormUrlEncodedContent(new Dictionary<string, string>
             {
-                ["grant_type"] = "client_credentials", ["client_id"] = tenant["ClientId"]!,
+                ["grant_type"] = "client_credentials",
+                ["client_id"] = tenant["ClientId"]!,
                 ["client_secret"] = tenant["ClientSecret"]!
             })
         };
