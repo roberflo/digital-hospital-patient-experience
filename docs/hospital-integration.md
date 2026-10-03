@@ -6,7 +6,7 @@ Contratos comprobados en el código de `../Hospital/backend/src` el 2026-10-02. 
 
 - El hospital exige JWT Keycloak firmado, audiencia/issuer válidos, `sub` GUID y `tenant_id` GUID no vacío. No acepta tenant en body, query ni un header alternativo.
 - Lee los roles desde `realm_access.roles`, con etiquetas exactas: `Recepción`, `Admisión`, `Enfermería`, `Médicos`, `Odontólogos`, `Nutricionistas`, `Administrador`.
-- Roles del CRM `platform-admin`, `business-admin`, `supervisor`, `agent`, `doctor` deben mapearse explícitamente en CRM; no se deben inventar equivalencias que el hospital no reconoce. Administrador no tiene acceso clínico en Hospital.
+- Roles del CRM `platform_admin`, `admin`, `supervisor`, `agent`, `doctor` deben mapearse explícitamente en CRM; no se deben inventar equivalencias que el hospital no reconoce. Administrador no tiene acceso clínico en Hospital.
 - Cada tenant CRM usa una configuración de hospital independiente. Su identificador debe coincidir con el `tenant_id` del token de servicio. El adaptador rechaza token ajeno, expirado o sin claim antes de hacer llamadas. El hospital sigue validando firma/issuer/audience; decodificar localmente el payload sólo evita errores de enrutamiento de credenciales configuradas.
 - Registrar el HttpClient con timeout de 30 segundos, máximo de respuesta razonable y redirecciones deshabilitadas. No aplicar retries automáticos a escrituras.
 
@@ -57,7 +57,7 @@ La primera vinculación se hace por personal autorizado: el contacto CRM guarda 
 2. **Recetas por agente:** las rutas clínicas actuales requieren un rol clínico. `AllowClinicalDelivery` permanece desactivado para el bot hasta desplegar el puente estrecho descrito en `integrations/hospital`. Se requieren ambos flags AllowClinicalDelivery y UseReceptionBridge; no existe fallback hacia rutas clínicas generales. Activar los flags no otorga permiso al hospital. Dar al bot el rol `Médicos` para desbloquearlo sería un defecto.
 3. **Contenido clínico:** el agente no firma, cancela, repite ni modifica recetas; interpreta únicamente instrucciones textuales ya emitidas. Dudas sobre dosis nuevas, tratamiento o síntomas se transfieren al doctor.
 4. **Adjuntos:** el PDF se obtiene como bytes en memoria. No se publica una URL permanente que revele recetas, ni se devuelve la URL de almacenamiento interno al usuario.
-5. **Google Calendar:** Hospital no publica integración Google Calendar. El CRM puede sincronizar agenda en una dirección con outbox y clave de evento por tenant/cita, conservando Hospital como fuente. Cambios externos no deben sobrescribir su agenda sin un contrato de conciliación. El espejo de Google debe llevar título genérico y datos mínimos, nunca receta/diagnóstico.
+5. **Google Calendar:** Hospital no publica integración Google Calendar. El CRM puede sincronizar agenda en una dirección con sondeo periódico y clave de evento por tenant/cita, conservando Hospital como fuente. Cambios externos no deben sobrescribir su agenda sin un contrato de conciliación. El espejo de Google debe llevar título genérico y datos mínimos, nunca receta/diagnóstico.
 
 ## Verificación ejecutada
 

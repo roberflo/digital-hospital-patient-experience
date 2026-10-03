@@ -17,17 +17,17 @@ Fecha: 2026-10-02. Alcance: CRM agent-first para un hospital por empresa, usuari
 
 | ID | Entrega / criterio de aceptación | Cómo se prueba | Estado |
 |---|---|---|---|
-| B01 | Stack reproducible Next.js/shadcn, .NET 10, PostgreSQL; health/readiness | builds y compose healthy | pendiente |
-| B02 | Keycloak compartido, roles y membresía única; demo solo Development explícito | 401/403, token inválido, acceso cruzado entre dos tenants | pendiente |
-| B03 | Contactos, empresas, oportunidades, actividades y notas persistentes | CRUD API + UI, validación y aislamiento | pendiente |
-| B04 | Bandeja de conversaciones, asignación, historial, pausa/reanudación del agente | webhook → bandeja → humano y autorización | pendiente |
-| B05 | Kapso: números, onboarding, firma, deduplicación, media, coexistencia | fixtures oficiales, firma inválida, eventos repetidos y ecos | pendiente |
-| B06 | Agente NIM intercambiable con herramientas acotadas y trazabilidad | proveedor simulado, tool calls y handoff | pendiente |
-| B07 | Integración API Hospital para identidad, agenda y recetas | contratos reales, errores y falta de vínculo | pendiente |
-| B08 | Google OAuth y sincronización de agenda por hospital | estado OAuth, tokens protegidos, upsert/cancel idempotente | pendiente |
-| B09 | Guía por empresa y administración de canales/usuarios | restricciones admin y separación por tenant | pendiente |
-| B10 | Contenedores Easypanel, secretos, backups, despliegue documentado | configuración validada y smoke tests | pendiente |
-| B11 | Pruebas de seguridad, integración y navegador; revisión | resultados reales registrados, sin simular pases | pendiente |
+| B01 | Stack reproducible Next.js/shadcn, .NET 10, PostgreSQL; health/readiness | builds y compose healthy | Implementado; compose/build local verificado |
+| B02 | Keycloak compartido, roles y membresía única; demo solo Development explícito | 401/403, token inválido, acceso cruzado entre dos tenants | Implementado y probado; SSO real pendiente |
+| B03 | Contactos, empresas, oportunidades, actividades y notas persistentes | CRUD API + UI, validación y aislamiento | Implementado y probado |
+| B04 | Bandeja de conversaciones, asignación, historial, pausa/reanudación del agente | webhook → bandeja → humano y autorización | Implementado y probado |
+| B05 | Kapso: números, onboarding, firma, deduplicación, media, coexistencia | fixtures oficiales, firma inválida, eventos repetidos y ecos | Implementado y probado con fixtures; MCP real verificado, coexistencia real pendiente |
+| B06 | Agente NIM intercambiable con herramientas acotadas y trazabilidad | proveedor simulado, tool calls y handoff | Implementado; mocks y NIM real con datos sintéticos verificados |
+| B07 | Integración API Hospital para identidad, agenda y recetas | contratos reales, errores y falta de vínculo | Implementado; adaptador y bridge probados, smoke Hospital real pendiente |
+| B08 | Google OAuth y sincronización de agenda por hospital | estado OAuth, tokens protegidos, upsert/cancel idempotente | Implementado y probado con proveedor simulado; OAuth real pendiente |
+| B09 | Guía por empresa y administración de canales/usuarios | restricciones admin y separación por tenant | Implementado y probado |
+| B10 | Contenedores Easypanel, secretos, backups, despliegue documentado | configuración validada y smoke tests | Contenedores y guía listos; despliegue Easypanel pendiente |
+| B11 | Pruebas de seguridad, integración y navegador; revisión | resultados reales registrados, sin simular pases | Pruebas dirigidas y E2E locales verificadas; ver verification.md |
 
 ## Secuencia
 
@@ -49,3 +49,13 @@ No considerar listo un mock; no confiar en tenant enviado por cliente; no enviar
 - Bloqueante para producción: dominios HTTPS, servicio de identidad y credenciales Hospital con permisos acotados por tenant.
 - Asumida: pruebas sintéticas y modo de envío desactivado hasta configuración explícita del negocio.
 - Las claves recibidas se usan solo como secretos locales ignorados y configuración de despliegue; no se incluyen en documentos.
+
+## Puesta en operación pendiente de configuración externa
+
+- R01: dominios y acceso al proyecto Easypanel; desplegar imágenes y volúmenes.
+- R02: cliente web Keycloak, tenant real y cuentas de servicio por Hospital; validar login/refresh real.
+- R03: desplegar el bridge aplicado en Hospital y probar receta/agenda con stores reales.
+- R04: OAuth Google, calendario compartido y consentimiento real; probar alta, cambio y cancelación.
+- R05: números WhatsApp de negocio/doctores elegibles para coexistencia, webhook y prueba controlada.
+
+Estas tareas requieren datos/cuentas del entorno objetivo y no se marcan como completadas por haber implementado sus adaptadores.

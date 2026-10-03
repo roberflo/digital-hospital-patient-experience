@@ -1,0 +1,39 @@
+name: Verify CRM
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: python3 scripts/init-dev.py
+      - run: docker compose up -d --build
+      - name: Wait for API and frontend
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:5215/health/ready && curl -fsS http://localhost:3215/login >/dev/null; then exit 0; fi
+            sleep 2
+          done
+          exit 1
+      - run: python3 tests/api_smoke.py
+      - run: scripts/test-backend.sh
+      - run: npm ci --prefix frontend
+      - run: npm run format:check --prefix frontend
+      - run: cd frontend && npx playwright install --with-deps chromium
+      - run: cd frontend && npx playwright test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-failure-evidence
+          path: |
+            frontend/playwright-report
+            frontend/test-results
+      - if: always()
+        run: docker compose down

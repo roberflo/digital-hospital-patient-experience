@@ -27,8 +27,13 @@ services:
     restart: unless-stopped
   web:
     build: ./frontend
-    env_file: .env
     environment:
+      AUTH_SECRET: ${AUTH_SECRET}
+      ALLOW_DEV_LOGIN: ${ALLOW_DEV_LOGIN:-false}
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Production}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-}
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-}
+      KEYCLOAK_ISSUER: ${KEYCLOAK_ISSUER:-}
       API_URL: http://api:8080
       NEXTAUTH_SECRET: ${AUTH_SECRET}
       NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3215}
