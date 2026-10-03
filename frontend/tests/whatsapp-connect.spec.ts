@@ -46,7 +46,7 @@ test('business admin gets hosted connection link and imports verified number wit
   await expect(hosted).toHaveAttribute('rel', 'noopener noreferrer');
   await page.getByRole('button', { name: 'Verificar conexión', exact: true }).click();
   await expect(page.getByText('1 número(s) agregado(s) a tu hospital.')).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Abrir bandeja →' })).toHaveAttribute(
+  await expect(page.getByRole('link', { name: 'Consultar historial →' })).toHaveAttribute(
     'href',
     '/inbox?phoneNumberId=1234567890',
   );

@@ -5,12 +5,15 @@ namespace Recepcion;
 
 public sealed class ConversationService(CrmDb db, TenantScope scope, KapsoClient kapso)
 {
-    public async Task<Message> Send(Guid id, string body, string sender, string requestKey, string? mediaId = null, string type = "text", CancellationToken ct = default)
+    public async Task<Message> Send(Guid id, string body, string sender, string requestKey, string? mediaId = null, string type = "text", CancellationToken ct = default, string? actingSubject = null)
     {
         if (string.IsNullOrWhiteSpace(requestKey) || requestKey.Length > 100) throw new ArgumentException("Idempotency-Key requerido");
         using var lease = await Lock(id, ct);
         var existing = await db.Messages.SingleOrDefaultAsync(x => x.RequestKey == requestKey, ct); if (existing is not null) { if (existing.ConversationId != id || existing.Body != body || existing.MediaId != mediaId || existing.Type != type) throw new ArgumentException("Clave de envío reutilizada"); return existing; }
-        var conv = await db.Conversations.SingleAsync(x => x.Id == id, ct); var channel = await db.Channels.SingleAsync(x => x.Id == conv.ChannelId, ct); var contact = await db.Contacts.SingleAsync(x => x.Id == conv.ContactId, ct);
+        var conv = await db.Conversations.SingleAsync(x => x.Id == id, ct);
+        await db.Entry(conv).ReloadAsync(ct);
+        if (actingSubject is not null && conv.AssignedTo != actingSubject) throw new ArgumentException("La conversación se transfirió a otra persona. Revisa el responsable antes de responder.");
+        var channel = await db.Channels.SingleAsync(x => x.Id == conv.ChannelId, ct); var contact = await db.Contacts.SingleAsync(x => x.Id == conv.ContactId, ct);
         if (!channel.Enabled) throw new ArgumentException("Canal desactivado");
         if (!Rules.WithinWindow(conv.LastInboundAt, DateTimeOffset.UtcNow)) throw new ArgumentException("Ventana de WhatsApp cerrada. Espera un mensaje del paciente o utiliza una plantilla aprobada desde Kapso.");
         var message = new Message { TenantId = scope.Id, ConversationId = id, Body = body, Sender = sender, RequestKey = requestKey, MediaId = mediaId, Type = type, Status = "sending" }; db.Add(message); await db.SaveChangesAsync(ct);

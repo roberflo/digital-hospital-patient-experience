@@ -124,3 +124,27 @@ redirect y el usuario vuelve a la pestaña; se consulta al recuperar el foco y c
 No se expone una ruta pública nueva en el túnel: se reutiliza `/webhooks/kapso`.
 La sincronización necesita que la aplicación esté abierta o que el administrador
 pulse Verificar conexión; no requiere un webhook de ciclo de vida del proyecto.
+
+## Equipo y responsables
+
+- **Bandeja de entrada** (`/?view=inbox`) es el espacio de gestión: responsable visible,
+  transferencia, filtros por persona, estado, número y seguimiento del cliente.
+- **Equipo** (`/?view=team`) muestra abiertas, pendientes y pospuestas por persona,
+  incluyendo conversaciones de todos los números del hospital. Una persona puede tener
+  varias conversaciones; cada conversación tiene un responsable principal.
+- Administradores y supervisores pueden seleccionar hasta 100 conversaciones de una página
+  para reasignarlas juntas. El servidor valida pertenencia, acceso y revisiones; si alguna
+  cambió, no aplica ninguna asignación de ese lote. Cada transferencia crea actividad y auditoría.
+- Un recepcionista puede tomar conversaciones sin responsable y transferir las suyas a
+  compañeros activos; no puede tomar las de otra persona por asignación, macro o envío CRM.
+- Sólo administradores desactivan/restauran acceso a Recepción. Deben reasignar primero el
+  trabajo activo. Esto no modifica ni desactiva la cuenta compartida del Hospital.
+- Las personas aparecen al iniciar sesión con la identidad de su hospital. La creación de
+  cuentas y los cambios de rol siguen en el proveedor de identidad del Hospital: su contrato
+  `/v1/clinic-users` todavía responde 501 y no se simula una invitación enviada.
+- **WhatsApp · números** (`/whatsapp`) administra conexiones. El acceso secundario
+  **Consultar historial** (`/inbox`) conserva la consulta y el envío manual autorizado de Kapso;
+  su enlace **Asignar y gestionar en bandeja** filtra por teléfono y número del mismo hospital.
+  El historial anterior a la recepción de webhooks puede no existir todavía en el CRM.
+  El envío directo de Kapso no aplica asignaciones del CRM; para coordinar el equipo se usa la
+  bandeja CRM. Las compuertas existentes de envío y agente automático no cambian.

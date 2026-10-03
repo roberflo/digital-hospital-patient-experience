@@ -160,4 +160,25 @@ check(len(call(base+'/messages',token=a)[1])==message_count,'Macro never sends a
 check(call('/api/macros/'+macro['id'],'DELETE',token=agent)[0]==403,'Macro removal restricted to supervisors')
 check(call('/api/macros/'+macro['id'],'DELETE',token=a)[0]==200,'Remove synthetic macro')
 check(call('/api/inbox-views/'+view['id'],'DELETE',token=a)[0]==200,'Owner removes synthetic view')
+# Team workload and handoff use CRM identities, never provider-global users.
+current=call('/api/conversations?conversationId='+cid,token=a)[1][0]['conversation']
+assignment={'conversations':[{'id':cid,'expectedRevision':current['revision']}],'assignedTo':'dev-doctor'}
+check(call('/api/conversations/assign','POST',assignment,agent)[0]==200,'Owner transfers attention to a doctor')
+check(call('/api/conversations/assign','POST',assignment,a)[0]==409,'Assignment rejects stale revision')
+check(call(base,'PATCH',{'status':'human','assignedTo':None},agent)[0]==403,'Another attendant cannot silently unassign the owner')
+check(call(base+'/messages','POST',{'body':'Must not be sent'},agent,headers={'Idempotency-Key':str(uuid.uuid4())})[0]==403,'Another attendant cannot take ownership by sending')
+check(call('/api/members/dev-doctor','PATCH',{'disabled':True},a)[0]==409,'Disable blocked until active work is reassigned')
+workload=call('/api/members/workload',token=a)[1]
+check(next(x for x in workload['members'] if x['subject']=='dev-doctor')['pending']>=1,'Workload counts pending conversations by teammate')
+check(not any(x['subject']=='dev-doctor' for x in call('/api/members/workload',token=b)[1]['members']),'Team directory and workload isolated by hospital')
+filtered=call('/api/conversations?assignment=member:dev-doctor',token=a)[1]
+check(any(x['conversation']['id']==cid for x in filtered) and all(x['conversation']['assignedTo']=='dev-doctor' for x in filtered),'Inbox filters by a specific teammate')
+linked=call('/api/conversations?phone='+phone+'&phoneNumberId=demo',token=a)[1]
+check(len(linked)==1 and linked[0]['conversation']['id']==cid,'WhatsApp deep link resolves the same CRM conversation')
+check(call('/api/conversations?phone='+phone+'&phoneNumberId=demo',token=b)[1]==[],'WhatsApp deep link cannot cross hospitals')
+status,team_view=call('/api/inbox-views','POST',{'name':'Doctor sintético','filters':dict(filters,assignment='member:dev-doctor')},a)
+check(status==200,'Specific teammate filter can be saved')
+call('/api/inbox-views/'+team_view['id'],'DELETE',token=a)
+current=call('/api/conversations?conversationId='+cid,token=a)[1][0]['conversation']
+check(call('/api/conversations/assign','POST',{'conversations':[{'id':cid,'expectedRevision':current['revision']}],'assignedTo':None},doctor)[0]==200,'Owner returns conversation to unassigned queue')
 print('RESULT:',count,'passed, 0 failed')

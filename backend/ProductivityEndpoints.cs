@@ -36,11 +36,12 @@ public static class ProductivityEndpoints
             db.Remove(row);CrmEndpoints.Audit(db,scope,user,"macro.deleted",id);await db.SaveChangesAsync();return Results.Ok();
         });
         api.MapPost("/conversations/{id:guid}/macros/{macroId:guid}",async(Guid id,Guid macroId,ApplyMacroInput input,CrmDb db,CurrentUser user,TenantScope scope,ConversationService locks)=>{
-            using var lease=await locks.Lock(id);
+            using var teamLease=await locks.Lock(scope.Id);using var lease=await locks.Lock(id);
             var row=await db.Conversations.SingleOrDefaultAsync(x=>x.Id==id);
             var macro=await db.Macros.SingleOrDefaultAsync(x=>x.Id==macroId);
             if(row is null||macro is null)return Results.NotFound();
             if(row.Revision!=input.ExpectedRevision)return Results.Conflict(new{title="La conversación cambió. Revisa los cambios antes de aplicar la macro."});
+            TeamEndpoints.RequireEditable(row,user);
             Apply(macro,row,user.Subject);
             db.Activities.Add(InboxWorkflow.Event(scope,row,user.Name,"macro","Macro aplicada: "+macro.Name));
             if(!string.IsNullOrWhiteSpace(macro.Note))db.Activities.Add(InboxWorkflow.Event(scope,row,user.Name,"note",macro.Note));
@@ -50,7 +51,7 @@ public static class ProductivityEndpoints
     public static ViewFilters ValidateFilters(ViewFilters filters)
     {
         if(filters is null||filters.State is null||filters.Assignment is null||filters.ChannelId is null||filters.Priority is null||filters.Label is null||filters.Mode is null)throw new ArgumentException("Filtros requeridos");
-        if(filters.State!=""&&!InboxWorkflow.States.Contains(filters.State)||!new[]{"all","mine","unassigned"}.Contains(filters.Assignment)||filters.Priority!=""&&!InboxWorkflow.Priorities.Contains(filters.Priority)||!new[]{"all","human","agent"}.Contains(filters.Mode))throw new ArgumentException("Filtro inválido");
+        if(filters.State!=""&&!InboxWorkflow.States.Contains(filters.State)||(!new[]{"all","mine","unassigned"}.Contains(filters.Assignment)&&!(filters.Assignment.StartsWith("member:",StringComparison.Ordinal)&&filters.Assignment.Length is >7 and <=207))||filters.Priority!=""&&!InboxWorkflow.Priorities.Contains(filters.Priority)||!new[]{"all","human","agent"}.Contains(filters.Mode))throw new ArgumentException("Filtro inválido");
         if(filters.ChannelId!=""&&!Guid.TryParse(filters.ChannelId,out _))throw new ArgumentException("Canal inválido");
         if(filters.Label.Length>40||filters.Label.Contains(','))throw new ArgumentException("Usa una sola etiqueta por vista");
         return filters with{Label=InboxWorkflow.Labels(filters.Label)};

@@ -61,6 +61,13 @@ import { PatientAppointments } from './patient-appointments';
 import { SavedInboxViews, ConversationMacros } from './inbox-productivity';
 import { DashboardView } from './dashboard-view';
 import {
+  AssignmentControl,
+  TeamWorkspace,
+  managesTeam,
+  memberLabel,
+  type Workload,
+} from './team-workspace';
+import {
   WorkflowControls,
   CustomerCrm,
   SavedReplies,
@@ -71,6 +78,7 @@ import {
 const nav = [
   ['dashboard', 'Dashboard', LayoutDashboard],
   ['inbox', 'Bandeja de entrada', Inbox],
+  ['team', 'Equipo', Users],
   ['contacts', 'Contactos', Users],
   ['companies', 'Empresas', Building2],
   ['opportunities', 'Oportunidades', Columns3],
@@ -277,6 +285,7 @@ export default function Workspace() {
   const [view, setView] = useState('dashboard');
   const [mobile, setMobile] = useState(false);
   const [search, setSearch] = useState('');
+  const [teamAssignment, setTeamAssignment] = useState<string | null>(null);
   const [todayLabel, setTodayLabel] = useState('');
   const { data: me, error } = useSWR<Me>('/me', fetcher);
   const { data: stats, error: statsError } = useSWR<Record<string, number>>('/overview', fetcher, {
@@ -339,6 +348,10 @@ export default function Workspace() {
               {id === 'agent' && <span className="nav-new">IA</span>}
             </button>
           ))}
+          <a className="nav-item" href="/whatsapp">
+            <MessageCircle size={18} />
+            <span>WhatsApp · números</span>
+          </a>
         </nav>
         <div className="sidebar-bottom">
           <div className="agent-mini">
@@ -423,6 +436,7 @@ export default function Workspace() {
                     {
                       dashboard: 'El resumen de la atención de tu hospital.',
                       inbox: 'Cada conversación, con el contexto que necesitas.',
+                      team: 'Organiza responsables y reparte la atención de tu hospital.',
                       contacts: 'Conoce a tus pacientes. Acompaña cada paso.',
                       companies: 'Relaciones y convenios que conectan tu hospital.',
                       opportunities: 'Del primer contacto al seguimiento de la atención.',
@@ -461,7 +475,16 @@ export default function Workspace() {
                   <DashboardView stats={stats} onNavigate={navigate} />
                 </>
               ) : view === 'inbox' ? (
-                <InboxView me={me} search={search} />
+                <InboxView me={me} search={search} initialAssignment={teamAssignment} />
+              ) : view === 'team' ? (
+                <TeamWorkspace
+                  me={me}
+                  search={search}
+                  onOpenInbox={(assignment) => {
+                    setTeamAssignment(assignment);
+                    navigate('inbox');
+                  }}
+                />
               ) : view === 'contacts' ? (
                 <ContactsView search={search} />
               ) : view === 'companies' ? (
@@ -484,16 +507,44 @@ export default function Workspace() {
     </div>
   );
 }
-function InboxView({ me, search }: { me: Me; search: string }) {
-  const [state, setState] = useState('open');
-  const [assignment, setAssignment] = useState('all');
+function InboxView({
+  me,
+  search,
+  initialAssignment,
+}: {
+  me: Me;
+  search: string;
+  initialAssignment: string | null;
+}) {
+  const [state, setState] = useState(initialAssignment ? '' : 'open');
+  const [assignment, setAssignment] = useState(initialAssignment ?? 'all');
+  const { data: workload } = useSWR<Workload>('/members/workload', fetcher, {
+    refreshInterval: 10000,
+  });
+  const { mutate: refreshTeam } = useSWRConfig();
+  const [checked, setChecked] = useState<Record<string, number>>({});
+  const [bulkTarget, setBulkTarget] = useState('');
+  const [assigning, setAssigning] = useState(false);
+  const [linkedPhone, setLinkedPhone] = useState('');
+  const [linkedNumber, setLinkedNumber] = useState('');
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get('phone')) {
+      setLinkedPhone(params.get('phone')!);
+      setLinkedNumber(params.get('phoneNumberId') ?? '');
+      setState('');
+    }
+  }, []);
   const [channelId, setChannelId] = useState('');
   const [priority, setPriority] = useState('');
   const [label, setLabel] = useState('');
   const [page, setPage] = useState(1);
   const { data: channels } = useSWR<Channel[]>('/channels', fetcher);
   useEffect(() => setPage(1), [state, assignment, channelId, priority, label]);
+  useEffect(() => setChecked({}), [state, assignment, channelId, priority, label, page, search]);
   const query = new URLSearchParams({ assignment, page: String(page) });
+  if (linkedPhone) query.set('phone', linkedPhone);
+  if (linkedNumber) query.set('phoneNumberId', linkedNumber);
   if (state) query.set('state', state);
   if (channelId) query.set('channelId', channelId);
   if (priority) query.set('priority', priority);
@@ -511,7 +562,30 @@ function InboxView({ me, search }: { me: Me; search: string }) {
       (c.contact.name.toLowerCase().includes(search.toLowerCase()) ||
         c.contact.phone.includes(search)),
   );
-  const active = chats?.find((c) => c.conversation.id === selected);
+  const active =
+    chats?.find((c) => c.conversation.id === selected) ??
+    (linkedPhone && chats?.length === 1 ? chats[0] : undefined);
+  async function assignSelection() {
+    setAssigning(true);
+    try {
+      await api('/conversations/assign', 'POST', {
+        conversations: Object.entries(checked).map(([id, expectedRevision]) => ({
+          id,
+          expectedRevision,
+        })),
+        assignedTo: bulkTarget || null,
+      });
+      setChecked({});
+      toast.success('Conversaciones asignadas');
+    } catch (e) {
+      toast.error((e as Error).message);
+      setChecked({});
+    } finally {
+      setAssigning(false);
+      mutate();
+      refreshTeam('/members/workload');
+    }
+  }
   return (
     <>
       <ErrorBox error={error} />
@@ -522,11 +596,11 @@ function InboxView({ me, search }: { me: Me; search: string }) {
               Conversaciones <span>{filtered?.length ?? 0}</span>
             </h2>
             <a
-              href="/inbox"
+              href="/whatsapp"
               className="text-xs text-primary"
-              title="Abrir historial directo de WhatsApp"
+              title="Gestionar números de WhatsApp"
             >
-              WhatsApp ↗
+              Números ↗
             </a>
             <Button
               variant="ghost"
@@ -571,6 +645,11 @@ function InboxView({ me, search }: { me: Me; search: string }) {
               <option value="all">Todo el equipo</option>
               <option value="mine">Mis conversaciones</option>
               <option value="unassigned">Sin asignar</option>
+              {workload?.members.map((m) => (
+                <option key={m.subject} value={'member:' + m.subject}>
+                  {memberLabel(m)}
+                </option>
+              ))}
             </select>
             <select
               aria-label="Filtrar por canal"
@@ -607,7 +686,7 @@ function InboxView({ me, search }: { me: Me; search: string }) {
           <div className="tabs">
             {[
               ['all', 'Todas'],
-              ['human', 'Equipo'],
+              ['human', 'Personas'],
               ['agent', 'Agente'],
             ].map(([id, name]) => (
               <button
@@ -619,49 +698,138 @@ function InboxView({ me, search }: { me: Me; search: string }) {
               </button>
             ))}
           </div>
+          {linkedPhone && (
+            <div className="linked-conversation">
+              Conversación desde WhatsApp{' '}
+              <button
+                onClick={() => {
+                  setLinkedPhone('');
+                  setLinkedNumber('');
+                }}
+              >
+                Ver todas
+              </button>
+            </div>
+          )}
+          {managesTeam(me) && (
+            <div className="bulk-assignment">
+              <label>
+                <input
+                  type="checkbox"
+                  aria-label="Seleccionar conversaciones visibles"
+                  checked={
+                    !!filtered?.length && filtered.every((c) => c.conversation.id in checked)
+                  }
+                  onChange={(e) =>
+                    setChecked(
+                      e.target.checked
+                        ? Object.fromEntries(
+                            (filtered ?? []).map((c) => [
+                              c.conversation.id,
+                              c.conversation.revision,
+                            ]),
+                          )
+                        : {},
+                    )
+                  }
+                />
+                Seleccionar
+              </label>
+              {!!Object.keys(checked).length && (
+                <>
+                  <span>{Object.keys(checked).length}</span>
+                  <select
+                    aria-label="Responsable de la selección"
+                    value={bulkTarget}
+                    onChange={(e) => setBulkTarget(e.target.value)}
+                  >
+                    <option value="">Sin asignar</option>
+                    {workload?.members
+                      .filter((m) => !m.disabled)
+                      .map((m) => (
+                        <option key={m.subject} value={m.subject}>
+                          {memberLabel(m)}
+                        </option>
+                      ))}
+                  </select>
+                  <Button size="sm" disabled={assigning} onClick={assignSelection}>
+                    Asignar selección
+                  </Button>
+                </>
+              )}
+            </div>
+          )}
           <div className="conversation-scroll">
             {!chats ? (
               <Loading />
             ) : !filtered?.length ? (
-              <Empty title="Todo al día">Las conversaciones entrantes aparecerán aquí.</Empty>
+              <Empty title="Todo al día">
+                Las conversaciones entrantes aparecerán aquí. Revisa los filtros si buscas otra
+                atención.
+              </Empty>
             ) : (
               filtered.map(({ conversation: c, contact, channel, unreadCount }) => (
-                <button
-                  key={c.id}
-                  className={cn('conversation-card', selected === c.id && 'selected')}
-                  onClick={() => setSelected(c.id)}
-                >
-                  <Avatar name={contact.name} />
-                  <div>
-                    <div className="conversation-title">
-                      <strong>
-                        <span>{contact.name}</span>
-                        {unreadCount > 0 && (
-                          <span
-                            className="unread-count"
-                            aria-label={`${unreadCount} mensajes sin leer`}
-                          >
-                            {unreadCount}
+                <div key={c.id} className="conversation-row">
+                  {managesTeam(me) && (
+                    <input
+                      className="conversation-check"
+                      type="checkbox"
+                      aria-label={'Seleccionar conversación de ' + contact.name}
+                      checked={c.id in checked}
+                      onChange={(e) =>
+                        setChecked((previous) => {
+                          const next = { ...previous };
+                          if (e.target.checked) next[c.id] = c.revision;
+                          else delete next[c.id];
+                          return next;
+                        })
+                      }
+                    />
+                  )}
+                  <button
+                    className={cn(
+                      'conversation-card',
+                      active?.conversation.id === c.id && 'selected',
+                    )}
+                    onClick={() => setSelected(c.id)}
+                  >
+                    <Avatar name={contact.name} />
+                    <div>
+                      <div className="conversation-title">
+                        <strong>
+                          <span>{contact.name}</span>
+                          {unreadCount > 0 && (
+                            <span
+                              className="unread-count"
+                              aria-label={`${unreadCount} mensajes sin leer`}
+                            >
+                              {unreadCount}
+                            </span>
+                          )}
+                        </strong>
+                        <time>{time(c.updatedAt, me.tenant.timeZone)}</time>
+                      </div>
+                      <p>{c.lastMessage || c.summary || 'Nueva conversación de WhatsApp'}</p>
+                      <div className="conversation-meta">
+                        <span className={'tag state-' + c.state}>
+                          {conversationStates.find(([v]) => v === c.state)?.[1]}
+                        </span>
+                        <Badge value={c.status} />
+                        {c.priority !== 'normal' && (
+                          <span className={'tag priority-' + c.priority}>
+                            {priorities.find(([v]) => v === c.priority)?.[1]}
                           </span>
                         )}
-                      </strong>
-                      <time>{time(c.updatedAt, me.tenant.timeZone)}</time>
-                    </div>
-                    <p>{c.lastMessage || c.summary || 'Nueva conversación de WhatsApp'}</p>
-                    <div className="conversation-meta">
-                      <span className={'tag state-' + c.state}>
-                        {conversationStates.find(([v]) => v === c.state)?.[1]}
-                      </span>
-                      <Badge value={c.status} />
-                      {c.priority !== 'normal' && (
-                        <span className={'tag priority-' + c.priority}>
-                          {priorities.find(([v]) => v === c.priority)?.[1]}
+                        <small>{channel.name}</small>
+                        <span className="conversation-owner">
+                          <UserRound size={12} />
+                          {workload?.members.find((m) => m.subject === c.assignedTo)?.name ??
+                            (c.assignedTo ? 'Responsable asignado' : 'Sin asignar')}
                         </span>
-                      )}
-                      <small>{channel.name}</small>
+                      </div>
                     </div>
-                  </div>
-                </button>
+                  </button>
+                </div>
               ))
             )}
           </div>
@@ -680,7 +848,11 @@ function InboxView({ me, search }: { me: Me; search: string }) {
             key={active.conversation.id}
             chat={active}
             me={me}
-            onClose={() => setSelected(null)}
+            onClose={() => {
+              setSelected(null);
+              setLinkedPhone('');
+              setLinkedNumber('');
+            }}
             refresh={() => mutate()}
           />
         ) : (
@@ -718,6 +890,7 @@ function ChatPanel({
   refresh: () => void;
 }) {
   const c = chat.conversation;
+  const canReply = managesTeam(me) || !c.assignedTo || c.assignedTo === me.subject;
   const {
     data: messages,
     error,
@@ -728,7 +901,6 @@ function ChatPanel({
     fetcher,
     { refreshInterval: 8000 },
   );
-  const { data: members } = useSWR<Member[]>('/members', fetcher);
   const [body, setBody] = useState('');
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState(false);
@@ -766,7 +938,11 @@ function ChatPanel({
   }, [c.id, newest?.id]);
   async function action(status: string, assignedTo?: string) {
     try {
-      await api(`/conversations/${c.id}`, 'PATCH', { status, assignedTo: assignedTo ?? null });
+      await api(`/conversations/${c.id}`, 'PATCH', {
+        status,
+        assignedTo: assignedTo ?? null,
+        expectedRevision: c.revision,
+      });
       refresh();
       refreshActivities();
       toast.success('Atención actualizada');
@@ -835,6 +1011,14 @@ function ChatPanel({
             </Button>
           </div>
         </div>
+        <AssignmentControl
+          conversation={c}
+          me={me}
+          onChange={() => {
+            refresh();
+            refreshActivities();
+          }}
+        />
         <div className="attention-banner">
           <Sparkles size={16} />
           <span>
@@ -845,6 +1029,7 @@ function ChatPanel({
                 : 'Tu equipo está a cargo. El agente está en pausa.'}
           </span>
           <button
+            disabled={!managesTeam(me) && !!c.assignedTo && c.assignedTo !== me.subject}
             onClick={() =>
               action(
                 c.status === 'agent' ? 'human' : 'agent',
@@ -966,6 +1151,7 @@ function ChatPanel({
                 type="file"
                 accept=".pdf,.jpg,.jpeg,.png,.ogg,.mp3,.mp4"
                 className="sr-only"
+                disabled={busy || !canReply}
                 onChange={async (e) => {
                   const file = e.target.files?.[0];
                   if (!file) return;
@@ -988,8 +1174,12 @@ function ChatPanel({
                 }}
               />
             </label>
-            <small>Al responder, tomarás la conversación.</small>
-            <Button type="submit" size="sm" disabled={busy || !body.trim()}>
+            <small>
+              {canReply
+                ? 'Al responder, tomarás la conversación.'
+                : 'Solicita la transferencia al responsable para responder.'}
+            </small>
+            <Button type="submit" size="sm" disabled={busy || !body.trim() || !canReply}>
               {busy ? <Loader2 className="animate-spin" /> : <Send />}Enviar
             </Button>
           </div>
@@ -1007,30 +1197,6 @@ function ChatPanel({
           <h3>{chat.contact.name}</h3>
           <p>+{chat.contact.phone}</p>
           {chat.contact.tags && <span className="tag">{chat.contact.tags}</span>}
-        </div>
-        <div className="detail-section">
-          <h4>Atención asignada</h4>
-          <select
-            aria-label="Asignar conversación"
-            value={c.assignedTo ?? ''}
-            onChange={(e) => action('human', e.target.value || undefined)}
-          >
-            <option value="">Sin asignar</option>
-            {members
-              ?.filter(
-                (m) =>
-                  !m.disabled &&
-                  (me.role === 'admin' ||
-                    me.role === 'supervisor' ||
-                    me.role === 'platform_admin' ||
-                    m.subject === me.subject),
-              )
-              .map((m) => (
-                <option value={m.subject} key={m.subject}>
-                  {m.name}
-                </option>
-              ))}
-          </select>
         </div>
         <WorkflowControls
           chat={chat}
@@ -1928,7 +2094,7 @@ function SettingsView({ me }: { me: Me }) {
   const { mutate: globalMutate } = useSWRConfig();
   const { data, error, mutate } = useSWR<SettingsData>('/settings', fetcher);
   const { data: channels, mutate: refreshChannels } = useSWR<Channel[]>('/channels', fetcher);
-  const { data: members, mutate: refreshMembers } = useSWR<Member[]>('/members', fetcher);
+  const { data: members } = useSWR<Member[]>('/members', fetcher);
   const [channel, setChannel] = useState(false);
   const [saving, setSaving] = useState(false);
   if (!['admin', 'platform_admin'].includes(me.role))
@@ -2175,51 +2341,8 @@ function SettingsView({ me }: { me: Me }) {
           </section>
           <section className="content-card wide">
             <div className="card-toolbar">
-              <h2>Miembros del equipo</h2>
-              <span className="hint">Usuarios y roles compartidos con Hospital</span>
-            </div>
-            <div className="table-scroll">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Persona</th>
-                    <th>Rol</th>
-                    <th>Acceso al CRM</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {members?.map((m) => (
-                    <tr key={m.subject}>
-                      <td>
-                        <div className="name-cell">
-                          <Avatar name={m.name} />
-                          <strong>{m.name}</strong>
-                        </div>
-                      </td>
-                      <td>{m.role === 'agent' ? 'Recepcionista' : labels[m.role]}</td>
-                      <td>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={m.subject === me.subject}
-                          onClick={async () => {
-                            try {
-                              await api('/members/' + encodeURIComponent(m.subject), 'PATCH', {
-                                disabled: !m.disabled,
-                              });
-                              refreshMembers();
-                            } catch (e) {
-                              toast.error((e as Error).message);
-                            }
-                          }}
-                        >
-                          {m.disabled ? 'Restaurar acceso' : 'Desactivar acceso'}
-                        </Button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <h2>Equipo de atención</h2>
+              <a href="/?view=team">Administrar equipo y conversaciones ↗</a>
             </div>
           </section>
         </div>

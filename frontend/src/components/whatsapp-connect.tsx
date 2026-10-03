@@ -102,8 +102,8 @@ export default function WhatsAppConnect() {
   }
   return (
     <main className="mx-auto max-w-4xl p-5 md:p-10">
-      <Link href="/inbox" className="inline-flex items-center gap-2 text-sm text-primary">
-        <ArrowLeft size={16} /> Volver a WhatsApp
+      <Link href="/?view=inbox" className="inline-flex items-center gap-2 text-sm text-primary">
+        <ArrowLeft size={16} /> Volver a Bandeja de entrada
       </Link>
       <div className="mt-8 flex items-center gap-4">
         <span className="rounded-2xl bg-emerald-50 p-4 text-primary">
@@ -112,7 +112,8 @@ export default function WhatsAppConnect() {
         <div>
           <h1 className="text-2xl font-semibold">Conecta el WhatsApp de tu hospital</h1>
           <p className="mt-2 text-sm text-slate-500">
-            Agrega tu propio número y atiende desde Recepción.
+            Administra los números conectados. La atención del equipo y el seguimiento se gestionan
+            en Bandeja de entrada.
           </p>
         </div>
       </div>
@@ -247,7 +248,7 @@ export default function WhatsAppConnect() {
                   href={`/inbox?phoneNumberId=${encodeURIComponent(c.phoneNumberId)}`}
                   className="text-sm text-primary"
                 >
-                  Abrir bandeja →
+                  Consultar historial →
                 </Link>
               </div>
             ))}

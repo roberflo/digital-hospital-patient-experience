@@ -131,6 +131,52 @@ public sealed class AgentIntegrationTests:IAsyncLifetime {
             [$"Hospital:Tenants:{scope.Id}:AccessToken"]=Encode(new{alg="none"})+"."+Encode(new{tenant_id=scope.Id,exp=DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds()})+".synthetic"
         }).Build();
     }
+
+    async Task<Member> TeamMember(string role="agent", bool disabled=false, Guid? tenant=null) {
+        var member=new Member{TenantId=tenant??scope.Id,Subject="team-"+Guid.NewGuid(),Name="Compañero sintético",Role=role,Disabled=disabled};
+        db.Add(member);await db.SaveChangesAsync();return member;
+    }
+    CurrentUser TeamAdmin()=>new(){Subject="test-admin",Name="Administrador sintético",Role="admin"};
+    ConversationService NoSend()=>Service(new Fake(_=>throw new Exception("Assignment must never send messages")));
+    static int? Code(Microsoft.AspNetCore.Http.IResult result)=>(result as Microsoft.AspNetCore.Http.IStatusCodeHttpResult)?.StatusCode;
+    [Fact]public async Task TeamAssignsMultipleConversationsAndLogsPreviousOwner(){
+        var member=await TeamMember();
+        var extraChannel=new Channel{TenantId=scope.Id,Name="Another test number",PhoneNumberId="team-"+Guid.NewGuid()};db.Add(extraChannel);var second=new Conversation{TenantId=scope.Id,ContactId=contact.Id,ChannelId=extraChannel.Id,State="pending"};db.Add(second);await db.SaveChangesAsync();
+        var result=await TeamEndpoints.Assign(new([new(conversation.Id,0),new(second.Id,0)],member.Subject),db,TeamAdmin(),scope,NoSend());
+        Assert.Equal(200,Code(result));Assert.Equal(member.Subject,conversation.AssignedTo);Assert.Equal(member.Subject,second.AssignedTo);
+        Assert.Equal("human",conversation.Status);Assert.Equal("pending",second.State);Assert.Equal(2,await db.Activities.CountAsync(x=>x.Kind=="assignment"));
+        Assert.All(await db.Activities.Where(x=>x.Kind=="assignment").ToListAsync(),a=>Assert.Contains("Sin asignar → Compañero sintético",a.Body));
+    }
+    [Fact]public async Task StaleBatchChangesNoneOfItsConversations(){
+        var member=await TeamMember();var extraChannel=new Channel{TenantId=scope.Id,Name="Another test number",PhoneNumberId="team-"+Guid.NewGuid()};db.Add(extraChannel);var second=new Conversation{TenantId=scope.Id,ContactId=contact.Id,ChannelId=extraChannel.Id,Revision=2};db.Add(second);await db.SaveChangesAsync();
+        var result=await TeamEndpoints.Assign(new([new(conversation.Id,0),new(second.Id,1)],member.Subject),db,TeamAdmin(),scope,NoSend());
+        Assert.Equal(409,Code(result));Assert.Null(conversation.AssignedTo);Assert.Null(second.AssignedTo);Assert.Equal(0,await db.Activities.CountAsync(x=>x.Kind=="assignment"));
+    }
+    [Fact]public async Task TeamRejectsDisabledAndForeignMembers(){
+        var disabled=await TeamMember(disabled:true);var foreign=Guid.NewGuid();db.Tenants.Add(new Tenant{Id=foreign,Name="Other test hospital"});await db.SaveChangesAsync();await using var foreignDb=new CrmDb(options,new TenantScope{Id=foreign},protection);var member=new Member{TenantId=foreign,Subject="other-"+Guid.NewGuid(),Name="Other hospital member"};foreignDb.Add(member);await foreignDb.SaveChangesAsync();
+        foreach(var subject in new[]{disabled.Subject,member.Subject})await Assert.ThrowsAsync<ArgumentException>(()=>TeamEndpoints.Assign(new([new(conversation.Id,0)],subject),db,TeamAdmin(),scope,NoSend()));
+        Assert.Null(conversation.AssignedTo);
+    }
+    [Fact]public async Task TeamRejectsForeignConversationWithoutPartialAssignment(){
+        var member=await TeamMember();var result=await TeamEndpoints.Assign(new([new(conversation.Id,0),new(Guid.NewGuid(),0)],member.Subject),db,TeamAdmin(),scope,NoSend());
+        Assert.Equal(404,Code(result));Assert.Null(conversation.AssignedTo);
+    }
+    [Fact]public async Task AttendantCanTransferOwnConversationButCannotStealAnother(){
+        var owner=await TeamMember();var next=await TeamMember();var user=new CurrentUser{Subject=owner.Subject,Name=owner.Name,Role="agent"};
+        conversation.AssignedTo=owner.Subject;await db.SaveChangesAsync();
+        Assert.Equal(200,Code(await TeamEndpoints.Assign(new([new(conversation.Id,0)],next.Subject),db,user,scope,NoSend())));
+        await Assert.ThrowsAsync<AccessDeniedException>(()=>TeamEndpoints.Assign(new([new(conversation.Id,conversation.Revision)],owner.Subject),db,user,scope,NoSend()));
+    }
+    [Fact]public async Task AttendantCannotBulkAssign(){
+        var member=await TeamMember();var user=new CurrentUser{Subject=member.Subject,Role="agent"};
+        await Assert.ThrowsAsync<AccessDeniedException>(()=>TeamEndpoints.Assign(new([new(conversation.Id,0),new(Guid.NewGuid(),0)],member.Subject),db,user,scope,NoSend()));
+    }
+    [Fact]public async Task HumanSendRechecksOwnerAfterConcurrentTransfer(){
+        conversation.AssignedTo="original-attendant";await db.SaveChangesAsync();
+        await using(var other=new CrmDb(options,scope,protection))await other.Conversations.Where(c=>c.Id==conversation.Id).ExecuteUpdateAsync(s=>s.SetProperty(c=>c.AssignedTo,"next-attendant").SetProperty(c=>c.Revision,1));
+        await Assert.ThrowsAsync<ArgumentException>(()=>NoSend().Send(conversation.Id,"Must not send","human","transfer-race",actingSubject:"original-attendant"));
+        Assert.Single(await db.Messages.ToListAsync());
+    }
     ConversationService Service(Fake k)=>new(db,scope,new KapsoClient(new HttpClient(k),config));
     AgentRuntime Runtime(Fake ai,Fake k)=>new(new HttpClient(ai),config,db,scope,new HospitalClient(new HttpClient(new Fake(_=>throw new Exception("Unexpected hospital request"))),config),Service(k),new KapsoClient(new HttpClient(k),config));
     static Fake Sending()=>new(_=>Task.FromResult(Json(new{messages=new[]{new{id="out-"+Guid.NewGuid()}}})));

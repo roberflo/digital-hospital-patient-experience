@@ -9,10 +9,13 @@ public static class WhatsAppEndpoints
     public static void MapWhatsApp(this WebApplication app)
     {
         var api = app.MapGroup("/api").RequireAuthorization();
-        api.MapGet("/conversations", async (CrmDb db, CurrentUser user, string? status,string? state,string? assignment,Guid? contactId,Guid? channelId,string? priority,string? label,int? page) =>
+        api.MapGet("/conversations", async (CrmDb db, CurrentUser user, IConfiguration config, string? phone, string? phoneNumberId, string? status,string? state,string? assignment,Guid? conversationId,Guid? contactId,Guid? channelId,string? priority,string? label,int? page) =>
         {
-            var query=db.Conversations.Where(x=>(status==null||x.Status==status)&&(state==null||x.State==state)&&(contactId==null||x.ContactId==contactId)&&(channelId==null||x.ChannelId==channelId)&&(priority==null||x.Priority==priority));
+            var query=db.Conversations.Where(x=>(conversationId==null||x.Id==conversationId)&&(status==null||x.Status==status)&&(state==null||x.State==state)&&(contactId==null||x.ContactId==contactId)&&(channelId==null||x.ChannelId==channelId)&&(priority==null||x.Priority==priority));
+            if(!string.IsNullOrEmpty(phone)){var hash=Rules.PhoneHash(phone,config["PHONE_HASH_KEY"]!);query=query.Where(x=>db.Contacts.Any(c=>c.Id==x.ContactId&&c.PhoneHash==hash));}
+            if(!string.IsNullOrEmpty(phoneNumberId))query=query.Where(x=>db.Channels.Any(c=>c.Id==x.ChannelId&&c.PhoneNumberId==phoneNumberId));
             if(assignment=="mine")query=query.Where(x=>x.AssignedTo==user.Subject);
+            if(assignment?.StartsWith("member:",StringComparison.Ordinal)==true){var subject=assignment[7..];query=query.Where(x=>x.AssignedTo==subject);}
             if(assignment=="unassigned")query=query.Where(x=>x.AssignedTo==null);
             if(!string.IsNullOrEmpty(label)){var needle=InboxWorkflow.Labels(label);query=query.Where(x=>(", "+x.Labels+", ").Contains(", "+needle+", "));}
             var conv=await query.OrderByDescending(x=>x.Priority=="urgent"?3:x.Priority=="high"?2:x.Priority=="normal"?1:0).ThenByDescending(x=>x.UpdatedAt).ThenBy(x=>x.Id).Skip((Math.Clamp(page??1,1,10000)-1)*100).Take(100).ToListAsync();
@@ -26,19 +29,20 @@ public static class WhatsAppEndpoints
         api.MapPost("/conversations/{id:guid}/messages", async (Guid id, SendInput b, HttpContext ctx, CrmDb db, TenantScope t, CurrentUser u, ConversationService svc) =>
         {
             var conv = await db.Conversations.SingleOrDefaultAsync(x => x.Id == id); if (conv is null) return Results.NotFound();
-            using (var l = await svc.Lock(id)) { await db.Entry(conv).ReloadAsync(); InboxWorkflow.SetState(conv,"open"); conv.Status = "human"; conv.AssignedTo = u.Subject; conv.Revision++; await db.SaveChangesAsync(); }
-            var msg = await svc.Send(id, Rules.Required(b.Body, 4000), "human", ctx.Request.Headers["Idempotency-Key"].ToString()); CrmEndpoints.Audit(db, t, u, "message.sent", msg.Id); await db.SaveChangesAsync(); return Results.Ok(msg);
+            using (var teamLease = await svc.Lock(t.Id)) using (var l = await svc.Lock(id)) { await db.Entry(conv).ReloadAsync(); TeamEndpoints.RequireEditable(conv,u); InboxWorkflow.SetState(conv,"open"); conv.Status = "human"; conv.AssignedTo = u.Subject; conv.Revision++; await db.SaveChangesAsync(); }
+            var msg = await svc.Send(id, Rules.Required(b.Body, 4000), "human", ctx.Request.Headers["Idempotency-Key"].ToString(), actingSubject: u.Subject); CrmEndpoints.Audit(db, t, u, "message.sent", msg.Id); await db.SaveChangesAsync(); return Results.Ok(msg);
         });
         api.MapPost("/conversations/{id:guid}/media", async (Guid id, HttpContext ctx, CrmDb db, TenantScope t, CurrentUser u, KapsoClient kapso, ConversationService svc) =>
         {
             var conv = await db.Conversations.SingleOrDefaultAsync(x => x.Id == id); if (conv is null) return Results.NotFound();
+            TeamEndpoints.RequireEditable(conv,u);
             var form = await ctx.Request.ReadFormAsync(); var file = form.Files.GetFile("file"); if (file is null || file.Length == 0 || file.Length > 16 * 1024 * 1024) throw new ArgumentException("Archivo requerido, máximo 16 MB");
             var allowed = new[] { "application/pdf", "image/jpeg", "image/png", "audio/ogg", "audio/mpeg", "audio/mp4", "video/mp4" }; if (!allowed.Contains(file.ContentType)) throw new ArgumentException("Formato no permitido");
             var channel = await db.Channels.SingleAsync(x => x.Id == conv.ChannelId); if (!channel.Enabled) throw new ArgumentException("Canal desactivado");
             await using var stream = file.OpenReadStream(); var mid = await kapso.Upload(channel.PhoneNumberId, stream, file.FileName, file.ContentType);
-            using (var l = await svc.Lock(id)) { await db.Entry(conv).ReloadAsync(); InboxWorkflow.SetState(conv,"open"); conv.Status = "human"; conv.AssignedTo = u.Subject; conv.Revision++; await db.SaveChangesAsync(); }
+            using (var teamLease = await svc.Lock(t.Id)) using (var l = await svc.Lock(id)) { await db.Entry(conv).ReloadAsync(); TeamEndpoints.RequireEditable(conv,u); InboxWorkflow.SetState(conv,"open"); conv.Status = "human"; conv.AssignedTo = u.Subject; conv.Revision++; await db.SaveChangesAsync(); }
             var type = file.ContentType.Split('/')[0]; if (type == "application") type = "document";
-            var msg = await svc.Send(id, Path.GetFileName(file.FileName), "human", ctx.Request.Headers["Idempotency-Key"].ToString(), mid, type); CrmEndpoints.Audit(db, t, u, "media.sent", msg.Id); await db.SaveChangesAsync(); return Results.Ok(msg);
+            var msg = await svc.Send(id, Path.GetFileName(file.FileName), "human", ctx.Request.Headers["Idempotency-Key"].ToString(), mid, type, actingSubject: u.Subject); CrmEndpoints.Audit(db, t, u, "media.sent", msg.Id); await db.SaveChangesAsync(); return Results.Ok(msg);
         }).DisableAntiforgery();
         api.MapGet("/messages/{id:guid}/media", async (Guid id, CrmDb db, KapsoClient kapso) =>
         {
@@ -46,7 +50,9 @@ public static class WhatsAppEndpoints
         });
         api.MapPatch("/conversations/{id:guid}", async (Guid id, ConversationInput b, CrmDb db, CurrentUser u, TenantScope t, ConversationService svc) =>
         {
-            using var lease = await svc.Lock(id); var conv = await db.Conversations.SingleOrDefaultAsync(x => x.Id == id); if (conv is null) return Results.NotFound();
+            using var teamLease = await svc.Lock(t.Id); using var lease = await svc.Lock(id); var conv = await db.Conversations.SingleOrDefaultAsync(x => x.Id == id); if (conv is null) return Results.NotFound();
+            TeamEndpoints.RequireEditable(conv,u);
+            if(b.ExpectedRevision is {} revision && revision != conv.Revision)return Results.Conflict(new{title="La conversación cambió. Actualiza antes de guardar."});
             if (b.Status is not ("human" or "agent" or "closed")) throw new ArgumentException("Estado inválido");
             if (b.AssignedTo != null && !await db.Members.AnyAsync(x => x.Subject == b.AssignedTo && !x.Disabled)) throw new ArgumentException("Usuario no disponible");
             if (!u.Supervisor && b.AssignedTo != null && b.AssignedTo != u.Subject) throw new AccessDeniedException();
@@ -140,6 +146,6 @@ public static class WhatsAppEndpoints
     internal static string? Get(JsonElement e, string key) => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(key, out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
 }
 public record SendInput(string Body);
-public record ConversationInput(string Status, string? AssignedTo);
+public record ConversationInput(string Status, string? AssignedTo, long? ExpectedRevision = null);
 public record ChannelInput(string Name, string PhoneNumberId, string? DoctorId, bool Coexistence);
 public record ChannelState(bool Enabled);

@@ -74,9 +74,9 @@ public static class CrmEndpoints
             var row = new Activity { TenantId = t.Id, ContactId = contactId, ConversationId = b.ConversationId, Body = Rules.Required(b.Body, 10000), Kind = "note", Actor = u.Name }; db.Add(row); Audit(db, t, u, "activity.created", row.Id); await db.SaveChangesAsync(); return Results.Ok(row);
         });
         api.MapGet("/members", async (CrmDb db) => await db.Members.Select(x => new { x.Subject, x.Name, x.Role, x.Disabled }).ToListAsync());
-        api.MapPatch("/members/{id}", async (string id, MemberInput b, CrmDb db, CurrentUser u, TenantScope t) =>
+        api.MapPatch("/members/{id}", async (string id, MemberInput b, CrmDb db, CurrentUser u, TenantScope t, ConversationService locks) =>
         {
-            u.RequireAdmin(); if (id == u.Subject) throw new ArgumentException("No puedes desactivar tu propia cuenta"); var row = await db.Members.SingleOrDefaultAsync(x => x.Subject == id); if (row is null) return Results.NotFound(); row.Disabled = b.Disabled; Audit(db, t, u, "member.access", row.Id); await db.SaveChangesAsync(); return Results.Ok();
+            u.RequireAdmin(); using var teamLease = await locks.Lock(t.Id); if (id == u.Subject) throw new ArgumentException("No puedes desactivar tu propia cuenta"); var row = await db.Members.SingleOrDefaultAsync(x => x.Subject == id); if (row is null) return Results.NotFound(); if(b.Disabled && await db.Conversations.AnyAsync(c=>c.AssignedTo==id&&c.State!="resolved"))return Results.Conflict(new{title="Reasigna las conversaciones activas de esta persona antes de desactivar su acceso."}); row.Disabled = b.Disabled; Audit(db, t, u, "member.access", row.Id); await db.SaveChangesAsync(); return Results.Ok();
         });
         api.MapGet("/settings", async (CrmDb db, TenantScope t, CurrentUser u, HospitalClient h, IConfiguration c) =>
         {

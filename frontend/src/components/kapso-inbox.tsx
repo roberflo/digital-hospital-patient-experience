@@ -115,7 +115,7 @@ export default function KapsoInbox() {
           Agregar mi número →
         </Link>
         <p className="mt-5">
-          <Link href="/?view=inbox">Volver al CRM</Link>
+          <Link href="/?view=inbox">Bandeja de atención</Link>
         </p>
       </main>
     );
@@ -400,7 +400,7 @@ function InboxForNumber({ number, selector }: { number: string; selector: React.
     <main className={styles.shell}>
       <header className={styles.top}>
         <Link href="/?view=inbox" className={styles.backLink}>
-          <ArrowLeft size={16} /> Volver al CRM
+          <ArrowLeft size={16} /> Bandeja de atención
         </Link>
         <Link href="/whatsapp" className={styles.backLink}>
           Agregar mi número
@@ -413,7 +413,7 @@ function InboxForNumber({ number, selector }: { number: string; selector: React.
               <MessageCircle size={21} />
             </div>
             <div>
-              <h1>WhatsApp</h1>
+              <h1>Historial de WhatsApp</h1>
               <p>
                 <i className={live ? styles.online : styles.offline} />
                 {live ? 'Conectado en vivo' : 'Actualización cada 15 s'}
@@ -487,7 +487,9 @@ function InboxForNumber({ number, selector }: { number: string; selector: React.
               </Button>
             )}
           </div>
-          <footer className={styles.listFooter}>Historial sincronizado con WhatsApp</footer>
+          <footer className={styles.listFooter}>
+            Consulta de Kapso · responsables y seguimiento en Bandeja
+          </footer>
         </aside>
         <section className={styles.chat} aria-label="Chat">
           {selected ? (
@@ -513,8 +515,15 @@ function InboxForNumber({ number, selector }: { number: string; selector: React.
                     {selected.status === 'active' ? 'Activa' : 'Finalizada'}
                   </p>
                 </div>
-                <Link href="/?view=inbox" className={styles.crmLink}>
-                  Abrir gestión CRM ↗
+                <Link
+                  href={
+                    selected.phone_number
+                      ? `/?view=inbox&phone=${encodeURIComponent(selected.phone_number)}&phoneNumberId=${encodeURIComponent(number)}`
+                      : '/?view=inbox'
+                  }
+                  className={styles.crmLink}
+                >
+                  Asignar y gestionar en bandeja ↗
                 </Link>
               </header>
               <div
