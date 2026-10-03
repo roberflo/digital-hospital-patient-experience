@@ -44,7 +44,16 @@ public static class Identity
         var member = await db.Members.IgnoreQueryFilters().SingleOrDefaultAsync(x => x.Subject == sub);
         if (member is null)
         {
-            member = new Member { TenantId = tenant, Subject = sub, Name = ctx.User.FindFirst("name")?.Value ?? sub, Role = role }; db.Add(member); await db.SaveChangesAsync();
+            member = new Member { TenantId = tenant, Subject = sub, Name = ctx.User.FindFirst("name")?.Value ?? sub, Role = role }; db.Add(member);
+            try { await db.SaveChangesAsync(); }
+            catch (DbUpdateException ex) when (ex.InnerException is Npgsql.PostgresException { SqlState: Npgsql.PostgresErrorCodes.UniqueViolation })
+            {
+                // A first login fans out into concurrent reads. Reuse the winning registration,
+                // then apply the same tenant/disabled checks; never turn that race into a 409.
+                db.Entry(member).State = EntityState.Detached;
+                member = await db.Members.IgnoreQueryFilters().SingleOrDefaultAsync(x => x.Subject == sub);
+                if (member is null) throw;
+            }
         }
         if (member.TenantId != tenant || member.Disabled) return false;
         current.Subject = sub; current.Name = member.Name; current.Role = role;

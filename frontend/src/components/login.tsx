@@ -5,10 +5,12 @@ import { HeartPulse, ArrowRight, MessageCircle, CalendarCheck, ShieldCheck } fro
 import { Button } from './ui/button';
 export default function Login({
   demo,
+  hospitalLogin = false,
   hospitalDemo,
   returnTo = '/',
 }: {
   demo: boolean;
+  hospitalLogin?: boolean;
   hospitalDemo: boolean;
   returnTo?: string;
 }) {
@@ -106,6 +108,16 @@ export default function Login({
           ) : (
             <Button
               className="w-full"
+              onClick={() => signIn('keycloak', { callbackUrl: returnTo })}
+            >
+              Continuar con mi cuenta del hospital
+              <ArrowRight />
+            </Button>
+          )}
+          {demo && hospitalLogin && (
+            <Button
+              className="w-full mt-4"
+              variant="outline"
               onClick={() => signIn('keycloak', { callbackUrl: returnTo })}
             >
               Continuar con mi cuenta del hospital

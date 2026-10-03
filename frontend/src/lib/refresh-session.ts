@@ -30,19 +30,22 @@ export async function refreshSession(refreshToken: string): Promise<Tokens> {
   const result = (async (): Promise<Tokens> => {
     let response: Response;
     try {
-      response = await fetch(`${issuer}/protocol/openid-connect/token`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          grant_type: 'refresh_token',
-          refresh_token: refreshToken,
-          client_id: client,
-          client_secret: secret,
-        }),
-        cache: 'no-store',
-        signal: AbortSignal.timeout(8000),
-        redirect: 'error',
-      });
+      response = await fetch(
+        `${process.env.KEYCLOAK_INTERNAL_ISSUER || issuer}/protocol/openid-connect/token`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            grant_type: 'refresh_token',
+            refresh_token: refreshToken,
+            client_id: client,
+            client_secret: secret,
+          }),
+          cache: 'no-store',
+          signal: AbortSignal.timeout(8000),
+          redirect: 'error',
+        },
+      );
     } catch {
       throw new RefreshSessionError(
         503,

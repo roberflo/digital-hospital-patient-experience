@@ -17,12 +17,25 @@ if (!dev && string.IsNullOrWhiteSpace(config["Auth:Authority"])) throw new Inval
 builder.Services.AddScoped<TenantScope>(); builder.Services.AddScoped<CurrentUser>();
 builder.Services.AddDbContext<CrmDb>(o => o.UseNpgsql(config.GetConnectionString("Database")));
 builder.Services.AddDataProtection().SetApplicationName("Recepcion").PersistKeysToFileSystem(new DirectoryInfo(config["KEY_DIRECTORY"] ?? "/keys"));
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(o =>
+var dualLogin = dev && !string.IsNullOrWhiteSpace(config["Auth:Authority"]);
+var authentication = builder.Services.AddAuthentication(dualLogin ? "local-or-hospital" : JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(o =>
 {
     o.MapInboundClaims = false;
     if (dev) o.TokenValidationParameters = new TokenValidationParameters { ValidateIssuer = true, ValidIssuer = "recepcion-dev", ValidateAudience = true, ValidAudience = "recepcion", ValidateLifetime = true, ValidateIssuerSigningKey = true, IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(config["DEV_JWT_KEY"]!)), ClockSkew = TimeSpan.FromSeconds(15) };
-    else { o.Authority = config["Auth:Authority"]; o.Audience = config["Auth:Audience"] ?? "hospital-api"; o.RequireHttpsMetadata = true; }
+    else HospitalIdentity.Configure(o, config, false);
 });
+if (dualLogin)
+{
+    authentication.AddJwtBearer("hospital", o => HospitalIdentity.Configure(o, config, true));
+    authentication.AddPolicyScheme("local-or-hospital", null, o => o.ForwardDefaultSelector = ctx =>
+    {
+        // This selects a verifier only; each scheme independently validates signature and claims.
+        var raw = ctx.Request.Headers.Authorization.ToString();
+        try { if (raw.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) && new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler().ReadJwtToken(raw[7..]).Issuer == "recepcion-dev") return JwtBearerDefaults.AuthenticationScheme; }
+        catch (ArgumentException) { }
+        return "hospital";
+    });
+}
 builder.Services.AddAuthorization();
 builder.Services.AddRateLimiter(o =>
 {
@@ -31,6 +44,7 @@ builder.Services.AddRateLimiter(o =>
 });
 builder.Services.AddHttpClient<KapsoClient>(c => c.Timeout = TimeSpan.FromSeconds(30)).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 builder.Services.AddHttpClient<HospitalClient>(c => { c.Timeout = TimeSpan.FromSeconds(30); c.MaxResponseContentBufferSize = 20 * 1024 * 1024; }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+builder.Services.AddHttpClient<HospitalClinicalClient>(c => { c.Timeout = TimeSpan.FromSeconds(30); c.MaxResponseContentBufferSize = 8 * 1024 * 1024; }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 builder.Services.AddHttpClient<AgentRuntime>(c => c.Timeout = TimeSpan.FromSeconds(90));
 builder.Services.AddHttpClient<GoogleCalendarClient>(c => c.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddScoped<ConversationService>();
@@ -74,7 +88,7 @@ if (dev) app.MapPost("/auth/dev", (DevLogin body) =>
     return fixture.Item4 == Guid.Empty ? Results.Unauthorized() : Results.Ok(new { accessToken = Identity.DevToken(fixture.Item1, fixture.Item2, fixture.Item3, fixture.Item4, config), expiresIn = 3600 });
 });
 app.UseRateLimiter();
-app.MapTeam();app.MapProductivity();app.MapChannelDiagnostics();app.MapInbox();app.MapCrm(); app.MapWhatsApp(); app.MapHospital(); app.MapGoogle(); app.MapAssistant();
+app.MapClinical();app.MapTeam();app.MapProductivity();app.MapChannelDiagnostics();app.MapInbox();app.MapCrm(); app.MapWhatsApp(); app.MapHospital(); app.MapGoogle(); app.MapAssistant();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<CrmDb>();

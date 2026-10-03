@@ -1,6 +1,11 @@
 # Local integration only: docker compose -f docker-compose.yml -f docker-compose.hospital.yml up -d
 # Shares the Hospital API network; never attach Recepción to hospital_hospital-keys.
 services:
+  web:
+    networks: [default, hospital]
+    environment:
+      # Both projects have an "api" DNS alias on Hospital's network.
+      API_URL: http://recepcion-api-1:8080
   api:
     networks: [default, hospital]
 networks:

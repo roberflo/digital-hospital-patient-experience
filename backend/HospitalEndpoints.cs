@@ -4,6 +4,11 @@ namespace Recepcion;
 
 public static class HospitalEndpoints
 {
+    static IResult LegacyClinical(CurrentUser u)
+    {
+        if (u.Role != "doctor") throw new AccessDeniedException();
+        return Results.Json(new { title = "Consulta expediente y recetas desde una conversación asignada." }, statusCode: 410);
+    }
     public static void MapHospital(this WebApplication app)
     {
         var api = app.MapGroup("/api/hospital").RequireAuthorization();
@@ -13,18 +18,9 @@ public static class HospitalEndpoints
         });
         api.MapGet("/agenda", async (DateOnly date, HospitalClient h, TenantScope t) => await h.GetAgendaDayAsync(t.Id, date));
         api.MapGet("/availability", async (DateOnly date, Guid? doctorId, HospitalClient h, TenantScope t) => await h.GetAvailabilityAsync(t.Id, date, date, doctorId));
-        api.MapGet("/contacts/{id:guid}/prescriptions", async (Guid id, CrmDb db, HospitalClient h, TenantScope t, CurrentUser u) =>
-        {
-            if (u.Role != "doctor") throw new AccessDeniedException();
-            var c = await db.Contacts.SingleOrDefaultAsync(x => x.Id == id); if (c?.PatientId is null) return Results.NotFound(new { title = "Vincula primero el expediente del paciente" });
-            return Results.Ok(await h.ListIssuedPrescriptionsAsync(t.Id, c.PatientId.Value, c.Phone));
-        });
-        api.MapGet("/contacts/{id:guid}/prescriptions/{prescriptionId:guid}", async (Guid id, Guid prescriptionId, CrmDb db, HospitalClient h, TenantScope t, CurrentUser u) =>
-        {
-            var c = await db.Contacts.SingleOrDefaultAsync(x => x.Id == id); if (c?.PatientId is null) return Results.NotFound();
-            if (u.Role != "doctor") throw new AccessDeniedException();
-            var pdf = await h.GetPrescriptionPdfAsync(t.Id, c.PatientId.Value, c.Phone, prescriptionId); CrmEndpoints.Audit(db, t, u, "prescription.downloaded", prescriptionId); await db.SaveChangesAsync(); return Results.File(pdf, "application/pdf", "receta.pdf");
-        });
+        // Staff reads moved to the conversation-scoped doctor's identity. Bot delivery stays private.
+        api.MapGet("/contacts/{id:guid}/prescriptions", (CurrentUser u) => LegacyClinical(u));
+        api.MapGet("/contacts/{id:guid}/prescriptions/{prescriptionId:guid}", (CurrentUser u) => LegacyClinical(u));
         api.MapPost("/appointments", async (AppointmentInput input, HttpContext ctx, CrmDb db, HospitalClient h, TenantScope t, CurrentUser u) =>
         {
             var contact = await db.Contacts.SingleOrDefaultAsync(x => x.Id == input.ContactId); if (contact?.PatientId is null) return Results.BadRequest(new { title = "Vincula el contacto al expediente del hospital" });

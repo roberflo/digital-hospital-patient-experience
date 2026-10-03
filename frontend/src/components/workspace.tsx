@@ -58,6 +58,7 @@ import {
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { PatientAppointments } from './patient-appointments';
+import { PatientClinical } from './patient-clinical';
 import { SavedInboxViews, ConversationMacros } from './inbox-productivity';
 import { DashboardView } from './dashboard-view';
 import {
@@ -1042,6 +1043,11 @@ function ChatPanel({
           </button>
         </div>
         <div className="conversation-actions">
+          <PatientClinical
+            key={`${c.id}:${c.assignedTo}:${c.status}:${chat.contact.patientId}`}
+            chat={chat}
+            me={me}
+          />
           <ConversationMacros
             chat={chat}
             me={me}
