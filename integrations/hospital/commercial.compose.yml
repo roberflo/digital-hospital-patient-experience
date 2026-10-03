@@ -1,0 +1,12 @@
+# Layer over patient-agenda.compose.yml. Separate local web/API for the current integration.
+# Existing Hospital services stay available; only this web is published on loopback.
+services:
+  hospital-recepcion-api:
+    image: hospital/api:commercial
+  hospital-commercial-web:
+    image: hospital/web:commercial
+    env_file:
+      - ${HOSPITAL_COMMERCIAL_WEB_ENV_FILE:?Set a private file containing Hospital web runtime environment}
+    networks: [hospital]
+    ports: ['127.0.0.1:3210:3000']
+    restart: unless-stopped

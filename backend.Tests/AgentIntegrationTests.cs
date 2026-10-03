@@ -22,6 +22,27 @@ public sealed class AgentIntegrationTests:IAsyncLifetime {
         job=new(){TenantId=scope.Id,ConversationId=conversation.Id,Key="agent:in-"+scope.Id};db.Add(job);await db.SaveChangesAsync();
     }
     public async Task DisposeAsync(){if(db!=null)await db.DisposeAsync();}
+    [Fact] public async Task HospitalConnectionIsEncryptedAndTenantScoped()
+    {
+        var tenant=await db.Tenants.SingleAsync(x=>x.Id==scope.Id);
+        tenant.HospitalConnection=JsonSerializer.Serialize(new Dictionary<string,string?>{["BaseUrl"]="https://new.example.com",["ClientSecret"]="synthetic-connection-secret"});await db.SaveChangesAsync();
+        var raw=await db.Database.SqlQueryRaw<string>("SELECT \"HospitalConnection\" AS \"Value\" FROM \"Tenants\" WHERE \"Id\" = {0}",scope.Id).SingleAsync();
+        Assert.DoesNotContain("synthetic-connection-secret",raw);
+        Assert.DoesNotContain("HospitalConnection",JsonSerializer.Serialize(tenant));
+        var store=new HospitalConnectionStore(db,config);
+        Assert.Equal("synthetic-connection-secret",store.Section(scope.Id)["ClientSecret"]);
+        Assert.Null(store.Section(Guid.NewGuid())["ClientSecret"]);
+    }
+    [Theory][InlineData("admin",true,true)][InlineData("agent",true,false)][InlineData("doctor",true,false)][InlineData("admin",false,false)]
+    public async Task OnboardingUsesAuthenticatedHospitalAdministratorOnly(string role,bool enabled,bool expected)
+    {
+        var tid=Guid.NewGuid();var subject=Guid.NewGuid().ToString();
+        var cfg=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{["HOSPITAL_SELF_ONBOARDING"]=enabled?"true":"false",["Auth:Authority"]="https://identity.example.com"}).Build();
+        var ctx=new Microsoft.AspNetCore.Http.DefaultHttpContext{User=new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity(new[]{new System.Security.Claims.Claim("tenant_id",tid.ToString()),new("sub",subject),new("role",role),new("iss","https://identity.example.com"),new("name","Hospital staff")},"test"))};
+        var current=new CurrentUser();var identityScope=new TenantScope();await using var identityDb=new CrmDb(options,identityScope,protection);var success=await Identity.Bind(ctx,identityDb,identityScope,current,cfg);
+        Assert.Equal(expected,success);Assert.Equal(expected,await db.Tenants.AnyAsync(x=>x.Id==tid));
+        if(expected){Assert.Equal(role,current.Role);Assert.False((await db.Tenants.SingleAsync(x=>x.Id==tid)).AgentEnabled);}
+    }
     [Theory][InlineData("pending")][InlineData("snoozed")][InlineData("resolved")]
     public async Task InactiveWorkflowNeverCallsModel(string state){
         conversation.State=state;await db.SaveChangesAsync();
@@ -293,6 +314,69 @@ public sealed class AgentIntegrationTests:IAsyncLifetime {
         var incoming=new Message{TenantId=scope.Id,ConversationId=conversation.Id,Sender="patient",Body="CONFIRMAR "+code,ExternalId="confirmation-"+Guid.NewGuid()};db.Add(incoming);await db.SaveChangesAsync();
         await runtime.Run(new Job{TenantId=scope.Id,ConversationId=conversation.Id,Key="agent:"+incoming.ExternalId},CancellationToken.None);
         Assert.Single(writes);Assert.Equal(action=="create"?"/v1/agenda":$"/v1/agenda/{appointment}/{action}",writes[0]);Assert.StartsWith("proposal_used:",proposal.Kind);
+    }
+    [Theory][InlineData("link")][InlineData("wrong_phone")][InlineData("wrong_reference")][InlineData("wrong_patient")][InlineData("doctor")][InlineData("ambiguous")][InlineData("no_purchase")][InlineData("purchase")][InlineData("shared_phone")]
+    public async Task CommercialConversionRequiresHospitalEvidence(string scenario)
+    {
+        var customerId=Guid.NewGuid();var companyId=Guid.NewGuid();contact.PatientId=Guid.NewGuid();await db.SaveChangesAsync();
+        var customer=new HospitalCustomer(customerId,"Synthetic",scenario=="wrong_phone"?"50379999999":contact.Phone,"",scenario=="wrong_patient"?Guid.NewGuid():scenario=="shared_phone"?null:contact.PatientId,scenario=="wrong_reference"?"recepcion:"+Guid.NewGuid():scenario=="shared_phone"?null:"recepcion:"+contact.Id,companyId,"Synthetic company","hospital_patient",1,DateTimeOffset.UtcNow);
+        var quote=new HospitalQuote("v1",customerId,companyId,"USD",15,100,15,85,[]);
+        var handler=new Fake(req=>Task.FromResult(req.RequestUri!.AbsolutePath.EndsWith("/purchases")?Json(new HospitalCommercialPage<HospitalPurchase>(scenario is "purchase" or "shared_phone"?[new(Guid.NewGuid(),customerId,Guid.NewGuid(),"completed",DateTimeOffset.UtcNow,null,quote)]:[],scenario is "purchase" or "shared_phone"?1:0,1,25)):
+            req.RequestUri.AbsolutePath.EndsWith("/customers")?Json(new HospitalCommercialPage<HospitalCustomer>([customer],scenario=="ambiguous"?2:1,1,100)):Json(customer)));
+        var service=new CommercialService(db,scope,new HospitalClient(new HttpClient(handler),GoogleConfig()),Service(Sending()));
+        var user=new CurrentUser{Subject="commercial-test",Name="Synthetic receptionist",Role=scenario=="doctor"?"doctor":"agent"};
+        if(scenario=="doctor")await Assert.ThrowsAsync<AccessDeniedException>(()=>service.Link(contact,customerId,user));
+        else if(scenario.StartsWith("wrong_"))await Assert.ThrowsAsync<HospitalIntegrationException>(()=>service.Link(contact,customerId,user));
+        else if(scenario=="link"){await service.Link(contact,customerId,user);await service.Link(contact,customerId,user);}
+        else await service.Sync(contact,user);
+        var converted=scenario is "link" or "purchase";
+        Assert.Equal(converted,contact.IsCustomer);Assert.Equal(converted?1:0,await db.Activities.CountAsync(a=>a.Kind=="customer_converted"));
+        if(converted){Assert.Equal(companyId,contact.HospitalCompanyId);Assert.Equal("active",contact.LifecycleStage);}
+    }
+    [Fact] public async Task CommercialPurchaseRecoversLostResponseAndDoesNotDuplicateActivity()
+    {
+        var opportunity=new Opportunity{TenantId=scope.Id,ContactId=contact.Id,Title="Synthetic consultation",Stage="won"};db.Add(opportunity);await db.SaveChangesAsync();Assert.False(contact.IsCustomer);
+        var customerId=Guid.NewGuid();var purchaseId=Guid.NewGuid();var serviceId=Guid.NewGuid();var calls=0;string? first=null;
+        var quote=new HospitalQuote("hospital-v1",null,null,"USD",15,100,15,85,[new(serviceId,1,"CONS","Consultation","consultation",1,100,100,15,85)]);
+        var customer=new HospitalCustomer(customerId,contact.Name,contact.Phone,"",null,"recepcion:"+contact.Id,null,null,"purchase",1,DateTimeOffset.UtcNow);
+        var handler=new Fake(async req=>{
+            if(req.RequestUri!.AbsolutePath.EndsWith("/quotes"))return Json(quote);
+            if(req.Method==HttpMethod.Get)return Json(customer);
+            var body=await req.Content!.ReadAsStringAsync();calls++;
+            if(first is null){first=body;throw new HttpRequestException("Lost response after Hospital completed");}
+            Assert.Equal(first,body);Assert.Equal(opportunity.Id,JsonDocument.Parse(body).RootElement.GetProperty("idempotencyKey").GetGuid());
+            return Json(new HospitalPurchase(purchaseId,customerId,opportunity.Id,"completed",DateTimeOffset.UtcNow,"receipt",quote));
+        });
+        var commercial=new CommercialService(db,scope,new HospitalClient(new HttpClient(handler),GoogleConfig()),Service(Sending()));var user=new CurrentUser{Subject="test",Name="Synthetic",Role="agent"};
+        await commercial.Quote(opportunity,contact,[new(serviceId,1)],null,user);Assert.Equal(85,opportunity.Value);Assert.False(contact.IsCustomer);
+        await Assert.ThrowsAsync<ArgumentException>(()=>commercial.Purchase(opportunity,contact,new("hospital-v1",false,"receipt"),user));Assert.Equal(0,calls);
+        await Assert.ThrowsAsync<HttpRequestException>(()=>commercial.Purchase(opportunity,contact,new("hospital-v1",true,"receipt"),user));Assert.False(contact.IsCustomer);Assert.NotNull(opportunity.HospitalPurchaseRequest);
+        await Assert.ThrowsAsync<ArgumentException>(()=>commercial.Link(contact,Guid.NewGuid(),user));
+        Assert.False(await commercial.Sync(contact,user));
+        await Assert.ThrowsAsync<ArgumentException>(()=>commercial.Quote(opportunity,contact,[new(serviceId,2)],null,user));
+        await commercial.Purchase(opportunity,contact,new("hospital-v1",true,"receipt"),user);await commercial.Purchase(opportunity,contact,new("hospital-v1",true,"receipt"),user);
+        Assert.True(contact.IsCustomer);Assert.Equal(purchaseId,opportunity.HospitalPurchaseId);Assert.Equal(85,opportunity.Value);Assert.Equal("won",opportunity.Stage);
+        Assert.Single(await db.Activities.Where(a=>a.Kind=="purchase").ToListAsync());Assert.Single(await db.Activities.Where(a=>a.Kind=="customer_converted").ToListAsync());
+    }
+    [Fact] public async Task LinkingCustomerInvalidatesAnUnsentLeadQuote()
+    {
+        var customerId=Guid.NewGuid();var serviceId=Guid.NewGuid();var opportunity=new Opportunity{TenantId=scope.Id,ContactId=contact.Id,Title="Synthetic"};db.Add(opportunity);await db.SaveChangesAsync();
+        var quote=new HospitalQuote("lead-v1",null,null,"USD",0,100,0,100,[new(serviceId,1,"CONS","Synthetic","consultation",1,100,100,0,100)]);
+        var customer=new HospitalCustomer(customerId,contact.Name,contact.Phone,"",null,null,null,null,"purchase",1,DateTimeOffset.UtcNow);var purchases=0;
+        var handler=new Fake(req=>{if(req.RequestUri!.AbsolutePath.EndsWith("/quotes"))return Task.FromResult(Json(quote));if(req.Method==HttpMethod.Post){purchases++;throw new Exception("Must not commit under a duplicate customer");}return Task.FromResult(Json(customer));});
+        var commercial=new CommercialService(db,scope,new HospitalClient(new HttpClient(handler),GoogleConfig()),Service(Sending()));var user=new CurrentUser{Subject="test",Name="Synthetic",Role="agent"};
+        await commercial.Quote(opportunity,contact,[new(serviceId,1)],null,user);await commercial.Link(contact,customerId,user);
+        await Assert.ThrowsAsync<ArgumentException>(()=>commercial.Purchase(opportunity,contact,new("lead-v1",true,"receipt"),user));Assert.Equal(0,purchases);Assert.Null(opportunity.HospitalPurchaseRequest);
+    }
+    [Theory][InlineData("commercial.quote_changed",false)][InlineData("commercial.customer_link_conflict",false)][InlineData("commercial.invalid_phone",false)][InlineData("commercial.idempotency_conflict",true)]
+    public async Task DefinitivePurchaseRejectionAllowsCorrectionButUncertainIdentityKeepsAttempt(string code,bool pending)
+    {
+        var serviceId=Guid.NewGuid();var quote=new HospitalQuote("v1",null,null,"USD",0,100,0,100,[new(serviceId,1,"CONS","Synthetic","consultation",1,100,100,0,100)]);
+        var opportunity=new Opportunity{TenantId=scope.Id,ContactId=contact.Id,Title="Synthetic",HospitalQuote=JsonSerializer.Serialize(quote,new JsonSerializerOptions(JsonSerializerDefaults.Web))};db.Add(opportunity);await db.SaveChangesAsync();
+        var handler=new Fake(_=>{var response=Json(new{code});response.StatusCode=HttpStatusCode.Conflict;return Task.FromResult(response);});
+        var commercial=new CommercialService(db,scope,new HospitalClient(new HttpClient(handler),GoogleConfig()),Service(Sending()));
+        var failure=await Assert.ThrowsAsync<HospitalIntegrationException>(()=>commercial.Purchase(opportunity,contact,new("v1",true,"receipt"),new(){Subject="test",Name="Synthetic",Role="agent"}));
+        Assert.Equal(code,failure.Code);Assert.Equal(pending,opportunity.PurchasePending);Assert.False(contact.IsCustomer);
     }
     ConversationService Service(Fake k)=>new(db,scope,new KapsoClient(new HttpClient(k),config));
     AgentRuntime Runtime(Fake ai,Fake k)=>new(new HttpClient(ai),config,db,scope,new HospitalClient(new HttpClient(new Fake(_=>throw new Exception("Unexpected hospital request"))),config),Service(k),new KapsoClient(new HttpClient(k),config));

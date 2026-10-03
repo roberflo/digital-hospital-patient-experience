@@ -40,10 +40,11 @@ public static class InboxEndpoints
         api.MapPatch("/contacts/{id:guid}/profile",async(Guid id,ProfileInput b,CrmDb db,TenantScope scope,CurrentUser user)=>{
             var row=await db.Contacts.SingleOrDefaultAsync(x=>x.Id==id);if(row is null)return Results.NotFound();
             if(b.LifecycleStage is not("lead" or "active" or "inactive"))throw new ArgumentException("Estado de cliente inválido");
-            if(b.CompanyId is {} company&&!await db.Companies.AnyAsync(x=>x.Id==company))return Results.NotFound();
+            if(b.CompanyId!=row.CompanyId)throw new ArgumentException("La empresa del cliente se administra en Hospital.");
+            if(b.LifecycleStage=="active"&&row.HospitalCustomerId is null)throw new ArgumentException("Un contacto se convierte en cliente al comprar o vincularse con Hospital.");
             row.Name=Rules.Required(b.Name);row.Email=(b.Email??"").Trim();if(row.Email.Length>320)throw new ArgumentException("Correo demasiado largo");
             row.Tags=InboxWorkflow.Labels(b.Tags??"");row.CompanyId=b.CompanyId;row.LifecycleStage=b.LifecycleStage;
-            db.Activities.Add(new Activity{TenantId=scope.Id,ContactId=id,Actor=user.Name,ActorRole=user.Role,ActorSubject=user.Subject,Kind="contact_updated",Body="Ficha CRM actualizada: datos de contacto, etiquetas, empresa y estado del cliente."});
+            db.Activities.Add(new Activity{TenantId=scope.Id,ContactId=id,Actor=user.Name,ActorRole=user.Role,ActorSubject=user.Subject,Kind="contact_updated",Body="Ficha CRM actualizada: datos de contacto, etiquetas y seguimiento."});
             CrmEndpoints.Audit(db,scope,user,"contact.profile",id);await db.SaveChangesAsync();return Results.Ok(row);
         });
         api.MapGet("/saved-replies",async(CrmDb db)=>await db.SavedReplies.OrderBy(x=>x.Title).Take(200).ToListAsync());

@@ -31,6 +31,12 @@ export async function api<T = unknown>(
 }
 export const fetcher = <T>(path: string) => api<T>(path);
 export type Contact = {
+  isCustomer?: boolean;
+  hospitalCustomerId?: string;
+  hospitalCompanyId?: string;
+  hospitalCompanyName?: string;
+  customerSince?: string;
+  customerSource?: string;
   id: string;
   name: string;
   phone: string;
@@ -91,6 +97,10 @@ export type Activity = {
 };
 export type Member = { subject: string; name: string; role: string; disabled: boolean };
 export type Opportunity = {
+  hospitalQuote?: string;
+  hospitalPurchaseId?: string;
+  purchasePending?: boolean;
+  paymentReference?: string;
   id: string;
   title: string;
   contactId: string;

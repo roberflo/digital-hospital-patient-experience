@@ -32,14 +32,24 @@ public static class Identity
     public static string DevToken(string subject, string name, string role, Guid tenant, IConfiguration config) => new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(
         issuer: "recepcion-dev", audience: "recepcion", claims: [new("sub", subject), new("name", name), new("role", role), new("tenant_id", tenant.ToString())],
         expires: DateTime.UtcNow.AddHours(1), signingCredentials: new SigningCredentials(new SymmetricSecurityKey(Encoding.UTF8.GetBytes(config["DEV_JWT_KEY"]!)), SecurityAlgorithms.HmacSha256)));
-    public static async Task<bool> Bind(HttpContext ctx, CrmDb db, TenantScope scope, CurrentUser current)
+    public static async Task<bool> Bind(HttpContext ctx, CrmDb db, TenantScope scope, CurrentUser current, IConfiguration? config = null)
     {
         if (ctx.User.Identity?.IsAuthenticated != true) return false;
-        if (!Guid.TryParse(ctx.User.FindFirst("tenant_id")?.Value, out var tenant)) return false;
+        if (!Guid.TryParse(ctx.User.FindFirst("tenant_id")?.Value, out var tenant) || tenant == Guid.Empty) return false;
         var sub = ctx.User.FindFirst("sub")?.Value; var role = MapRole(ctx.User);
         if (string.IsNullOrEmpty(sub) || role is null) return false;
         scope.Id = tenant;
-        if (!await db.Tenants.AnyAsync(t => t.Id == tenant)) return false;
+        if (!await db.Tenants.AnyAsync(t => t.Id == tenant))
+        {
+            // Only administrators authenticated by the configured Hospital issuer may onboard.
+            if (config?["HOSPITAL_SELF_ONBOARDING"] != "true" || role is not ("admin" or "platform_admin") ||
+                ctx.User.FindFirst("iss")?.Value != config["Auth:Authority"] ||
+                await db.Members.IgnoreQueryFilters().AnyAsync(x=>x.Subject==sub)) return false;
+            var hospital = new Tenant { Id=tenant, Name="Hospital · configura tu nombre", AgentEnabled=false };
+            db.Tenants.Add(hospital);
+            try { await db.SaveChangesAsync(); }
+            catch (DbUpdateException ex) when(ex.InnerException is Npgsql.PostgresException { SqlState:Npgsql.PostgresErrorCodes.UniqueViolation }) { db.Entry(hospital).State=EntityState.Detached; }
+        }
         // Global subject uniqueness prevents a signed user from drifting to a second business.
         var member = await db.Members.IgnoreQueryFilters().SingleOrDefaultAsync(x => x.Subject == sub);
         if (member is null)
@@ -56,8 +66,9 @@ public static class Identity
             }
         }
         if (member.TenantId != tenant || member.Disabled) return false;
+        var name = ctx.User.FindFirst("name")?.Value ?? member.Name;
+        if (member.Role != role || member.Name != name) { member.Role = role; member.Name = name; await db.SaveChangesAsync(); }
         current.Subject = sub; current.Name = member.Name; current.Role = role;
-        if (member.Role != role) { member.Role = role; await db.SaveChangesAsync(); }
         return true;
     }
 }

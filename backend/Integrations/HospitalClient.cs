@@ -8,7 +8,7 @@ namespace Recepcion.Integrations;
 
 /// <summary>Calls the hospital's existing v1 contracts. Configuration is keyed by the
 /// authenticated CRM tenant, never by a URL or bearer token submitted by a patient.</summary>
-public sealed class HospitalClient(HttpClient http, IConfiguration configuration)
+public sealed partial class HospitalClient(HttpClient http, IConfiguration configuration, HospitalConnectionStore? connections = null)
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
@@ -195,7 +195,7 @@ public sealed class HospitalClient(HttpClient http, IConfiguration configuration
     private IConfigurationSection Tenant(Guid tenantId)
     {
         if (tenantId == Guid.Empty) throw new ArgumentException("A tenant is required.");
-        return configuration.GetSection($"Hospital:Tenants:{tenantId:D}");
+        return connections?.Section(tenantId) ?? configuration.GetSection($"Hospital:Tenants:{tenantId:D}");
     }
 
     private async Task<T> ReadAsync<T>(Guid tenantId, string path, CancellationToken ct)
@@ -225,9 +225,19 @@ public sealed class HospitalClient(HttpClient http, IConfiguration configuration
         if (!response.IsSuccessStatusCode)
         {
             var status = response.StatusCode;
+            var code = $"hospital.http_{(int)status}";
+            if(path.StartsWith("v1/commercial/",StringComparison.Ordinal))
+            {
+                try
+                {
+                    var problem=await response.Content.ReadFromJsonAsync<JsonElement>(ct);
+                    if(problem.TryGetProperty("code",out var value)&&value.GetString() is {} commercialCode && commercialCode.StartsWith("commercial.",StringComparison.Ordinal) && commercialCode.Length<100 && commercialCode.All(c=>char.IsAsciiLetterOrDigit(c)||c is '.' or '_'))code=commercialCode;
+                }
+                catch(JsonException) { }
+            }
             response.Dispose();
             // Never put PHI-bearing response text, URLs or tokens into exception messages.
-            throw new HospitalIntegrationException($"hospital.http_{(int)status}", status);
+            throw new HospitalIntegrationException(code, status);
         }
         return response;
     }
@@ -297,6 +307,16 @@ public sealed class HospitalClient(HttpClient http, IConfiguration configuration
 public sealed class HospitalIntegrationException(string code, HttpStatusCode statusCode) : Exception(code)
 {
     public string Code { get; } = code;
+    public string DisplayMessage => Code switch
+    {
+        "commercial.quote_changed" => "Los precios o el convenio cambiaron en Hospital. Vuelve a cotizar y revisa el total.",
+        "commercial.customer_link_conflict" or "commercial.customer_company_conflict" => "El cliente o su empresa cambiaron en Hospital. Comprueba el vínculo y vuelve a cotizar.",
+        "commercial.service_unavailable" or "commercial.company_unavailable" => "Un servicio o empresa ya no está disponible en Hospital. Actualiza la cotización.",
+        "commercial.idempotency_conflict" => "Esta compra ya tiene otro registro en Hospital. Revisa su historial antes de continuar.",
+        "commercial.invalid_purchase" or "commercial.invalid_input" or "commercial.invalid_lines" or "commercial.invalid_phone" => "Hospital rechazó los datos de la compra. Revisa los servicios y el teléfono del contacto.",
+        "hospital.customer_identity_mismatch" => "El cliente Hospital no coincide con el teléfono o expediente de este contacto.",
+        _ => "Conexión con el hospital: " + Code
+    };
     public HttpStatusCode StatusCode { get; } = statusCode;
 }
 

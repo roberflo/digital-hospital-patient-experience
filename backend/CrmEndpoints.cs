@@ -29,30 +29,26 @@ public static class CrmEndpoints
         {
             var row = new Contact { TenantId = t.Id }; SetContact(row, b, c); db.Add(row); Audit(db, t, u, "contact.created", row.Id); await db.SaveChangesAsync(); return Results.Created($"/api/contacts/{row.Id}", row);
         });
-        api.MapPut("/contacts/{id:guid}", async (Guid id, ContactInput b, CrmDb db, TenantScope t, CurrentUser u, IConfiguration c) =>
+        api.MapPut("/contacts/{id:guid}", async (Guid id, ContactInput b, CrmDb db, TenantScope t, CurrentUser u, IConfiguration c, ConversationService locks) =>
         {
+            using var contactLease = await locks.Lock(id);
             var row = await db.Contacts.SingleOrDefaultAsync(x => x.Id == id); if (row is null) return Results.NotFound();
             if (row.Phone != Rules.Phone(b.Phone))
             {
-                if (await db.Conversations.AnyAsync(x => x.ContactId == id)) throw new ArgumentException("Este teléfono tiene conversaciones. Crea otro contacto para conservar separado su historial.");
+                if (row.HospitalCustomerId is not null || await db.Opportunities.AnyAsync(x=>x.ContactId==id&&x.HospitalPurchaseRequest!=null) || await db.Conversations.AnyAsync(x => x.ContactId == id)) throw new ArgumentException("Este teléfono tiene conversaciones. Crea otro contacto para conservar separado su historial.");
                 row.PatientId = null;
             }
             SetContact(row, b, c); Audit(db, t, u, "contact.updated", id); await db.SaveChangesAsync(); return Results.Ok(row);
         });
-        api.MapPost("/contacts/{id:guid}/patient", async (Guid id, PatientLinkInput b, CrmDb db, TenantScope t, CurrentUser u, HospitalClient h) =>
+        api.MapPost("/contacts/{id:guid}/patient", async (Guid id, PatientLinkInput b, CrmDb db, TenantScope t, CurrentUser u, CommercialService commercial) =>
         {
             var row = await db.Contacts.SingleOrDefaultAsync(x => x.Id == id); if (row is null) return Results.NotFound();
-            await h.GetVerifiedPatientAsync(t.Id, b.PatientId, row.Phone); row.PatientId = b.PatientId; Audit(db, t, u, "patient.linked", id); await db.SaveChangesAsync(); return Results.Ok(row);
+            await commercial.LinkPatient(row,b.PatientId,u); Audit(db, t, u, "patient.linked", id); await db.SaveChangesAsync(); return Results.Ok(row);
         });
-        api.MapGet("/companies", async (CrmDb db) => await db.Companies.OrderBy(x => x.Name).Take(200).ToListAsync());
-        api.MapPost("/companies", async (CompanyInput b, CrmDb db, TenantScope t, CurrentUser u) =>
-        {
-            var row = new Company { TenantId = t.Id, Name = Rules.Required(b.Name), Industry = b.Industry ?? "", Email = b.Email ?? "", Phone = b.Phone ?? "" }; db.Add(row); Audit(db, t, u, "company.created", row.Id); await db.SaveChangesAsync(); return Results.Ok(row);
-        });
-        api.MapPut("/companies/{id:guid}", async (Guid id, CompanyInput b, CrmDb db, TenantScope t, CurrentUser u) =>
-        {
-            var row = await db.Companies.SingleOrDefaultAsync(x => x.Id == id); if (row is null) return Results.NotFound(); row.Name = Rules.Required(b.Name); row.Industry = b.Industry ?? ""; row.Email = b.Email ?? ""; row.Phone = b.Phone ?? ""; Audit(db, t, u, "company.updated", id); await db.SaveChangesAsync(); return Results.Ok(row);
-        });
+        // Legacy clients receive an explicit instruction; master records live only in Hospital.
+        api.MapGet("/companies",async(HospitalClient h,TenantScope t)=>(await h.Companies(t.Id,null,1)).Items);
+        api.MapPost("/companies",()=>Results.Conflict(new{title="Administra empresas y convenios desde Hospital."}));
+        api.MapPut("/companies/{id:guid}",()=>Results.Conflict(new{title="Administra empresas y convenios desde Hospital."}));
         api.MapGet("/opportunities", async (CrmDb db) => await db.Opportunities.OrderByDescending(x => x.UpdatedAt).Take(500).ToListAsync());
         api.MapPost("/opportunities", async (OpportunityInput b, CrmDb db, TenantScope t, CurrentUser u) =>
         {
@@ -63,7 +59,7 @@ public static class CrmEndpoints
         });
         api.MapPatch("/opportunities/{id:guid}", async (Guid id, StageInput b, CrmDb db, TenantScope t, CurrentUser u) =>
         {
-            var row = await db.Opportunities.SingleOrDefaultAsync(x => x.Id == id); if (row is null) return Results.NotFound(); ValidateStage(b.Stage); row.Stage = b.Stage; row.UpdatedAt = DateTimeOffset.UtcNow; db.Add(new Activity{TenantId=t.Id,ContactId=row.ContactId,ConversationId=row.ConversationId,Kind="opportunity",Actor=u.Name,ActorRole=u.Role,ActorSubject=u.Subject,Body="Etapa de seguimiento actualizada: "+row.Title+" → "+b.Stage}); Audit(db, t, u, "opportunity.stage", id); await db.SaveChangesAsync(); return Results.Ok(row);
+            var row = await db.Opportunities.SingleOrDefaultAsync(x => x.Id == id); if (row is null) return Results.NotFound(); ValidateStage(b.Stage); if(row.HospitalPurchaseId is not null&&b.Stage!="won")throw new ArgumentException("La compra pagada está registrada en Hospital y conserva su etapa ganada."); row.Stage = b.Stage; row.UpdatedAt = DateTimeOffset.UtcNow; db.Add(new Activity{TenantId=t.Id,ContactId=row.ContactId,ConversationId=row.ConversationId,Kind="opportunity",Actor=u.Name,ActorRole=u.Role,ActorSubject=u.Subject,Body="Etapa de seguimiento actualizada: "+row.Title+" → "+b.Stage}); Audit(db, t, u, "opportunity.stage", id); await db.SaveChangesAsync(); return Results.Ok(row);
         });
         api.MapGet("/activities", async (CrmDb db, Guid? contactId, Guid? conversationId) => await db.Activities.Where(x => (contactId == null || x.ContactId == contactId) && (conversationId == null || x.ConversationId == conversationId)).OrderByDescending(x => x.CreatedAt).Take(150).ToListAsync());
         api.MapPost("/activities", async (ActivityInput b, CrmDb db, TenantScope t, CurrentUser u) =>

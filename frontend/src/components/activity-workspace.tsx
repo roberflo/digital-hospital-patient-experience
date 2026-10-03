@@ -76,6 +76,8 @@ const titles: Record<string, string> = {
   agent_tool: 'Realizó una acción automática',
   conversation_state: 'Actualizó el estado de la conversación',
   opportunity: 'Actualizó el seguimiento',
+  purchase: 'Registró una compra pagada en Hospital',
+  customer_converted: 'Contacto convertido en cliente',
   contact_updated: 'Actualizó la ficha del paciente',
   contact_created: 'Registró al paciente',
   conversation_created: 'Abrió una conversación',

@@ -53,13 +53,18 @@ import {
   type Activity,
   type Channel,
   type Member,
-  type Company,
   type Opportunity,
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { AppointmentReminders, ReminderConsent } from './appointment-reminders';
+import {
+  HospitalCompanies,
+  CustomerCommercial,
+  OpportunityCommercial,
+} from './commercial-workspace';
 import { ActivityWorkspace } from './activity-workspace';
 import { PatientAppointments } from './patient-appointments';
+import { HospitalConnection, PatientLink } from './hospital-connection';
 import { PatientClinical } from './patient-clinical';
 import { SavedInboxViews, ConversationMacros } from './inbox-productivity';
 import { DashboardView } from './dashboard-view';
@@ -86,6 +91,7 @@ const nav = [
   ['companies', 'Empresas', Building2],
   ['opportunities', 'Oportunidades', Columns3],
   ['calendar', 'Agenda', CalendarDays],
+  ['hospital', 'Mi hospital', HeartPulse],
   ['activity', 'Actividad', ActivityIcon],
   ['agent', 'Agente de atención', Sparkles],
 ] as const;
@@ -326,16 +332,20 @@ export default function Workspace() {
           </span>
           recepción<span className="brand-dot">.</span>
         </a>
-        <div className="hospital-switch">
+        <button
+          className="hospital-switch"
+          onClick={() => navigate('hospital')}
+          aria-label="Ver conexión con mi hospital"
+        >
           <div className="hospital-mark">
             <Building2 size={18} />
           </div>
           <div>
             <strong>{me?.tenant.name ?? 'Hospital'}</strong>
-            <small>Espacio del equipo</small>
+            <small>Ver conexión y cuenta</small>
           </div>
           <ChevronDown size={14} />
-        </div>
+        </button>
         <div className="nav-caption">ESPACIO DE TRABAJO</div>
         <nav>
           {nav.map(([id, label, Icon]) => (
@@ -444,6 +454,8 @@ export default function Workspace() {
                       companies: 'Relaciones y convenios que conectan tu hospital.',
                       opportunities: 'Del primer contacto al seguimiento de la atención.',
                       calendar: 'Una agenda compartida para todo tu hospital.',
+                      hospital:
+                        'Tu cuenta, tus pacientes y tu equipo, conectados al mismo hospital.',
                       activity:
                         'Quién atendió a cada paciente, qué hizo y cómo continuó la atención.',
                       agent: 'Un compañero para tu equipo. Disponible para tus pacientes.',
@@ -454,7 +466,8 @@ export default function Workspace() {
               </p>
             )}
           </div>
-          {view !== 'settings' &&
+          {view !== 'hospital' &&
+            view !== 'settings' &&
             view !== 'agent' &&
             view !== 'dashboard' &&
             view !== 'activity' && (
@@ -495,9 +508,11 @@ export default function Workspace() {
               ) : view === 'contacts' ? (
                 <ContactsView search={search} />
               ) : view === 'companies' ? (
-                <CompaniesView search={search} />
+                <HospitalCompanies search={search} />
               ) : view === 'opportunities' ? (
                 <OpportunitiesView search={search} />
+              ) : view === 'hospital' ? (
+                <HospitalConnection />
               ) : view === 'calendar' ? (
                 <CalendarView search={search} me={me} />
               ) : view === 'activity' ? (
@@ -1244,7 +1259,7 @@ function ChatPanel({
               : 'Vincula el expediente para consultar agenda y recetas.'}
           </p>
           <Button variant="outline" size="sm" className="w-full" onClick={() => setPatient(true)}>
-            {chat.contact.patientId ? 'Cambiar vínculo' : 'Vincular paciente'}
+            {chat.contact.patientId ? 'Ver paciente vinculado' : 'Vincular paciente'}
           </Button>
         </div>
         <div className="detail-section">
@@ -1283,23 +1298,12 @@ function ChatPanel({
           refreshActivities();
         }}
       />
-      <FormDialog
-        title="Vincular expediente"
-        description="Usa el identificador del paciente en Hospital. Se comprobará que su teléfono coincide."
+      <PatientLink
+        key={chat.contact.id}
+        contact={chat.contact}
         open={patient}
         onClose={() => setPatient(false)}
-        fields={[
-          {
-            name: 'patientId',
-            label: 'Identificador del paciente',
-            required: true,
-            value: chat.contact.patientId,
-          },
-        ]}
-        onSubmit={async (v) => {
-          await api(`/contacts/${chat.contact.id}/patient`, 'POST', v);
-          refresh();
-        }}
+        onChange={refresh}
       />
     </>
   );
@@ -1313,6 +1317,7 @@ function ContactsView({ search }: { search: string }) {
   );
   const [create, setCreate] = useState(false);
   const [edit, setEdit] = useState<Contact | null>(null);
+  const [patientContact, setPatientContact] = useState<Contact | null>(null);
   return (
     <section className="content-card">
       <div className="card-toolbar">
@@ -1336,7 +1341,7 @@ function ContactsView({ search }: { search: string }) {
                 <th>Teléfono</th>
                 <th>Correo</th>
                 <th>Etiqueta</th>
-                <th>Expediente</th>
+                <th>Relación / expediente</th>
                 <th />
               </tr>
             </thead>
@@ -1354,10 +1359,20 @@ function ContactsView({ search }: { search: string }) {
                   <td>{c.tags ? <span className="tag">{c.tags}</span> : '—'}</td>
                   <td>
                     <span className={c.patientId ? 'linked' : 'muted'}>
+                      {c.isCustomer ? 'Cliente' : 'Contacto'} ·{' '}
                       {c.patientId ? 'Vinculado' : 'Por vincular'}
                     </span>
                   </td>
                   <td>
+                    <Button variant="outline" size="sm" onClick={() => setPatientContact(c)}>
+                      {c.patientId ? 'Ver vínculo' : 'Vincular paciente'}
+                    </Button>
+                    <CustomerCommercial
+                      contact={c}
+                      onChange={() => {
+                        mutate();
+                      }}
+                    />
                     <Button variant="ghost" size="sm" onClick={() => setEdit(c)}>
                       Editar
                     </Button>
@@ -1386,6 +1401,17 @@ function ContactsView({ search }: { search: string }) {
           Siguiente
         </Button>
       </div>
+      {patientContact && (
+        <PatientLink
+          key={patientContact.id}
+          contact={patientContact}
+          open
+          onClose={() => setPatientContact(null)}
+          onChange={() => {
+            mutate();
+          }}
+        />
+      )}
       <FormDialog
         title={edit ? 'Editar contacto' : 'Nuevo contacto'}
         open={create || !!edit}
@@ -1407,68 +1433,6 @@ function ContactsView({ search }: { search: string }) {
         ]}
         onSubmit={async (v) => {
           await api('/contacts' + (edit ? '/' + edit.id : ''), edit ? 'PUT' : 'POST', v);
-          mutate();
-        }}
-      />
-    </section>
-  );
-}
-function CompaniesView({ search }: { search: string }) {
-  const { data, error, mutate } = useSWR<Company[]>('/companies', fetcher);
-  const [create, setCreate] = useState(false);
-  const [edit, setEdit] = useState<Company | null>(null);
-  const rows = data?.filter((x) => x.name.toLowerCase().includes(search.toLowerCase()));
-  return (
-    <section className="content-card">
-      <div className="card-toolbar">
-        <h2>
-          Empresas y convenios <span>{rows?.length ?? 0}</span>
-        </h2>
-        <Button size="sm" onClick={() => setCreate(true)}>
-          <Plus />
-          Nueva empresa
-        </Button>
-      </div>
-      <ErrorBox error={error} />
-      <div className="company-grid">
-        {rows?.map((c) => (
-          <article className="company-card" key={c.id}>
-            <span className="company-icon">
-              <Building2 />
-            </span>
-            <h3>{c.name}</h3>
-            <span className="tag">{c.industry || 'Empresa'}</span>
-            <p>
-              {c.email || 'Sin correo registrado'}
-              <br />
-              {c.phone || 'Sin teléfono registrado'}
-            </p>
-            <Button variant="outline" size="sm" onClick={() => setEdit(c)}>
-              Ver y editar <ArrowUpRight />
-            </Button>
-          </article>
-        ))}
-      </div>
-      {rows?.length === 0 && (
-        <Empty icon={Building2} title="Conecta nuevas relaciones">
-          Registra las empresas y convenios del hospital.
-        </Empty>
-      )}
-      <FormDialog
-        title={edit ? 'Editar empresa' : 'Nueva empresa'}
-        open={create || !!edit}
-        onClose={() => {
-          setCreate(false);
-          setEdit(null);
-        }}
-        fields={[
-          { name: 'name', label: 'Nombre de la empresa', required: true, value: edit?.name },
-          { name: 'industry', label: 'Sector', value: edit?.industry },
-          { name: 'email', label: 'Correo', type: 'email', value: edit?.email },
-          { name: 'phone', label: 'Teléfono', value: edit?.phone },
-        ]}
-        onSubmit={async (v) => {
-          await api('/companies' + (edit ? '/' + edit.id : ''), edit ? 'PUT' : 'POST', v);
           mutate();
         }}
       />
@@ -1513,7 +1477,24 @@ function OpportunitiesView({ search }: { search: string }) {
                     <UserRound size={13} />
                     {contacts?.find((c) => c.id === o.contactId)?.name ?? 'Contacto'}
                   </div>
-                  {o.value > 0 && <strong className="amount">${o.value.toFixed(2)}</strong>}
+                  {o.value > 0 && (
+                    <strong className="amount">
+                      ${o.value.toFixed(2)}{' '}
+                      <small>
+                        {o.hospitalPurchaseId
+                          ? 'Pagado'
+                          : o.hospitalQuote
+                            ? 'Cotizado por Hospital'
+                            : 'Estimado'}
+                      </small>
+                    </strong>
+                  )}
+                  <OpportunityCommercial
+                    opportunity={o}
+                    onChange={() => {
+                      mutate();
+                    }}
+                  />
                   <select
                     aria-label={'Etapa de ' + o.title}
                     value={o.stage}
@@ -1638,6 +1619,7 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
       r.displayName.toLowerCase().includes(search.toLowerCase()) ||
       r.clinicianName.toLowerCase().includes(search.toLowerCase()),
   );
+  const notConfigured = error instanceof Error && error.message.includes('hospital.not_configured');
   const shift = (n: number) => {
     const d = new Date(day + 'T12:00:00');
     d.setDate(d.getDate() + n);
@@ -1663,7 +1645,7 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
             <ChevronRight />
           </Button>
         </div>
-        <Button size="sm" onClick={() => setCreate(true)}>
+        <Button size="sm" disabled={!data || !!error} onClick={() => setCreate(true)}>
           <Plus />
           Nueva cita
         </Button>
@@ -1672,17 +1654,29 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
         <CalendarDays size={15} /> Agenda del hospital · {me.tenant.timeZone}
         <span>Todos los doctores</span>
       </div>
-      <ErrorBox error={error} />
+      <ErrorBox error={notConfigured ? null : error} />
       {!data && !error ? (
         <Loading />
       ) : !rows?.length ? (
         <Empty
           icon={CalendarDays}
-          title={error ? 'Conecta la agenda del hospital' : 'Un día por organizar'}
+          title={error ? 'Revisa la conexión de tu hospital' : 'Un día por organizar'}
         >
-          {error
-            ? 'La agenda estará disponible cuando se configure la conexión del hospital.'
-            : 'No hay citas para esta fecha.'}
+          {notConfigured ? (
+            <>
+              <span>Estás en «{me.tenant.name}», que aún no tiene una agenda conectada.</span>
+              <span className="block mt-2">
+                Revisa la conexión o entra con tu cuenta del Hospital desde «Mi hospital».
+              </span>
+              <Button className="mt-4" variant="outline" asChild>
+                <a href="/?view=hospital">Revisar conexión con Hospital</a>
+              </Button>
+            </>
+          ) : error ? (
+            'No pudimos consultar Hospital. Revisa la conexión y vuelve a intentar.'
+          ) : (
+            'No hay citas para esta fecha.'
+          )}
         </Empty>
       ) : (
         <div className="agenda-list">
@@ -2078,248 +2072,251 @@ function SettingsView({ me }: { me: Me }) {
     <>
       <ErrorBox error={error} />
       {data ? (
-        <div className="settings-grid">
-          <section className="content-card">
-            <div className="card-toolbar">
-              <h2>Tu hospital y su guía de atención</h2>
-            </div>
-            <form
-              key={data.name + data.agentEnabled}
-              className="settings-form"
-              onSubmit={async (e) => {
-                e.preventDefault();
-                const f = new FormData(e.currentTarget);
-                setSaving(true);
-                try {
-                  await api('/settings', 'PUT', {
-                    name: f.get('name'),
-                    timeZone: f.get('timeZone'),
-                    guide: f.get('guide'),
-                    agentEnabled: f.get('agentEnabled') === 'on',
-                    googleCalendarId: f.get('googleCalendarId'),
-                  });
-                  mutate();
-                  globalMutate('/me');
-                  toast.success('Configuración guardada');
-                } catch (err) {
-                  toast.error((err as Error).message);
-                } finally {
-                  setSaving(false);
-                }
-              }}
-            >
-              <div className="form-grid">
-                <label>
-                  Nombre del hospital
-                  <input name="name" defaultValue={data.name} required />
-                </label>
-                <label>
-                  Zona horaria
-                  <input name="timeZone" defaultValue={data.timeZone} required />
-                </label>
+        <div>
+          <HospitalConnection />
+          <div className="settings-grid">
+            <section className="content-card">
+              <div className="card-toolbar">
+                <h2>Tu hospital y su guía de atención</h2>
               </div>
-              <label>
-                Guía de atención
-                <textarea
-                  rows={9}
-                  name="guide"
-                  defaultValue={data.guide}
-                  placeholder="Horarios, servicios, instrucciones de atención y reglas de derivación…"
-                  maxLength={30000}
-                />
-              </label>
-              <p className="hint">
-                El agente utiliza esta guía junto con las herramientas autorizadas del hospital. Las
-                decisiones clínicas se derivan al doctor.
-              </p>
-              <label className="toggle-row">
-                <div>
-                  <strong>Atención automática</strong>
-                  <small>Permite al agente atender conversaciones habilitadas.</small>
-                </div>
-                <input type="checkbox" name="agentEnabled" defaultChecked={data.agentEnabled} />
-              </label>
-              <label>
-                Calendario de Google del hospital
-                <input
-                  name="googleCalendarId"
-                  defaultValue={data.googleCalendarId ?? ''}
-                  placeholder="ID del calendario compartido"
-                />
-              </label>
-              <div className="dialog-actions">
-                <Button disabled={saving}>
-                  {saving ? <Loader2 className="animate-spin" /> : <Check />}Guardar cambios
-                </Button>
-              </div>
-            </form>
-          </section>
-          <section className="content-card">
-            <div className="card-toolbar">
-              <h2>Conexiones</h2>
-            </div>
-            <div className="integration-list">
-              {[
-                [HeartPulse, 'Hospital', data.hospitalConfigured, 'Agenda y expediente'],
-                [
-                  MessageCircle,
-                  'WhatsApp · Kapso',
-                  data.kapsoConfigured,
-                  data.sendEnabled
-                    ? 'Envío habilitado'
-                    : data.manualSendEnabled
-                      ? 'Envío manual habilitado'
-                      : 'Envío en pausa',
-                ],
-                [Sparkles, 'NVIDIA NIM', data.aiConfigured, 'Agente de atención'],
-                [CalendarDays, 'Google Calendar', data.googleConnected, 'Agenda compartida'],
-              ].map(([Icon, title, ok, sub], i) => {
-                const I = Icon as typeof Inbox;
-                return (
-                  <div className="integration-item" key={i}>
-                    <span>
-                      <I size={21} />
-                    </span>
-                    <div>
-                      <strong>{title as string}</strong>
-                      <small>{sub as string}</small>
-                    </div>
-                    <span
-                      className={cn('connection-dot', ok && 'connected')}
-                      title={ok ? 'Configurado' : 'Pendiente'}
-                    />
-                  </div>
-                );
-              })}
-              <p className="hint">
-                Las conexiones requieren credenciales vigentes. Los indicadores muestran su
-                configuración.
-              </p>
-              <Button
-                variant="outline"
-                className="w-full"
-                onClick={async () => {
+              <form
+                key={data.name + data.agentEnabled}
+                className="settings-form"
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  const f = new FormData(e.currentTarget);
+                  setSaving(true);
                   try {
-                    const r = await api<{ url: string }>('/google/connect', 'POST', {});
-                    location.href = r.url;
-                  } catch (e) {
-                    toast.error((e as Error).message);
+                    await api('/settings', 'PUT', {
+                      name: f.get('name'),
+                      timeZone: f.get('timeZone'),
+                      guide: f.get('guide'),
+                      agentEnabled: f.get('agentEnabled') === 'on',
+                      googleCalendarId: f.get('googleCalendarId'),
+                    });
+                    mutate();
+                    globalMutate('/me');
+                    toast.success('Configuración guardada');
+                  } catch (err) {
+                    toast.error((err as Error).message);
+                  } finally {
+                    setSaving(false);
                   }
                 }}
               >
-                <Link2 />
-                {data.googleConnected ? 'Volver a conectar Google' : 'Conectar Google Calendar'}
-              </Button>
-              {data.googleConnected && (
-                <>
-                  <Button
-                    variant="outline"
-                    className="w-full mt-2"
-                    onClick={async () => {
-                      try {
-                        const r = await api<{ synced: number }>('/google/sync', 'POST', {
-                          from: new Date().toISOString().slice(0, 10),
-                          days: 7,
-                        });
-                        toast.success(`${r.synced} citas sincronizadas`);
-                      } catch (e) {
-                        toast.error((e as Error).message);
-                      }
-                    }}
-                  >
-                    <RefreshCw />
-                    Sincronizar próximos 7 días
+                <div className="form-grid">
+                  <label>
+                    Nombre del hospital
+                    <input name="name" defaultValue={data.name} required />
+                  </label>
+                  <label>
+                    Zona horaria
+                    <input name="timeZone" defaultValue={data.timeZone} required />
+                  </label>
+                </div>
+                <label>
+                  Guía de atención
+                  <textarea
+                    rows={9}
+                    name="guide"
+                    defaultValue={data.guide}
+                    placeholder="Horarios, servicios, instrucciones de atención y reglas de derivación…"
+                    maxLength={30000}
+                  />
+                </label>
+                <p className="hint">
+                  El agente utiliza esta guía junto con las herramientas autorizadas del hospital.
+                  Las decisiones clínicas se derivan al doctor.
+                </p>
+                <label className="toggle-row">
+                  <div>
+                    <strong>Atención automática</strong>
+                    <small>Permite al agente atender conversaciones habilitadas.</small>
+                  </div>
+                  <input type="checkbox" name="agentEnabled" defaultChecked={data.agentEnabled} />
+                </label>
+                <label>
+                  Calendario de Google del hospital
+                  <input
+                    name="googleCalendarId"
+                    defaultValue={data.googleCalendarId ?? ''}
+                    placeholder="ID del calendario compartido"
+                  />
+                </label>
+                <div className="dialog-actions">
+                  <Button disabled={saving}>
+                    {saving ? <Loader2 className="animate-spin" /> : <Check />}Guardar cambios
                   </Button>
-                  <button
-                    className="text-button mt-3"
-                    onClick={async () => {
-                      await api('/google', 'DELETE');
-                      mutate();
-                    }}
-                  >
-                    Desconectar Google
-                  </button>
-                </>
-              )}
-            </div>
-          </section>
-          <section className="content-card wide">
-            <div className="card-toolbar">
-              <h2>Números de WhatsApp</h2>
-              <div className="button-group">
-                <Button asChild size="sm">
-                  <a href="/whatsapp">
-                    <Plus />
-                    Agregar mi número
-                  </a>
+                </div>
+              </form>
+            </section>
+            <section className="content-card">
+              <div className="card-toolbar">
+                <h2>Conexiones</h2>
+              </div>
+              <div className="integration-list">
+                {[
+                  [HeartPulse, 'Hospital', data.hospitalConfigured, 'Agenda y expediente'],
+                  [
+                    MessageCircle,
+                    'WhatsApp · Kapso',
+                    data.kapsoConfigured,
+                    data.sendEnabled
+                      ? 'Envío habilitado'
+                      : data.manualSendEnabled
+                        ? 'Envío manual habilitado'
+                        : 'Envío en pausa',
+                  ],
+                  [Sparkles, 'NVIDIA NIM', data.aiConfigured, 'Agente de atención'],
+                  [CalendarDays, 'Google Calendar', data.googleConnected, 'Agenda compartida'],
+                ].map(([Icon, title, ok, sub], i) => {
+                  const I = Icon as typeof Inbox;
+                  return (
+                    <div className="integration-item" key={i}>
+                      <span>
+                        <I size={21} />
+                      </span>
+                      <div>
+                        <strong>{title as string}</strong>
+                        <small>{sub as string}</small>
+                      </div>
+                      <span
+                        className={cn('connection-dot', ok && 'connected')}
+                        title={ok ? 'Configurado' : 'Pendiente'}
+                      />
+                    </div>
+                  );
+                })}
+                <p className="hint">
+                  Las conexiones requieren credenciales vigentes. Los indicadores muestran su
+                  configuración.
+                </p>
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  onClick={async () => {
+                    try {
+                      const r = await api<{ url: string }>('/google/connect', 'POST', {});
+                      location.href = r.url;
+                    } catch (e) {
+                      toast.error((e as Error).message);
+                    }
+                  }}
+                >
+                  <Link2 />
+                  {data.googleConnected ? 'Volver a conectar Google' : 'Conectar Google Calendar'}
                 </Button>
-                {me.role === 'platform_admin' && (
-                  <Button variant="outline" size="sm" onClick={() => setChannel(true)}>
-                    <Plus />
-                    Registro avanzado
-                  </Button>
+                {data.googleConnected && (
+                  <>
+                    <Button
+                      variant="outline"
+                      className="w-full mt-2"
+                      onClick={async () => {
+                        try {
+                          const r = await api<{ synced: number }>('/google/sync', 'POST', {
+                            from: new Date().toISOString().slice(0, 10),
+                            days: 7,
+                          });
+                          toast.success(`${r.synced} citas sincronizadas`);
+                        } catch (e) {
+                          toast.error((e as Error).message);
+                        }
+                      }}
+                    >
+                      <RefreshCw />
+                      Sincronizar próximos 7 días
+                    </Button>
+                    <button
+                      className="text-button mt-3"
+                      onClick={async () => {
+                        await api('/google', 'DELETE');
+                        mutate();
+                      }}
+                    >
+                      Desconectar Google
+                    </button>
+                  </>
                 )}
               </div>
-            </div>
-            <div className="table-scroll">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Canal</th>
-                    <th>Identificador</th>
-                    <th>Atención</th>
-                    <th>Coexistencia</th>
-                    <th>Conexión</th>
-                    <th>Estado</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {channels?.map((c) => (
-                    <tr key={c.id}>
-                      <td>
-                        <div className="name-cell">
-                          <span className="channel-icon">
-                            <MessageCircle size={17} />
-                          </span>
-                          <strong>{c.name}</strong>
-                        </div>
-                      </td>
-                      <td>{c.phoneNumberId}</td>
-                      <td>{c.doctorId ? 'Doctor' : 'General'}</td>
-                      <td>{c.coexistence ? 'Sí' : 'No'}</td>
-                      <td>
-                        <ChannelConnection id={c.id} />
-                      </td>
-                      <td>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={async () => {
-                            try {
-                              await api('/channels/' + c.id, 'PATCH', { enabled: !c.enabled });
-                              refreshChannels();
-                              toast.success('Canal actualizado');
-                            } catch (e) {
-                              toast.error((e as Error).message);
-                            }
-                          }}
-                        >
-                          {c.enabled ? <Pause /> : <Play />}
-                          {c.enabled ? 'Pausar' : 'Habilitar'}
-                        </Button>
-                      </td>
+            </section>
+            <section className="content-card wide">
+              <div className="card-toolbar">
+                <h2>Números de WhatsApp</h2>
+                <div className="button-group">
+                  <Button asChild size="sm">
+                    <a href="/whatsapp">
+                      <Plus />
+                      Agregar mi número
+                    </a>
+                  </Button>
+                  {me.role === 'platform_admin' && (
+                    <Button variant="outline" size="sm" onClick={() => setChannel(true)}>
+                      <Plus />
+                      Registro avanzado
+                    </Button>
+                  )}
+                </div>
+              </div>
+              <div className="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Canal</th>
+                      <th>Identificador</th>
+                      <th>Atención</th>
+                      <th>Coexistencia</th>
+                      <th>Conexión</th>
+                      <th>Estado</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-          <section className="content-card wide">
-            <div className="card-toolbar">
-              <h2>Equipo de atención</h2>
-              <a href="/?view=team">Administrar equipo y conversaciones ↗</a>
-            </div>
-          </section>
+                  </thead>
+                  <tbody>
+                    {channels?.map((c) => (
+                      <tr key={c.id}>
+                        <td>
+                          <div className="name-cell">
+                            <span className="channel-icon">
+                              <MessageCircle size={17} />
+                            </span>
+                            <strong>{c.name}</strong>
+                          </div>
+                        </td>
+                        <td>{c.phoneNumberId}</td>
+                        <td>{c.doctorId ? 'Doctor' : 'General'}</td>
+                        <td>{c.coexistence ? 'Sí' : 'No'}</td>
+                        <td>
+                          <ChannelConnection id={c.id} />
+                        </td>
+                        <td>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={async () => {
+                              try {
+                                await api('/channels/' + c.id, 'PATCH', { enabled: !c.enabled });
+                                refreshChannels();
+                                toast.success('Canal actualizado');
+                              } catch (e) {
+                                toast.error((e as Error).message);
+                              }
+                            }}
+                          >
+                            {c.enabled ? <Pause /> : <Play />}
+                            {c.enabled ? 'Pausar' : 'Habilitar'}
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+            <section className="content-card wide">
+              <div className="card-toolbar">
+                <h2>Equipo de atención</h2>
+                <a href="/?view=team">Administrar equipo y conversaciones ↗</a>
+              </div>
+            </section>
+          </div>
         </div>
       ) : (
         !error && <Loading />

@@ -43,12 +43,16 @@ builder.Services.AddRateLimiter(o =>
     o.AddPolicy("assistant", ctx => RateLimitPartition.GetFixedWindowLimiter(ctx.User.FindFirst("sub")?.Value ?? "anonymous", _ => new FixedWindowRateLimiterOptions { PermitLimit = 8, Window = TimeSpan.FromMinutes(1) }));
 });
 builder.Services.AddHttpClient<KapsoClient>(c => c.Timeout = TimeSpan.FromSeconds(30)).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
-builder.Services.AddHttpClient<HospitalClient>(c => { c.Timeout = TimeSpan.FromSeconds(30); c.MaxResponseContentBufferSize = 20 * 1024 * 1024; }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+builder.Services.AddHttpClient<HospitalClient>(c => { c.Timeout = TimeSpan.FromSeconds(30); c.MaxResponseContentBufferSize = 20 * 1024 * 1024; }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false }).RemoveAllLoggers();
 builder.Services.AddHttpClient<HospitalClinicalClient>(c => { c.Timeout = TimeSpan.FromSeconds(30); c.MaxResponseContentBufferSize = 8 * 1024 * 1024; }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 builder.Services.AddHttpClient<AgentRuntime>(c => c.Timeout = TimeSpan.FromSeconds(90));
 builder.Services.AddHttpClient<GoogleCalendarClient>(c => c.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddScoped<ConversationService>();
 builder.Services.AddScoped<AppointmentReminderService>();
+builder.Services.AddScoped<CommercialService>();
+builder.Services.AddScoped<HospitalConnectionStore>();
+builder.Services.AddHttpClient("hospital-setup", c=>{c.Timeout=TimeSpan.FromSeconds(30);c.MaxResponseContentBufferSize=20*1024*1024;}).ConfigurePrimaryHttpMessageHandler(()=>new HttpClientHandler{AllowAutoRedirect=false});
+builder.Services.AddHostedService<CommercialSyncWorker>();
 builder.Services.AddHostedService<AppointmentReminderWorker>();
 builder.Services.AddScoped<WhatsAppOnboarding>();
 builder.Services.AddHostedService<AgentWorker>();
@@ -65,7 +69,7 @@ app.Use(async (ctx, next) =>
     catch (ArgumentException ex) { await Results.Problem(statusCode: 400, title: ex.Message).ExecuteAsync(ctx); }
     catch (DbUpdateConcurrencyException) { await Results.Problem(statusCode: 409, title: "La conversación cambió. Actualiza e inténtalo de nuevo.").ExecuteAsync(ctx); }
     catch (DbUpdateException) { await Results.Problem(statusCode: 409, title: "El registro ya existe o tiene referencias incompatibles").ExecuteAsync(ctx); }
-    catch (HospitalIntegrationException ex) { await Results.Problem(statusCode: (int)ex.StatusCode is 403 or 404 or 503 ? (int)ex.StatusCode : 502, title: "Conexión con el hospital: " + ex.Code).ExecuteAsync(ctx); }
+    catch (HospitalIntegrationException ex) { await Results.Problem(statusCode: (int)ex.StatusCode is 400 or 403 or 404 or 409 or 503 ? (int)ex.StatusCode : 502, title: ex.DisplayMessage, extensions: new Dictionary<string,object?>{{"code",ex.Code}}).ExecuteAsync(ctx); }
     catch (HttpRequestException) { await Results.Problem(statusCode: 502, title: "No se pudo completar la conexión externa. Revisa el historial antes de reintentar.").ExecuteAsync(ctx); }
     catch (Exception ex) { app.Logger.LogError("Request failed {Type} {Trace}", ex.GetType().Name, ctx.TraceIdentifier); await Results.Problem(statusCode: 500, title: "No se pudo completar la operación", extensions: new Dictionary<string, object?> { { "traceId", ctx.TraceIdentifier } }).ExecuteAsync(ctx); }
 });
@@ -75,7 +79,7 @@ app.Use(async (ctx, next) =>
     if (ctx.Request.Path.StartsWithSegments("/api"))
     {
         if (ctx.User.Identity?.IsAuthenticated != true) { ctx.Response.StatusCode = 401; return; }
-        if (!await Identity.Bind(ctx, ctx.RequestServices.GetRequiredService<CrmDb>(), ctx.RequestServices.GetRequiredService<TenantScope>(), ctx.RequestServices.GetRequiredService<CurrentUser>())) { ctx.Response.StatusCode = 403; return; }
+        if (!await Identity.Bind(ctx, ctx.RequestServices.GetRequiredService<CrmDb>(), ctx.RequestServices.GetRequiredService<TenantScope>(), ctx.RequestServices.GetRequiredService<CurrentUser>(), config)) { ctx.Response.StatusCode = 403; return; }
     }
     await next();
 });
@@ -90,7 +94,7 @@ if (dev) app.MapPost("/auth/dev", (DevLogin body) =>
     return fixture.Item4 == Guid.Empty ? Results.Unauthorized() : Results.Ok(new { accessToken = Identity.DevToken(fixture.Item1, fixture.Item2, fixture.Item3, fixture.Item4, config), expiresIn = 3600 });
 });
 app.UseRateLimiter();
-app.MapReminderEndpoints();app.MapActivityFeed();app.MapClinical();app.MapTeam();app.MapProductivity();app.MapChannelDiagnostics();app.MapInbox();app.MapCrm(); app.MapWhatsApp(); app.MapHospital(); app.MapGoogle(); app.MapAssistant();
+app.MapHospitalConnection();app.MapCommercial();app.MapReminderEndpoints();app.MapActivityFeed();app.MapClinical();app.MapTeam();app.MapProductivity();app.MapChannelDiagnostics();app.MapInbox();app.MapCrm(); app.MapWhatsApp(); app.MapHospital(); app.MapGoogle(); app.MapAssistant();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<CrmDb>();

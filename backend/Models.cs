@@ -10,6 +10,8 @@ public sealed class TenantScope { public Guid Id { get; set; } }
 public abstract class TenantRow { public Guid Id { get; set; } = Guid.NewGuid(); public Guid TenantId { get; set; } }
 public sealed class Tenant
 {
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? HospitalConnection { get; set; }
     public Guid Id { get; set; } = Guid.NewGuid(); public string Name { get; set; } = "";
     public string Guide { get; set; } = ""; public bool AgentEnabled { get; set; }
     public string TimeZone { get; set; } = "America/El_Salvador";
@@ -33,6 +35,13 @@ public sealed class Member : TenantRow
 }
 public sealed class Contact : TenantRow
 {
+    public Guid? HospitalCustomerId { get; set; }
+    public Guid? HospitalCompanyId { get; set; }
+    public string? HospitalCompanyName { get; set; }
+    public DateTimeOffset? CustomerSince { get; set; }
+    public string? CustomerSource { get; set; }
+    public DateTimeOffset? CommercialSyncedAt { get; set; }
+    public bool IsCustomer => HospitalCustomerId is not null;
     public string Name { get; set; } = ""; public string Phone { get; set; } = "";
     public string PhoneHash { get; set; } = ""; public string Email { get; set; } = "";
     public Guid? CompanyId { get; set; }
@@ -45,6 +54,12 @@ public sealed class Contact : TenantRow
 public sealed class Company : TenantRow { public string Name { get; set; } = ""; public string Industry { get; set; } = ""; public string Email { get; set; } = ""; public string Phone { get; set; } = ""; }
 public sealed class Opportunity : TenantRow
 {
+    public string? HospitalQuote { get; set; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? HospitalPurchaseRequest { get; set; }
+    public bool PurchasePending => HospitalPurchaseRequest is not null && HospitalPurchaseId is null;
+    public string? PaymentReference => HospitalPurchaseRequest is null ? null : System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(HospitalPurchaseRequest).GetProperty("paymentReference").GetString();
+    public Guid? HospitalPurchaseId { get; set; }
     public Guid? ConversationId { get; set; }
     public string Title { get; set; } = ""; public Guid ContactId { get; set; }
     public decimal Value { get; set; }
@@ -182,6 +197,8 @@ public sealed class CrmDb(DbContextOptions<CrmDb> options, TenantScope scope, ID
         b.Entity<Member>().HasIndex(x => x.Subject).IsUnique();
         b.Entity<Tenant>().HasIndex(x => x.KapsoCustomerId).IsUnique();
         b.Entity<Contact>().HasIndex(x => new { x.TenantId, x.PhoneHash }).IsUnique();
+        b.Entity<Contact>().HasIndex(x => new { x.TenantId, x.HospitalCustomerId }).IsUnique();
+        b.Entity<Opportunity>().HasIndex(x => new { x.TenantId, x.HospitalPurchaseId }).IsUnique();
         b.Entity<Channel>().HasIndex(x => x.PhoneNumberId).IsUnique();
         b.Entity<Conversation>().HasIndex(x => new { x.TenantId, x.ChannelId, x.ContactId }).IsUnique();
         b.Entity<Conversation>().Property(x => x.Revision).IsConcurrencyToken();
@@ -199,10 +216,12 @@ public sealed class CrmDb(DbContextOptions<CrmDb> options, TenantScope scope, ID
         var encrypted = new ValueConverter<string, string>(v => p.Protect(v), v => p.Unprotect(v));
         b.Entity<Contact>().Property(x => x.Phone).HasConversion(encrypted); b.Entity<Contact>().Property(x => x.Name).HasConversion(encrypted);
         b.Entity<Contact>().Property(x => x.Email).HasConversion(encrypted); b.Entity<Message>().Property(x => x.Body).HasConversion(encrypted);
+        b.Entity<Opportunity>().Property(x => x.HospitalPurchaseRequest).HasConversion(encrypted!);
         b.Entity<Activity>().Property(x => x.Body).HasConversion(encrypted); b.Entity<Conversation>().Property(x => x.Summary).HasConversion(encrypted);
         b.Entity<Conversation>().Property(x=>x.LastMessage).HasConversion(encrypted!);
         b.Entity<SavedReply>().Property(x=>x.Body).HasConversion(encrypted);
         b.Entity<ConversationMacro>().Property(x=>x.Note).HasConversion(encrypted);
+        b.Entity<Tenant>().Property(x => x.HospitalConnection).HasConversion(encrypted!);
         b.Entity<Tenant>().Property(x => x.Guide).HasConversion(encrypted); b.Entity<Tenant>().Property(x => x.GoogleRefreshToken).HasConversion(encrypted!);
     }
     void Map<T>(ModelBuilder b) where T : TenantRow

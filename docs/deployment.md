@@ -76,3 +76,7 @@ El agente de WhatsApp envía al proveedor la guía de atención, hasta 24 mensaj
 ## Aceptación antes de pacientes reales
 
 Completar login/renovación con Keycloak real, dos empresas reales aisladas, agenda y bridge clínico con stores reales, PDF de receta firmada, Google OAuth con una cuenta de prueba, coexistencia de un número elegible y prueba controlada de envío/recepción. Validar los horarios de médicos y el flujo operativo con personal del hospital. La agenda Hospital permite solapamientos de forma intencional: el CRM vuelve a consultar disponibilidad y deriva conflictos, pero no puede garantizar bloqueo atómico de slots que Hospital aún no ofrece.
+
+## Conexión guiada al Hospital existente
+
+Usar [hospital-easypanel.md](hospital-easypanel.md) para configurar el acceso compartido una sola vez y conectar cada hospital desde **Mi hospital**. El formulario valida credenciales y tenant antes de guardar la conexión cifrada; evita editar variables por UUID. El alta automática de espacios requiere `HOSPITAL_SELF_ONBOARDING=true` y un Administrador autenticado por Hospital.

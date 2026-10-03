@@ -7,7 +7,7 @@ namespace Recepcion.Integrations;
 
 // Staff clinical reads use the authenticated doctor's token, never the reception service account.
 // Hospital remains responsible for signature validation, patient authorization and clinical audit.
-public sealed class HospitalClinicalClient(HttpClient http, IConfiguration config)
+public sealed class HospitalClinicalClient(HttpClient http, IConfiguration config, HospitalConnectionStore? connections = null)
 {
     public async Task<JsonElement> ReadAsync(Guid tenant, string subject, string bearer, Guid patient,
         string phone, string section, Guid? documentId = null, string? cursor = null, CancellationToken ct = default)
@@ -22,7 +22,7 @@ public sealed class HospitalClinicalClient(HttpClient http, IConfiguration confi
         };
         HospitalClient.ValidateTokenTenant(bearer, tenant);
         ValidateDoctor(bearer, subject);
-        var configured = config[$"Hospital:Tenants:{tenant}:BaseUrl"];
+        var configured = connections?.Section(tenant)["BaseUrl"] ?? config[$"Hospital:Tenants:{tenant}:BaseUrl"];
         if (string.IsNullOrWhiteSpace(configured) || !Uri.TryCreate(configured.TrimEnd('/') + "/", UriKind.Absolute, out var origin)
             || origin.Scheme is not ("https" or "http") || !string.IsNullOrEmpty(origin.UserInfo)
             || !string.IsNullOrEmpty(origin.Query) || !string.IsNullOrEmpty(origin.Fragment))

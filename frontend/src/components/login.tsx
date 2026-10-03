@@ -1,6 +1,6 @@
 'use client';
 import { signIn } from 'next-auth/react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { HeartPulse, ArrowRight, MessageCircle, CalendarCheck, ShieldCheck } from 'lucide-react';
 import { Button } from './ui/button';
 export default function Login({
@@ -16,6 +16,17 @@ export default function Login({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [demoUser, setDemoUser] = useState('admin');
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('recepcion.demo-user');
+      if (
+        saved &&
+        ['admin', 'agent', 'doctor', ...(hospitalDemo ? ['hospital'] : [])].includes(saved)
+      )
+        setDemoUser(saved);
+    } catch {}
+  }, [hospitalDemo]);
   return (
     <main className="login-shell">
       <section className="login-story">
@@ -58,6 +69,23 @@ export default function Login({
             {returnTo === '/session-restored' ? 'Recupera tu sesión' : 'Bienvenido a recepción'}
           </h2>
           <p>Inicia sesión para continuar con la atención.</p>
+          {demo && hospitalLogin && (
+            <Button
+              className="w-full mt-4"
+              variant="default"
+              onClick={() => signIn('keycloak', { callbackUrl: returnTo })}
+            >
+              Continuar con mi cuenta del hospital
+              <ArrowRight />
+            </Button>
+          )}
+          {hospitalLogin && (
+            <p className="hint">
+              Usa el mismo usuario y contraseña de Hospital. Abriremos el hospital de tu cuenta y
+              conservaremos tu rol.
+            </p>
+          )}
+          {demo && <h3 className="demo-login-title">Explorar con datos de prueba</h3>}
           {demo ? (
             <form
               onSubmit={async (e) => {
@@ -70,8 +98,12 @@ export default function Login({
                   password: f.get('password'),
                   redirect: false,
                 });
-                if (r?.ok) window.location.href = returnTo;
-                else {
+                if (r?.ok) {
+                  try {
+                    localStorage.setItem('recepcion.demo-user', demoUser);
+                  } catch {}
+                  window.location.href = returnTo;
+                } else {
                   setError('No fue posible iniciar sesión. Comprueba tus datos.');
                   setBusy(false);
                 }
@@ -79,7 +111,7 @@ export default function Login({
             >
               <label>
                 Usuario de demostración
-                <select name="user">
+                <select name="user" value={demoUser} onChange={(e) => setDemoUser(e.target.value)}>
                   <option value="admin">Administrador</option>
                   <option value="agent">Recepcionista</option>
                   <option value="doctor">Doctor</option>
@@ -88,6 +120,12 @@ export default function Login({
                   )}
                 </select>
               </label>
+              {hospitalDemo && (
+                <p className="hint">
+                  Para trabajar con las citas del hospital conectado, selecciona «Hospital local ·
+                  citas de prueba». Los otros perfiles usan una demostración independiente.
+                </p>
+              )}
               <label>
                 Contraseña
                 <input name="password" type="password" required autoComplete="current-password" />
@@ -108,16 +146,6 @@ export default function Login({
           ) : (
             <Button
               className="w-full"
-              onClick={() => signIn('keycloak', { callbackUrl: returnTo })}
-            >
-              Continuar con mi cuenta del hospital
-              <ArrowRight />
-            </Button>
-          )}
-          {demo && hospitalLogin && (
-            <Button
-              className="w-full mt-4"
-              variant="outline"
               onClick={() => signIn('keycloak', { callbackUrl: returnTo })}
             >
               Continuar con mi cuenta del hospital

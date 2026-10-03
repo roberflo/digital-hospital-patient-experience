@@ -115,11 +115,15 @@ p['message']['id']='wamid.reopen.'+suffix
 check(webhook(p)[0]==200,'New inbound message accepted while snoozed')
 reopened=call('/api/conversations?contactId='+c['id'],token=a)[1][0]['conversation']
 check(reopened['state']=='open' and reopened['status']=='human' and reopened['snoozedUntil'] is None,'New message reopens for human attention')
-check(call('/api/contacts/'+c['id']+'/profile','PATCH',{'name':c['name'],'email':'crm@example.invalid','tags':'Seguimiento','lifecycleStage':'active','companyId':None},a)[0]==200,'Update CRM patient profile from inbox')
+check(call('/api/contacts/'+c['id']+'/profile','PATCH',{'name':c['name'],'email':'crm@example.invalid','tags':'Seguimiento','lifecycleStage':'active','companyId':None},a)[0]==400,'Manual profile edit cannot manufacture a customer')
+check(call('/api/contacts/'+c['id']+'/profile','PATCH',{'name':c['name'],'email':'crm@example.invalid','tags':'Seguimiento','lifecycleStage':'inactive','companyId':None},a)[0]==200,'Update CRM contact profile from inbox')
+check(call('/api/companies','POST',{'name':'Forbidden local master'},a)[0]==409,'Company master is managed only by Hospital')
+check(call('/api/commercial/contacts/'+c['id']+'/sync','POST',{},doctor)[0]==403,'Doctor cannot convert CRM customer through manual sync')
+check(call('/api/commercial/contacts/'+c['id']+'/link','POST',{'customerId':str(uuid.uuid4())},doctor)[0]==403,'Doctor cannot link CRM commercial customer')
 status,followup=call('/api/opportunities','POST',{'title':'Seguimiento desde WhatsApp','contactId':c['id'],'conversationId':cid,'value':0,'stage':'new'},a)
 check(status==200 and followup['conversationId']==cid,'CRM followup linked to source conversation')
 context=call('/api/contacts/'+c['id']+'/context',token=a)[1]
-check(context['contact']['lifecycleStage']=='active' and any(x['id']==followup['id'] for x in context['opportunities']) and any(x['kind']=='conversation_state' for x in context['activities']),'Unified CRM context includes profile followups and state history')
+check(context['contact']['lifecycleStage']=='inactive' and not context['contact']['isCustomer'] and any(x['id']==followup['id'] for x in context['opportunities']) and any(x['kind']=='conversation_state' for x in context['activities']),'Unified CRM context includes profile followups and state history')
 check(call('/api/contacts/'+c['id']+'/context',token=b)[0]==404,'Customer context isolated by tenant')
 other_contact=next(x for x in call('/api/contacts',token=a)[1] if x['id']!=c['id'])
 check(call('/api/opportunities','POST',{'title':'Incorrect relation','contactId':other_contact['id'],'conversationId':cid,'value':0,'stage':'new'},a)[0]==404,'Cannot link followup to another patient conversation')

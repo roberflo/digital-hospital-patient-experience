@@ -2831,3 +2831,174 @@ body:has(.session-recovery) [data-radix-popper-content-wrapper] {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+
+/* Hospital is the commercial source of truth; keep the consultation compact. */
+.commercial-intro {
+  padding: 16px 22px;
+  color: var(--muted-foreground);
+}
+.commercial-detail,
+.commercial-fields {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+  min-width: 0;
+}
+.commercial-fields {
+  border: 0;
+  padding: 0;
+}
+.commercial-fields label {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+}
+.commercial-fields input:not([type='checkbox']),
+.commercial-fields select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px;
+  background: white;
+}
+.commercial-hospital-link {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--primary);
+}
+.commercial-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 65px 24px;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+}
+.commercial-candidate {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: space-between;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.commercial-candidate small {
+  display: block;
+}
+.commercial-quote,
+.commercial-purchase {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+  font-size: 13px;
+}
+.commercial-quote p {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 10px 0;
+}
+.commercial-purchase > span {
+  display: block;
+  font-size: 12px;
+  margin-top: 5px;
+}
+.commercial-fields .commercial-confirmation {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  line-height: 1.5;
+}
+.commercial-confirmation input {
+  margin-top: 4px;
+}
+.opportunity-card .amount small {
+  display: block;
+  font-size: 11px;
+  font-weight: 400;
+}
+.opportunity-card > button {
+  margin: 8px 0;
+  max-width: 100%;
+}
+
+.hospital-connection {
+  margin-bottom: 20px;
+}
+.hospital-connection .card-toolbar h2,
+.hospital-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.hospital-connection-body {
+  padding: 0 24px 24px;
+}
+.hospital-connection-body > h3 {
+  font-size: 22px;
+  margin-bottom: 8px;
+}
+.hospital-connection-body p {
+  margin: 8px 0 14px;
+  line-height: 1.6;
+}
+.hospital-steps {
+  list-style: none;
+  padding: 0;
+}
+.hospital-steps li {
+  padding: 18px 0;
+  border-bottom: 1px solid var(--border);
+}
+.hospital-actions a,
+.hospital-connection a {
+  color: var(--primary);
+  text-decoration: underline;
+}
+.patient-link-results {
+  max-height: 260px;
+  overflow: auto;
+}
+.patient-link-result {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin: 8px 0;
+  cursor: pointer;
+}
+.patient-link-result input {
+  width: auto;
+}
+.patient-link-result small {
+  display: block;
+  color: var(--muted-foreground);
+}
+.demo-login-title {
+  margin-top: 24px;
+  font-size: 14px;
+  font-weight: 600;
+}
+button.hospital-switch {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+.hospital-setup {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  margin: 20px 0;
+}
+.hospital-setup summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.hospital-setup .dialog-form {
+  max-width: 580px;
+}

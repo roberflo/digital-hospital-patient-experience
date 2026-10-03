@@ -3,17 +3,14 @@ import { useState } from 'react';
 import useSWR, { useSWRConfig } from 'swr';
 import { toast } from 'sonner';
 import { Check, Plus, FileText, RefreshCw } from 'lucide-react';
+import {
+  CustomerCommercial,
+  OpportunityCommercial,
+  HospitalCommercialLink,
+} from './commercial-workspace';
 import { Button } from './ui/button';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from './ui/dialog';
-import {
-  api,
-  fetcher,
-  type Chat,
-  type Company,
-  type Me,
-  type Opportunity,
-  type Contact,
-} from '@/lib/api';
+import { api, fetcher, type Chat, type Me, type Opportunity, type Contact } from '@/lib/api';
 
 export const conversationStates = [
   ['open', 'Abierta'],
@@ -142,11 +139,9 @@ export function CustomerCrm({ chat, onChange }: { chat: Chat; onChange: () => vo
   const key = `/contacts/${chat.contact.id}/context`;
   const { data, mutate, error } = useSWR<{
     contact: Contact;
-    company?: Company;
     opportunities: Opportunity[];
     conversations: unknown[];
   }>(key, fetcher, { refreshInterval: 10000 });
-  const { data: companies } = useSWR<Company[]>('/companies', fetcher);
   const [edit, setEdit] = useState(false);
   const [create, setCreate] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -174,16 +169,18 @@ export function CustomerCrm({ chat, onChange }: { chat: Chat; onChange: () => vo
         <p>
           {contact.email || 'Sin correo'}
           <br />
-          {data?.company?.name ?? 'Sin empresa o convenio'}
+          {contact.hospitalCompanyName ?? 'Sin empresa asignada en Hospital'}
         </p>
         <span className="tag">
-          {(
-            { lead: 'Contacto nuevo', active: 'Cliente activo', inactive: 'Inactivo' } as Record<
-              string,
-              string
-            >
-          )[contact.lifecycleStage] ?? 'Contacto nuevo'}
+          {contact.isCustomer ? 'Cliente Hospital' : 'Contacto'}
+          {contact.lifecycleStage === 'inactive' ? ' · Inactivo' : ''}
         </span>
+        <CustomerCommercial
+          contact={contact}
+          onChange={() => {
+            refresh();
+          }}
+        />
         <p className="hint">
           {data?.conversations.length ?? '—'} conversaciones vinculadas a esta ficha.
         </p>
@@ -199,6 +196,12 @@ export function CustomerCrm({ chat, onChange }: { chat: Chat; onChange: () => vo
         {data?.opportunities.map((o) => (
           <div className="conversation-followup" key={o.id}>
             <strong>{o.title}</strong>
+            <OpportunityCommercial
+              opportunity={o}
+              onChange={() => {
+                refresh();
+              }}
+            />
             <select
               aria-label={'Etapa de ' + o.title}
               value={o.stage}
@@ -239,7 +242,7 @@ export function CustomerCrm({ chat, onChange }: { chat: Chat; onChange: () => vo
                   email: f.get('email'),
                   tags: f.get('tags'),
                   lifecycleStage: f.get('lifecycleStage'),
-                  companyId: f.get('companyId') || null,
+                  companyId: contact.companyId ?? null,
                 });
                 await refresh();
                 setEdit(false);
@@ -265,23 +268,23 @@ export function CustomerCrm({ chat, onChange }: { chat: Chat; onChange: () => vo
             </label>
             <label>
               Estado del cliente
-              <select name="lifecycleStage" defaultValue={contact.lifecycleStage ?? 'lead'}>
+              <select
+                name="lifecycleStage"
+                defaultValue={
+                  contact.isCustomer
+                    ? contact.lifecycleStage
+                    : contact.lifecycleStage === 'inactive'
+                      ? 'inactive'
+                      : 'lead'
+                }
+              >
                 <option value="lead">Contacto nuevo</option>
-                <option value="active">Cliente activo</option>
+                {contact.isCustomer && <option value="active">Cliente activo</option>}
                 <option value="inactive">Inactivo</option>
               </select>
             </label>
-            <label>
-              Empresa o convenio
-              <select name="companyId" defaultValue={contact.companyId ?? ''}>
-                <option value="">Sin empresa</option>
-                {companies?.map((c) => (
-                  <option value={c.id} key={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <p className="hint">La condición de cliente y su empresa provienen de Hospital.</p>
+            <HospitalCommercialLink />
             <Button disabled={busy}>Guardar ficha CRM</Button>
           </form>
         </DialogContent>

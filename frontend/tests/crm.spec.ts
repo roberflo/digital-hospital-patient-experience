@@ -129,10 +129,13 @@ test('inbox updates conversation workflow and shared CRM profile', async ({ page
   await page.getByRole('button', { name: 'Editar ficha', exact: true }).click();
   const email = 'inbox-' + info.project.name + '@example.invalid';
   await page.getByLabel('Correo del cliente').fill(email);
-  await page.getByLabel('Estado del cliente').selectOption('active');
+  await expect(page.getByLabel('Estado del cliente').locator('option[value=active]')).toHaveCount(
+    0,
+  );
+  await page.getByLabel('Estado del cliente').selectOption('inactive');
   await page.getByRole('button', { name: 'Guardar ficha CRM', exact: true }).click();
   await expect(page.getByText('Ficha CRM actualizada', { exact: true })).toBeVisible();
-  await expect(page.getByText('Cliente activo', { exact: true })).toBeVisible();
+  await expect(page.getByText('Contacto · Inactivo', { exact: true })).toBeVisible();
   await page.getByLabel('Estado de conversación', { exact: true }).selectOption('open');
   await expect(page.getByLabel('Estado de conversación', { exact: true })).toHaveValue('open');
   await page.getByLabel('Prioridad', { exact: true }).selectOption('normal');
