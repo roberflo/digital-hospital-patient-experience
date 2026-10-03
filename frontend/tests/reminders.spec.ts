@@ -109,7 +109,7 @@ test('staff cannot administer reminders and other tenant contact authorization i
   ).toBe(404);
   await page.goto('/?view=agent');
   await expect(
-    page.getByRole('heading', { name: 'Agente de atención', exact: true }),
+    page.getByRole('heading', { name: 'Agente de atención', exact: true, level: 1 }),
   ).toBeVisible();
   await expect(
     page.getByRole('button', { name: 'Activar recordatorios', exact: true }),
