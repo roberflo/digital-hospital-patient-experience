@@ -1,4 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
+test.afterEach(async ({ page }) => {
+  await page.unrouteAll({ behavior: 'wait' });
+});
 async function login(page: Page, user = 'admin') {
   await page.goto('/login');
   await page.getByLabel('Usuario de demostración').selectOption(user);
@@ -90,17 +93,18 @@ test('attendant sees team but cannot bulk assign, disable coworkers or edit anot
     page.getByRole('heading', { name: 'Equipo de atención', exact: true }),
   ).toBeVisible();
   await expect(page.getByRole('button', { name: 'Desactivar acceso', exact: true })).toHaveCount(0);
-  await page.route('**/api/crm/conversations?*', async (route) => {
-    const response = await route.fetch();
-    const rows = await response.json();
-    await route.fulfill({
-      response,
+  // Read the fixture once: a polling response must not outlive the page's test context.
+  const response = await page.request.get('/api/crm/conversations');
+  expect(response.ok()).toBe(true);
+  const rows = await response.json();
+  await page.route('**/api/crm/conversations?*', (route) =>
+    route.fulfill({
       json: rows.map((row: { conversation: object }) => ({
         ...row,
         conversation: { ...row.conversation, assignedTo: 'dev-admin' },
       })),
-    });
-  });
+    }),
+  );
   await nav(page, 'Bandeja de entrada');
   await page.getByLabel('Filtrar por estado').selectOption('');
   await expect(page.getByLabel('Seleccionar conversaciones visibles')).toHaveCount(0);
