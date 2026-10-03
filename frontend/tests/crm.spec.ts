@@ -22,6 +22,10 @@ test('dashboard and inbox are separate; conversation and internal note persist',
   await page.getByRole('button', { name: 'Abrir bandeja', exact: true }).click();
   await expect(page).toHaveURL(/view=inbox/);
   await expect(page.getByText('Conversaciones abiertas', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('ATENCIÓN CONECTADA', { exact: true })).toHaveCount(0);
+  const inbox = await page.locator('.inbox-layout').boundingBox();
+  expect(inbox!.y).toBeLessThan(180);
+  expect(inbox!.y + inbox!.height).toBeLessThanOrEqual(page.viewportSize()!.height);
   await page.reload();
   await expect(
     page.getByRole('heading', { name: 'Bandeja de entrada', exact: true }),
@@ -87,4 +91,37 @@ test('settings and connection state are honest; mobile layout fits', async ({ pa
 test('BFF rejects unauthenticated access', async ({ request }) => {
   const response = await request.get('/api/crm/contacts');
   expect(response.status()).toBe(401);
+});
+
+test('inbox updates conversation workflow and shared CRM profile', async ({ page }, info) => {
+  await login(page);
+  await nav(page, 'Bandeja de entrada');
+  await page.getByLabel('Filtrar por estado').selectOption('');
+  await page
+    .getByRole('button')
+    .filter({ has: page.getByText('Ana Martínez', { exact: true }) })
+    .click();
+  if (!(await page.getByLabel('Estado de conversación', { exact: true }).isVisible())) {
+    await page.getByRole('button', { name: 'Ver información del paciente' }).click();
+  }
+  await page.getByLabel('Estado de conversación', { exact: true }).selectOption('pending');
+  await expect(page.getByLabel('Estado de conversación', { exact: true })).toHaveValue('pending');
+  await page.getByLabel('Prioridad', { exact: true }).selectOption('high');
+  await expect(page.getByLabel('Prioridad', { exact: true })).toHaveValue('high');
+  await page.getByRole('button', { name: 'Editar ficha', exact: true }).click();
+  const email = 'inbox-' + info.project.name + '@example.invalid';
+  await page.getByLabel('Correo del cliente').fill(email);
+  await page.getByLabel('Estado del cliente').selectOption('active');
+  await page.getByRole('button', { name: 'Guardar ficha CRM', exact: true }).click();
+  await expect(page.getByText('Ficha CRM actualizada', { exact: true })).toBeVisible();
+  await expect(page.getByText('Cliente activo', { exact: true })).toBeVisible();
+  await page.getByLabel('Estado de conversación', { exact: true }).selectOption('open');
+  await expect(page.getByLabel('Estado de conversación', { exact: true })).toHaveValue('open');
+  await page.getByLabel('Prioridad', { exact: true }).selectOption('normal');
+  await expect(page.getByLabel('Prioridad', { exact: true })).toHaveValue('normal');
+  if (await page.getByRole('button', { name: 'Cerrar detalles' }).isVisible()) {
+    await page.getByRole('button', { name: 'Cerrar detalles' }).click();
+  }
+  await nav(page, 'Contactos');
+  await expect(page.getByText(email, { exact: true })).toBeVisible();
 });

@@ -6,9 +6,9 @@ Fecha de desarrollo: 2026-10-02 (America/El_Salvador). Ejecución local con Dock
 |---|---|---|
 | Build API | pasó | `docker compose build api`, publicación Release .NET 10 |
 | Build frontend | pasó | `docker compose build web`, Next standalone + TypeScript |
-| Backend | 32 pasaron, 0 fallos, 0 omitidas | `scripts/test-backend.sh`, PostgreSQL temporal real y proveedores simulados |
-| API | 36 verificaciones pasaron | `python3 tests/api_smoke.py`, API real local |
-| Navegador | 8 pasaron | `npm test --prefix frontend`, Chromium escritorio + móvil contra contenedores compilados |
+| Backend | 42 pasaron, 0 fallos, 0 omitidas | `scripts/test-backend.sh`, PostgreSQL temporal real y proveedores simulados |
+| API | 65 verificaciones pasaron | `python3 tests/api_smoke.py`, API real local |
+| Navegador | 10 pasaron | `npm test --prefix frontend`, Chromium escritorio + móvil contra contenedores compilados |
 | Adaptador Hospital | pasó | `tests/hospital-client/HospitalClient.Checks.csproj` ejecutado con SDK 10 |
 | Bridge Hospital | 33 servicio/HTTP-JWT + 12 arquitectura + 3 OpenAPI + 1 cliente TS pasaron | copia aislada del hospital; detalles en `integrations/hospital/README.md` |
 | Kapso MCP | conexión y lecturas reales correctas | initialize, tools/list y lectura del número configurado; servidor kapso-mcp 2.0.0 |
@@ -36,3 +36,16 @@ No se ha validado SSO contra un Keycloak real, Google OAuth real, entrega real d
 No se han realizado pruebas de carga, recuperación total de un host perdido, evaluación clínica formal del modelo ni auditoría externa de seguridad. La restauración probada verifica PostgreSQL; la disponibilidad conjunta del keyring y las variables estables debe ensayarse en el entorno de operación. El pipeline GitHub Actions reproduce build, API, backend y navegador con credenciales sintéticas; su estado remoto se consulta en Actions y no se infiere de estos resultados locales.
 
 La entrega es una aplicación ejecutable con verificaciones concretas. Los adaptadores probados y los documentos de despliegue no se presentan como una instalación productiva ya habilitada.
+
+## Bandeja y CRM: ampliación de atención
+
+- Estados abierta/pendiente/pospuesta/resuelta, prioridad, etiquetas, filtros por canal y responsable, lecturas por usuario y paginación. Asignar a un humano conserva el estado pendiente; habilitar al agente reabre explícitamente.
+- Una respuesta entrante reabre la conversación y conserva la atención humana. Las conversaciones pospuestas vencidas se reabren una sola vez, sin enviar mensajes automáticos.
+- Ficha CRM compartida por contacto, empresa/convenio, ciclo del cliente, seguimientos vinculados a la conversación y cronología conjunta; referencias a otro paciente o tenant rechazadas.
+- Respuestas guardadas por negocio, administradas por supervisores. Insertarlas en el editor no envía un mensaje.
+- Dashboard separado y bandeja ajustada a la ventana; las pruebas verifican ausencia de tarjetas de métricas y posición/altura en escritorio y móvil.
+- Diagnóstico de canal restringido a administradores; muestra salud del proveedor, webhook y firma sin devolver claves ni encabezados privados.
+
+### Resultado de la búsqueda de números Kapso
+
+Las dos claves facilitadas permiten consultar el mismo proyecto `carsales`. La lista completa accesible contiene únicamente `Sandbox WhatsApp`, ID `597907523413541`; no reporta coexistencia, no tiene webhooks y su comprobación de salud devuelve `unhealthy`. No hay un número operativo verificable con estos accesos. No se enviaron mensajes externos. Se necesita acceso al proyecto de los números reales y la URL HTTPS pública de esta API para completar la prueba de recepción y entrega real.

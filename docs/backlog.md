@@ -29,6 +29,15 @@ Fecha: 2026-10-02. Alcance: CRM agent-first para un hospital por empresa, usuari
 | B10 | Contenedores Easypanel, secretos, backups, despliegue documentado | configuración validada y smoke tests | Contenedores y guía listos; despliegue Easypanel pendiente |
 | B11 | Pruebas de seguridad, integración y navegador; revisión | resultados reales registrados, sin simular pases | Pruebas dirigidas y E2E locales verificadas; ver verification.md |
 
+## Ampliación de bandeja
+
+| ID | Entrega | Estado |
+|---|---|---|
+| B12 | Dashboard separado; bandeja compacta y adaptada al alto disponible | Implementado; verificado escritorio/móvil |
+| B13 | Estados, prioridad, etiquetas, responsable, lecturas y respuestas guardadas | Implementado; API, worker y UI probados |
+| B14 | Ficha CRM, empresa, ciclo del cliente, seguimientos e historial desde el chat | Implementado; aislamiento y persistencia verificados |
+| B15 | Diagnóstico real de Kapso y vinculación del webhook | Diagnóstico implementado; único número accesible sandbox no operativo, falta acceso al número real y URL pública |
+
 ## Secuencia
 
 1. Inspeccionar contratos de Hospital y proveedores, establecer riesgos y decisiones.

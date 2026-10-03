@@ -1908,3 +1908,192 @@ td strong {
 .settings-form small {
   color: #748268;
 }
+
+/* Conversation workflow and shared CRM context */
+.inbox-filters {
+  padding: 8px 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 7px;
+  border-bottom: 1px solid var(--line);
+}
+.inbox-filters select,
+.inbox-filters input {
+  width: 100%;
+  min-width: 0;
+  font-size: 11px;
+  padding: 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: white;
+}
+.inbox-filters input {
+  grid-column: 1 / -1;
+}
+.inbox-pagination {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.inbox-pagination button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.unread-count {
+  display: inline-block;
+  margin-left: 6px;
+  border-radius: 10px;
+  padding: 1px 6px;
+  background: var(--green);
+  color: white;
+  font-size: 10px;
+}
+.conversation-meta {
+  flex-wrap: wrap;
+}
+.priority-urgent {
+  color: #9b342a;
+  background: #ffebe6;
+}
+.priority-high {
+  color: #946318;
+  background: #fff4d6;
+}
+.state-resolved {
+  background: #eaf3ed;
+  color: #25654a;
+}
+.state-snoozed,
+.state-pending {
+  background: #f2edf8;
+  color: #69518a;
+}
+.workflow-controls label {
+  display: block;
+  font-size: 11px;
+  margin: 10px 0;
+  color: #59695f;
+}
+.workflow-controls input,
+.workflow-controls select {
+  width: 100%;
+  margin-top: 5px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 7px;
+  background: white;
+}
+.crm-context .section-heading button {
+  font-size: 11px;
+  color: var(--green);
+}
+.conversation-followup {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 9px;
+  margin-top: 8px;
+}
+.conversation-followup strong {
+  display: block;
+  font-size: 11px;
+  margin-bottom: 7px;
+}
+.saved-replies {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0;
+}
+.saved-replies select {
+  min-width: 0;
+  flex: 1;
+  font-size: 11px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: white;
+}
+.saved-reply-list {
+  max-height: 180px;
+  overflow: auto;
+}
+.saved-reply-list > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  padding: 8px 0;
+}
+.saved-reply-list button {
+  color: #934439;
+}
+.channel-diagnostics {
+  min-width: 180px;
+  max-width: 240px;
+  font-size: 11px;
+}
+.channel-diagnostics p {
+  white-space: normal;
+  margin: 6px 0;
+  line-height: 1.6;
+}
+
+/* Keep the inbox focused on conversations and use the available viewport. */
+.main-inbox {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+.main-inbox .topbar {
+  flex-shrink: 0;
+}
+.main-inbox .inbox-heading {
+  display: flex;
+  padding: 12px 20px;
+  gap: 12px;
+  flex-shrink: 0;
+}
+.inbox-heading h1 {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: -0.5px;
+}
+.inbox-heading .title-dot {
+  display: none;
+}
+.inbox-heading .search-input {
+  margin: 0;
+}
+.main-inbox > .page-content {
+  padding: 0 12px 12px;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.main-inbox .inbox-layout {
+  height: auto;
+  min-height: 0;
+  flex: 1;
+}
+.main-inbox .conversation-scroll {
+  min-height: 0;
+}
+@media (max-width: 760px) {
+  .main-inbox .inbox-heading {
+    padding: 10px 12px;
+    flex-wrap: wrap;
+  }
+  .inbox-heading h1 {
+    font-size: 17px;
+  }
+  .inbox-heading .search-input {
+    width: 100%;
+  }
+  .main-inbox > .page-content {
+    padding: 0;
+  }
+  .main-inbox .inbox-layout {
+    border-radius: 0;
+    border-bottom: 0;
+  }
+}

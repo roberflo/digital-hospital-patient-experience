@@ -18,6 +18,7 @@ const ALLOWED = new Set([
   'google',
   'platform',
   'assistant',
+  'saved-replies',
 ]);
 async function proxy(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
   const { path } = await params;

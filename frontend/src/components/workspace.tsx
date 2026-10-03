@@ -63,6 +63,14 @@ import {
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { DashboardView } from './dashboard-view';
+import {
+  WorkflowControls,
+  CustomerCrm,
+  SavedReplies,
+  ChannelConnection,
+  conversationStates,
+  priorities,
+} from './conversation-workspace';
 const nav = [
   ['dashboard', 'Dashboard', LayoutDashboard],
   ['inbox', 'Bandeja de entrada', Inbox],
@@ -368,7 +376,7 @@ export default function Workspace() {
           onClick={() => setMobile(false)}
         />
       )}
-      <main className="main">
+      <main className={cn('main', view === 'inbox' && 'main-inbox')}>
         <header className="topbar">
           <div>
             <button className="mobile-menu" onClick={() => setMobile(true)} aria-label="Abrir menú">
@@ -392,30 +400,32 @@ export default function Workspace() {
             </span>
           </div>
         </header>
-        <div className="page-heading">
+        <div className={cn('page-heading', view === 'inbox' && 'inbox-heading')}>
           <div>
-            <div className="eyebrow">ATENCIÓN CONECTADA</div>
+            {view !== 'inbox' && <div className="eyebrow">ATENCIÓN CONECTADA</div>}
             <h1>
               {title}
               <span className="title-dot" />
             </h1>
-            <p>
-              {
-                (
-                  {
-                    dashboard: 'El resumen de la atención de tu hospital.',
-                    inbox: 'Cada conversación, con el contexto que necesitas.',
-                    contacts: 'Conoce a tus pacientes. Acompaña cada paso.',
-                    companies: 'Relaciones y convenios que conectan tu hospital.',
-                    opportunities: 'Del primer contacto al seguimiento de la atención.',
-                    calendar: 'Una agenda compartida para todo tu hospital.',
-                    activity: 'El historial de tu equipo y tu agente, en un solo lugar.',
-                    agent: 'Un compañero para tu equipo. Disponible para tus pacientes.',
-                    settings: 'Personaliza cómo trabaja y se conecta tu hospital.',
-                  } as Record<string, string>
-                )[view]
-              }
-            </p>
+            {view !== 'inbox' && (
+              <p>
+                {
+                  (
+                    {
+                      dashboard: 'El resumen de la atención de tu hospital.',
+                      inbox: 'Cada conversación, con el contexto que necesitas.',
+                      contacts: 'Conoce a tus pacientes. Acompaña cada paso.',
+                      companies: 'Relaciones y convenios que conectan tu hospital.',
+                      opportunities: 'Del primer contacto al seguimiento de la atención.',
+                      calendar: 'Una agenda compartida para todo tu hospital.',
+                      activity: 'El historial de tu equipo y tu agente, en un solo lugar.',
+                      agent: 'Un compañero para tu equipo. Disponible para tus pacientes.',
+                      settings: 'Personaliza cómo trabaja y se conecta tu hospital.',
+                    } as Record<string, string>
+                  )[view]
+                }
+              </p>
+            )}
           </div>
           {view !== 'settings' && view !== 'agent' && view !== 'dashboard' && (
             <div className="search-input">
@@ -466,11 +476,24 @@ export default function Workspace() {
   );
 }
 function InboxView({ me, search }: { me: Me; search: string }) {
+  const [state, setState] = useState('open');
+  const [assignment, setAssignment] = useState('all');
+  const [channelId, setChannelId] = useState('');
+  const [priority, setPriority] = useState('');
+  const [label, setLabel] = useState('');
+  const [page, setPage] = useState(1);
+  const { data: channels } = useSWR<Channel[]>('/channels', fetcher);
+  useEffect(() => setPage(1), [state, assignment, channelId, priority, label]);
+  const query = new URLSearchParams({ assignment, page: String(page) });
+  if (state) query.set('state', state);
+  if (channelId) query.set('channelId', channelId);
+  if (priority) query.set('priority', priority);
+  if (label.trim()) query.set('label', label.trim());
   const {
     data: chats,
     error,
     mutate,
-  } = useSWR<Chat[]>('/conversations', fetcher, { refreshInterval: 5000 });
+  } = useSWR<Chat[]>('/conversations?' + query, fetcher, { refreshInterval: 5000 });
   const [selected, setSelected] = useState<string | null>(null);
   const [filter, setFilter] = useState('all');
   const filtered = chats?.filter(
@@ -498,6 +521,60 @@ function InboxView({ me, search }: { me: Me; search: string }) {
               <RefreshCw size={15} />
             </Button>
           </div>
+          <div className="inbox-filters">
+            <select
+              aria-label="Filtrar por estado"
+              value={state}
+              onChange={(e) => setState(e.target.value)}
+            >
+              <option value="">Todos los estados</option>
+              {conversationStates.map(([v, l]) => (
+                <option value={v} key={v}>
+                  {l}
+                </option>
+              ))}
+            </select>
+            <select
+              aria-label="Filtrar por responsable"
+              value={assignment}
+              onChange={(e) => setAssignment(e.target.value)}
+            >
+              <option value="all">Todo el equipo</option>
+              <option value="mine">Mis conversaciones</option>
+              <option value="unassigned">Sin asignar</option>
+            </select>
+            <select
+              aria-label="Filtrar por canal"
+              value={channelId}
+              onChange={(e) => setChannelId(e.target.value)}
+            >
+              <option value="">Todos los canales</option>
+              {channels?.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+            <select
+              aria-label="Filtrar por prioridad"
+              value={priority}
+              onChange={(e) => setPriority(e.target.value)}
+            >
+              <option value="">Todas las prioridades</option>
+              {priorities.map(([v, l]) => (
+                <option key={v} value={v}>
+                  {l}
+                </option>
+              ))}
+            </select>
+            <input
+              aria-label="Filtrar por etiqueta"
+              placeholder="Etiqueta de conversación"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              maxLength={40}
+            />
+          </div>
           <div className="tabs">
             {[
               ['all', 'Todas'],
@@ -519,7 +596,7 @@ function InboxView({ me, search }: { me: Me; search: string }) {
             ) : !filtered?.length ? (
               <Empty title="Todo al día">Las conversaciones entrantes aparecerán aquí.</Empty>
             ) : (
-              filtered.map(({ conversation: c, contact, channel }) => (
+              filtered.map(({ conversation: c, contact, channel, unreadCount }) => (
                 <button
                   key={c.id}
                   className={cn('conversation-card', selected === c.id && 'selected')}
@@ -528,12 +605,30 @@ function InboxView({ me, search }: { me: Me; search: string }) {
                   <Avatar name={contact.name} />
                   <div>
                     <div className="conversation-title">
-                      <strong>{contact.name}</strong>
+                      <strong>
+                        {contact.name}
+                        {unreadCount > 0 && (
+                          <span
+                            className="unread-count"
+                            aria-label={`${unreadCount} mensajes sin leer`}
+                          >
+                            {unreadCount}
+                          </span>
+                        )}
+                      </strong>
                       <time>{time(c.updatedAt, me.tenant.timeZone)}</time>
                     </div>
-                    <p>{c.summary || 'Nueva conversación de WhatsApp'}</p>
+                    <p>{c.lastMessage || c.summary || 'Nueva conversación de WhatsApp'}</p>
                     <div className="conversation-meta">
+                      <span className={'tag state-' + c.state}>
+                        {conversationStates.find(([v]) => v === c.state)?.[1]}
+                      </span>
                       <Badge value={c.status} />
+                      {c.priority !== 'normal' && (
+                        <span className={'tag priority-' + c.priority}>
+                          {priorities.find(([v]) => v === c.priority)?.[1]}
+                        </span>
+                      )}
                       <small>{channel.name}</small>
                     </div>
                   </div>
@@ -541,12 +636,19 @@ function InboxView({ me, search }: { me: Me; search: string }) {
               ))
             )}
           </div>
-          <div className="list-footer">
-            <span className="whatsapp-dot" /> WhatsApp · atención del hospital
+          <div className="list-footer inbox-pagination">
+            <button disabled={page === 1} onClick={() => setPage(page - 1)}>
+              Anterior
+            </button>
+            <span>Página {page}</span>
+            <button disabled={!chats || chats.length < 100} onClick={() => setPage(page + 1)}>
+              Siguiente
+            </button>
           </div>
         </section>
         {active ? (
           <ChatPanel
+            key={active.conversation.id}
             chat={active}
             me={me}
             onClose={() => setSelected(null)}
@@ -593,7 +695,7 @@ function ChatPanel({
     mutate,
   } = useSWR<Message[]>(`/conversations/${c.id}/messages`, fetcher, { refreshInterval: 4000 });
   const { data: activities, mutate: refreshActivities } = useSWR<Activity[]>(
-    `/activities?conversationId=${c.id}`,
+    `/activities?contactId=${chat.contact.id}`,
     fetcher,
     { refreshInterval: 8000 },
   );
@@ -608,6 +710,20 @@ function ChatPanel({
     bottom.current?.scrollIntoView({ block: 'nearest' });
   }, [messages?.length, c.id]);
   useEffect(() => setBody(''), [c.id]);
+  const lastRead = useRef('');
+  const newest = messages?.reduce<Message | undefined>(
+    (latest, m) => (!latest || m.receivedAt > latest.receivedAt ? m : latest),
+    undefined,
+  );
+  useEffect(() => {
+    if (!newest || lastRead.current === newest.id || document.visibilityState !== 'visible') return;
+    lastRead.current = newest.id;
+    api(`/conversations/${c.id}/read`, 'POST', { throughMessageId: newest.id })
+      .then(refresh)
+      .catch(() => {
+        lastRead.current = '';
+      });
+  }, [c.id, newest?.id]);
   async function action(status: string, assignedTo?: string) {
     try {
       await api(`/conversations/${c.id}`, 'PATCH', { status, assignedTo: assignedTo ?? null });
@@ -744,6 +860,7 @@ function ChatPanel({
               <FileText size={13} /> Nota interna
             </button>
           </div>
+          <SavedReplies me={me} onInsert={(text) => setBody(text)} />
           <textarea
             aria-label="Mensaje al paciente"
             rows={2}
@@ -825,16 +942,21 @@ function ChatPanel({
                 </option>
               ))}
           </select>
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full mt-3"
-            onClick={() => action(c.status === 'closed' ? 'human' : 'closed', c.assignedTo)}
-          >
-            <CheckCircle2 />
-            {c.status === 'closed' ? 'Reabrir conversación' : 'Resolver conversación'}
-          </Button>
         </div>
+        <WorkflowControls
+          chat={chat}
+          onChange={() => {
+            refresh();
+            refreshActivities();
+          }}
+        />
+        <CustomerCrm
+          chat={chat}
+          onChange={() => {
+            refresh();
+            refreshActivities();
+          }}
+        />
         <div className="detail-section">
           <div className="section-heading">
             <h4>Expediente del hospital</h4>
@@ -851,13 +973,13 @@ function ChatPanel({
         </div>
         <div className="detail-section">
           <div className="section-heading">
-            <h4>Historial y notas</h4>
+            <h4>Historial del cliente</h4>
             <button aria-label="Agregar nota" onClick={() => setNote(true)}>
               <Plus size={16} />
             </button>
           </div>
           <div className="timeline small">
-            {activities?.slice(0, 8).map((a) => (
+            {activities?.slice(0, 16).map((a) => (
               <div key={a.id}>
                 <span className="timeline-dot" />
                 <strong>{a.actor}</strong>
@@ -1890,6 +2012,7 @@ function SettingsView({ me }: { me: Me }) {
                     <th>Identificador</th>
                     <th>Atención</th>
                     <th>Coexistencia</th>
+                    <th>Conexión</th>
                     <th>Estado</th>
                   </tr>
                 </thead>
@@ -1907,6 +2030,9 @@ function SettingsView({ me }: { me: Me }) {
                       <td>{c.phoneNumberId}</td>
                       <td>{c.doctorId ? 'Doctor' : 'General'}</td>
                       <td>{c.coexistence ? 'Sí' : 'No'}</td>
+                      <td>
+                        <ChannelConnection id={c.id} />
+                      </td>
                       <td>
                         <Button
                           variant="outline"

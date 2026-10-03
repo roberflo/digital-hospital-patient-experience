@@ -28,8 +28,16 @@ export type Contact = {
   email: string;
   tags: string;
   patientId?: string;
+  companyId?: string;
+  lifecycleStage: string;
 };
 export type Conversation = {
+  state: string;
+  priority: string;
+  labels: string;
+  revision: number;
+  snoozedUntil?: string;
+  lastMessage?: string;
   id: string;
   contactId: string;
   status: string;
@@ -47,7 +55,12 @@ export type Channel = {
   coexistence: boolean;
   enabled: boolean;
 };
-export type Chat = { conversation: Conversation; contact: Contact; channel: Channel };
+export type Chat = {
+  unreadCount: number;
+  conversation: Conversation;
+  contact: Contact;
+  channel: Channel;
+};
 export type Message = {
   id: string;
   sender: string;
@@ -56,6 +69,7 @@ export type Message = {
   mediaId?: string;
   status: string;
   createdAt: string;
+  receivedAt: string;
 };
 export type Activity = {
   id: string;
