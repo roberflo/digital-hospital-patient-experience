@@ -116,7 +116,7 @@ if __name__ == '__main__':
         env = dict(line.split('=', 1) for line in (ROOT / '.env').read_text().splitlines() if line and not line.startswith('#') and '=' in line)
         assert env.get('ASPNETCORE_ENVIRONMENT') == 'Development' and env.get('DEV_HOSPITAL_TENANT_ID') == TENANT
         prefix = 'Hospital__Tenants__' + TENANT + '__'
-        assert env[prefix + 'ClientId'] == 'recepcion-agenda-local-c'
+        assert env[prefix + 'ClientId'] in {'recepcion-agenda-local-c', 'recepcion-agent-local-c'}
         config = {'client': env[prefix + 'ClientId'], 'secret': env[prefix + 'ClientSecret'], 'password': env.get('DEV_PASSWORD', 'demo-recepcion')}
         if '--inspect' in sys.argv:
             config['inspect'] = sys.argv[sys.argv.index('--inspect') + 1]

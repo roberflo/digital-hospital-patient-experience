@@ -67,6 +67,8 @@ const titles: Record<string, string> = {
   assignment: 'Asignó la conversación',
   note: 'Registró una nota de seguimiento',
   appointment: 'Gestionó una cita',
+  appointment_reminder: 'Recordatorio de cita por WhatsApp',
+  reminder_consent: 'Actualizó la autorización de recordatorios',
   proposal: 'Gestionó una confirmación de agenda',
   clinical_review: 'Consultó Hospital',
   error: 'La atención requiere revisión',

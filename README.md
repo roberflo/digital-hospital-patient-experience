@@ -28,6 +28,8 @@ La API escucha en `127.0.0.1:5215`, el frontend en `127.0.0.1:3215`; PostgreSQL 
 - Agente WhatsApp con NVIDIA NIM configurable: guía del negocio, horarios, consulta de citas propias, propuestas de agenda con confirmación, recetas firmadas y transferencia al equipo. No crea ni modifica prescripciones.
 - Asistente interno para métricas anónimas, notas y seguimientos del contacto seleccionado. La selección se resuelve en servidor; no se cargan fichas ni historiales al prompt interno.
 - Agenda de Hospital como fuente; consultar, crear, reprogramar y cancelar mediante su API. Google Calendar recibe un espejo sin nombres ni teléfonos de pacientes.
+- Recordatorios por plantillas UTILITY a las 09:00 del día anterior y una hora antes, autorización por paciente, baja por WhatsApp y conciliación con Hospital. Configuración y cola en Agente de atención.
+- Entrega de la última receta firmada seleccionada en servidor por fecha de firma, incluyendo todas las páginas disponibles.
 - Cola persistente, deduplicación de webhooks, firma HMAC, auditoría y tratamiento explícito de entregas inciertas.
 
 ## Arquitectura
@@ -68,4 +70,4 @@ npm test
 
 Las pruebas API y navegador requieren el modo demo local; no se ejecutan contra producción. Backend usa una base temporal de PostgreSQL que se elimina al terminar y proveedores simulados. Las pruebas reales opcionales `scripts/check-integrations.py`, `scripts/kapso-mcp-read.py`, `scripts/check-nim.py` y `tests/assistant_smoke.py` requieren las claves locales; las pruebas NIM usan texto sintético y consumen cuota.
 
-[Resultados y límites de validación](docs/verification.md) · [Backlog](docs/backlog.md) · [Easypanel y operación](docs/deployment.md) · [Contrato Hospital](docs/hospital-integration.md) · [Puente de recetas](integrations/hospital/README.md)
+[Agente de citas y recordatorios](docs/appointment-agent.md) · [Resultados y límites de validación](docs/verification.md) · [Backlog](docs/backlog.md) · [Easypanel y operación](docs/deployment.md) · [Contrato Hospital](docs/hospital-integration.md) · [Puente de recetas](integrations/hospital/README.md)

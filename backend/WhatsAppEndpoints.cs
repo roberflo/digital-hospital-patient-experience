@@ -121,6 +121,15 @@ public static class WhatsAppEndpoints
         if (contact is null) { contact = new Contact { TenantId = scope.Id, Name = Get(conversation, "contact_name") ?? "Paciente", Phone = Rules.Phone(phone), PhoneHash = hash }; db.Add(contact); db.Activities.Add(new Activity{TenantId=scope.Id,ContactId=contact.Id,Actor="WhatsApp",ActorRole="system",Kind="contact_created",Body="Contacto creado automáticamente al recibir su primera conversación de WhatsApp."}); }
         var conv = await db.Conversations.SingleOrDefaultAsync(x => x.ChannelId == ch.Id && x.ContactId == contact.Id);
         if (conv is null) { conv = new Conversation { TenantId = scope.Id, ChannelId = ch.Id, ContactId = contact.Id, ExternalId = Get(conversation, "id") ?? "", Status = (await db.Tenants.AnyAsync(x=>x.Id==scope.Id&&x.AgentEnabled))&&ch.Enabled?"agent":"human" }; db.Add(conv); db.Activities.Add(InboxWorkflow.Event(scope,conv,"WhatsApp","conversation_created","Conversación vinculada al contacto CRM.")); }
+        var consentText = Get(k,"content") ?? (msg.TryGetProperty("text",out var consentBody)?Get(consentBody,"body"):null) ?? "";
+        var consentCommand = Get(k,"direction")!="outbound" && Get(k,"origin")!="history_sync" && !(k.ValueKind==JsonValueKind.Object&&k.TryGetProperty("passive",out var consentPassive)&&consentPassive.ValueKind==JsonValueKind.True) && evt=="whatsapp.message.received" ? ReminderRules.ConsentCommand(consentText) : null;
+        if(consentCommand is not null)
+        {
+            var reminderLock=BitConverter.ToInt64(ReminderRules.LockId(scope.Id).ToByteArray(),0);
+            await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_advisory_xact_lock({reminderLock})");
+            contact.ReminderConsentAt=consentCommand=="on"?DateTimeOffset.UtcNow:null;
+            db.Activities.Add(InboxWorkflow.Event(scope,conv,"WhatsApp","reminder_consent",consentCommand=="on"?"El paciente autorizó recordatorios de citas por WhatsApp.":"El paciente retiró su autorización de recordatorios."));
+        }
         // Serialize with in-flight sends so an early provider echo cannot create a second row.
         var conversationLock = BitConverter.ToInt64(conv.Id.ToByteArray(), 0);
         await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_advisory_xact_lock({conversationLock})");

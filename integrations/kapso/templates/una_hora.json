@@ -1,0 +1,28 @@
+{
+  "name": "recepcion_cita_una_hora_v1",
+  "language": "es",
+  "category": "UTILITY",
+  "parameter_format": "NAMED",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Te recordamos que tu cita comienza en una hora en {{hospital}}, el {{fecha}} a las {{hora}}. Si necesitas reprogramar o cancelar, responde a este mensaje. Para dejar de recibir recordatorios escribe BAJA.",
+      "example": {
+        "body_text_named_params": [
+          {
+            "param_name": "hospital",
+            "example": "Clínica de ejemplo"
+          },
+          {
+            "param_name": "fecha",
+            "example": "05/10/2026"
+          },
+          {
+            "param_name": "hora",
+            "example": "10:30"
+          }
+        ]
+      }
+    }
+  ]
+}

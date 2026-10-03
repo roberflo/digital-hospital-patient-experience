@@ -13,6 +13,13 @@ public sealed class Tenant
     public Guid Id { get; set; } = Guid.NewGuid(); public string Name { get; set; } = "";
     public string Guide { get; set; } = ""; public bool AgentEnabled { get; set; }
     public string TimeZone { get; set; } = "America/El_Salvador";
+    public bool RemindersEnabled { get; set; }
+    public Guid? ReminderChannelId { get; set; }
+    public string ReminderDayTemplate { get; set; } = "recepcion_cita_dia_anterior_v1";
+    public string ReminderHourTemplate { get; set; } = "recepcion_cita_una_hora_v1";
+    public string ReminderLanguage { get; set; } = "es";
+    public DateTimeOffset? ReminderLastSyncAt { get; set; }
+    public string? ReminderSyncError { get; set; }
     public string? KapsoCustomerId { get; set; }
     public string? GoogleRefreshToken { get; set; }
     public string? GoogleCalendarId { get; set; }
@@ -30,6 +37,7 @@ public sealed class Contact : TenantRow
     public string PhoneHash { get; set; } = ""; public string Email { get; set; } = "";
     public Guid? CompanyId { get; set; }
     public string LifecycleStage { get; set; } = "lead";
+    public DateTimeOffset? ReminderConsentAt { get; set; }
     public Guid? PatientId { get; set; }
     public string Tags { get; set; } = "";
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
@@ -113,6 +121,21 @@ public sealed class Message : TenantRow
     public string? RequestKey { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
+public sealed class AppointmentReminder : TenantRow
+{
+    public Guid ContactId { get; set; }
+    public Guid PatientId { get; set; }
+    public Guid ChannelId { get; set; }
+    public Guid AppointmentId { get; set; }
+    public Guid? MessageId { get; set; }
+    public DateTimeOffset StartsAt { get; set; }
+    public DateTimeOffset DueAt { get; set; }
+    public string Window { get; set; } = "day_before";
+    public string Status { get; set; } = "pending";
+    public string? Reason { get; set; }
+    public DateTimeOffset? AttemptedAt { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
 public sealed class Job : TenantRow
 {
     public Guid ConversationId { get; set; }
@@ -128,6 +151,7 @@ public sealed class Audit : TenantRow { public string Actor { get; set; } = ""; 
 
 public sealed class CrmDb(DbContextOptions<CrmDb> options, TenantScope scope, IDataProtectionProvider protection) : DbContext(options)
 {
+    public DbSet<AppointmentReminder> AppointmentReminders => Set<AppointmentReminder>();
     public DbSet<Tenant> Tenants => Set<Tenant>(); public DbSet<Member> Members => Set<Member>();
     public DbSet<Contact> Contacts => Set<Contact>(); public DbSet<Company> Companies => Set<Company>();
     public DbSet<Opportunity> Opportunities => Set<Opportunity>(); public DbSet<Activity> Activities => Set<Activity>();
@@ -141,6 +165,11 @@ public sealed class CrmDb(DbContextOptions<CrmDb> options, TenantScope scope, ID
     public DbSet<CalendarLink> CalendarLinks => Set<CalendarLink>();
     protected override void OnModelCreating(ModelBuilder b)
     {
+        Map<AppointmentReminder>(b);
+        b.Entity<AppointmentReminder>().HasIndex(x => new { x.TenantId, x.AppointmentId, x.StartsAt, x.Window }).IsUnique();
+        b.Entity<AppointmentReminder>().HasIndex(x => new { x.TenantId, x.Status, x.DueAt });
+        b.Entity<AppointmentReminder>().HasOne<Contact>().WithMany().HasForeignKey(x => new { x.TenantId, x.ContactId }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict);
+        b.Entity<AppointmentReminder>().HasOne<Channel>().WithMany().HasForeignKey(x => new { x.TenantId, x.ChannelId }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict);
         Map<ConversationRead>(b); Map<SavedReply>(b); Map<InboxView>(b); Map<ConversationMacro>(b);
         b.Entity<InboxView>().HasIndex(x=>new{x.TenantId,x.Subject});
         Map<Member>(b); Map<Contact>(b); Map<Company>(b); Map<Opportunity>(b); Map<Activity>(b); Map<Channel>(b);

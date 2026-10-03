@@ -2791,3 +2791,43 @@ body:has(.session-recovery) [data-radix-popper-content-wrapper] {
     align-items: flex-start;
   }
 }
+
+.appointment-reminder-settings {
+  margin-top: 24px;
+}
+.appointment-reminder-settings h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.reminder-settings-body {
+  padding: 20px;
+  display: grid;
+  gap: 16px;
+}
+.reminder-settings-body .field {
+  max-width: 480px;
+}
+.reminder-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.reminder-row {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+}
+.reminder-row p {
+  margin: 6px 0;
+}
+.reminder-row small {
+  color: var(--sub);
+}
+.reminder-row > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

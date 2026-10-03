@@ -31,6 +31,36 @@ public sealed class KapsoClient(HttpClient http, IConfiguration config)
         using var res = await http.SendAsync(req, ct); res.EnsureSuccessStatusCode(); var json = await res.Content.ReadFromJsonAsync<JsonElement>(ct);
         return json.GetProperty("messages")[0].GetProperty("id").GetString()!;
     }
+    public async Task<JsonElement> ReminderTemplate(string number, string name, string language, CancellationToken ct = default)
+    {
+        var raw = await Platform(HttpMethod.Get, "whatsapp/phone_numbers/" + Uri.EscapeDataString(number), ct: ct);
+        var data = raw.TryGetProperty("data", out var d) ? d : raw;
+        var waba = data.GetProperty("business_account_id").GetString()!;
+        using var req = Request(HttpMethod.Get, Uri.EscapeDataString(waba) + "/message_templates?name=" + Uri.EscapeDataString(name) + "&limit=100");
+        using var res = await http.SendAsync(req, ct); res.EnsureSuccessStatusCode();
+        var payload = await res.Content.ReadFromJsonAsync<JsonElement>(ct);
+        return payload.GetProperty("data").EnumerateArray().FirstOrDefault(t => t.GetProperty("name").GetString() == name && t.GetProperty("language").GetString() == language);
+    }
+    public static bool ValidReminderTemplate(JsonElement template)
+    {
+        if (template.ValueKind != JsonValueKind.Object || !template.TryGetProperty("status",out var status) || status.GetString() != "APPROVED"
+            || !template.TryGetProperty("category",out var category) || category.GetString() != "UTILITY"
+            || !template.TryGetProperty("parameter_format",out var format) || format.GetString() != "NAMED") return false;
+        if(!template.TryGetProperty("components",out var components)||components.GetArrayLength()!=1)return false;
+        var body=components[0];if(body.GetProperty("type").GetString()!="BODY")return false;
+        var text=body.GetProperty("text").GetString()??"";
+        var parameters=System.Text.RegularExpressions.Regex.Matches(text,@"\{\{([a-z_]+)\}\}").Select(m=>m.Groups[1].Value).Order().ToArray();
+        return parameters.SequenceEqual(new[]{"fecha","hora","hospital"})&&text.Contains("BAJA",StringComparison.Ordinal);
+    }
+    public async Task<bool> ReminderTemplateApproved(string number,string name,string language,CancellationToken ct=default) => ValidReminderTemplate(await ReminderTemplate(number,name,language,ct));
+    public async Task<string> SendReminder(string number,string phone,string name,string language,string hospital,string date,string time,CancellationToken ct=default)
+    {
+        if(config["REMINDERS_SEND_ENABLED"]!="true")throw new ArgumentException("Recordatorios en pausa");
+        using var req=Request(HttpMethod.Post,$"{number}/messages");
+        req.Content=JsonContent.Create(new{messaging_product="whatsapp",to=Rules.Phone(phone),type="template",template=new{name,language=new{code=language},components=new[]{new{type="body",parameters=new[]{new{type="text",parameter_name="hospital",text=hospital},new{type="text",parameter_name="fecha",text=date},new{type="text",parameter_name="hora",text=time}}}}}});
+        using var res=await http.SendAsync(req,ct);res.EnsureSuccessStatusCode();
+        return (await res.Content.ReadFromJsonAsync<JsonElement>(ct)).GetProperty("messages")[0].GetProperty("id").GetString()!;
+    }
     public bool CanSend(bool manual) => config["SEND_ENABLED"] == "true" || (manual && config["KAPSO_MANUAL_SEND_ENABLED"] == "true");
     public void RequireSending(bool manual)
     {

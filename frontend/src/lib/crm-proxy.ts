@@ -10,6 +10,7 @@ const ALLOWED = new Set([
   'opportunities',
   'activities',
   'activity-feed',
+  'appointment-reminders',
   'members',
   'settings',
   'audit',

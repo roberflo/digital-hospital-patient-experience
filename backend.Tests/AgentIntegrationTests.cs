@@ -229,6 +229,71 @@ public sealed class AgentIntegrationTests:IAsyncLifetime {
         channel.Enabled=true;config["KAPSO_MANUAL_SEND_ENABLED"]="false";await db.SaveChangesAsync();
         await Assert.ThrowsAsync<ArgumentException>(()=>service.Send(conversation.Id,"Disabled manual","human","manual-blocked"));Assert.Equal(1,sender.Calls);
     }
+    [Fact] public async Task ReminderSyncDetectsHospitalChangesAndNeverDuplicates()
+    {
+        var now=new DateTimeOffset(2026,10,3,15,0,0,TimeSpan.Zero);var start=now.AddDays(1).AddHours(1);var appointment=Guid.NewGuid();var state="booked";
+        var tenant=await db.Tenants.SingleAsync(t=>t.Id==scope.Id);tenant.ReminderChannelId=conversation.ChannelId;
+        contact.PatientId=Guid.NewGuid();contact.ReminderConsentAt=now;await db.SaveChangesAsync();
+        var cfg=GoogleConfig();var h=new HospitalClient(new HttpClient(new Fake(req=>Task.FromResult(req.RequestUri!.AbsolutePath.StartsWith("/v1/patients/")?Json(new{patientId=contact.PatientId,phone=contact.Phone}):Json(new{rows=new[]{new{appointmentId=appointment,scheduledStart=start,status=state}}})))),cfg);
+        var k=new Fake(_=>throw new Exception("Sync must not send"));var service=new AppointmentReminderService(db,scope,h,new KapsoClient(new HttpClient(k),cfg),Service(k),cfg);
+        await service.Sync(now);await service.Sync(now);Assert.Equal(2,await db.AppointmentReminders.CountAsync());Assert.All(await db.AppointmentReminders.ToListAsync(),r=>Assert.Equal("pending",r.Status));
+        start=start.AddDays(1);await service.Sync(now);Assert.Equal(2,await db.AppointmentReminders.CountAsync(r=>r.Status=="cancelled"));Assert.Equal(2,await db.AppointmentReminders.CountAsync(r=>r.Status=="pending"));
+        state="cancelled-by-patient";await service.Sync(now);Assert.All(await db.AppointmentReminders.ToListAsync(),r=>Assert.Equal("cancelled",r.Status));Assert.Equal(0,k.Calls);
+    }
+    [Fact] public async Task InterruptedReminderShowsUncertainDeliveryWithoutRetry()
+    {
+        var now=DateTimeOffset.UtcNow;
+        var tenant=await db.Tenants.SingleAsync(t=>t.Id==scope.Id);tenant.ReminderChannelId=conversation.ChannelId;
+        var message=new Message{TenantId=scope.Id,ConversationId=conversation.Id,Sender="system",Type="template",Status="sending",Body="Synthetic interrupted reminder"};db.Add(message);
+        var row=new AppointmentReminder{TenantId=scope.Id,ContactId=contact.Id,PatientId=Guid.NewGuid(),ChannelId=conversation.ChannelId,AppointmentId=Guid.NewGuid(),MessageId=message.Id,StartsAt=now.AddHours(1),DueAt=now.AddMinutes(-11),AttemptedAt=now.AddMinutes(-11),Status="sending"};db.Add(row);await db.SaveChangesAsync();
+        var never=new Fake(_=>throw new Exception("Interrupted sends must not retry"));
+        var service=new AppointmentReminderService(db,scope,new HospitalClient(new HttpClient(never),config),new KapsoClient(new HttpClient(never),config),Service(never),config);
+        await service.Sync(now);await service.Dispatch(row.Id,now);
+        await db.Entry(message).ReloadAsync();Assert.Equal("uncertain",row.Status);Assert.Equal("uncertain",message.Status);Assert.Equal(0,never.Calls);
+    }
+    [Theory][InlineData("sent")][InlineData("timeout")][InlineData("cancelled")][InlineData("consent")][InlineData("template")][InlineData("paused")][InlineData("phone")]
+    public async Task ReminderDispatchVerifiesCurrentFactsAndDoesNotReplay(string scenario)
+    {
+        var now=DateTimeOffset.UtcNow;var start=now.AddHours(1);var appointment=Guid.NewGuid();
+        var tenant=await db.Tenants.SingleAsync(t=>t.Id==scope.Id);tenant.ReminderChannelId=conversation.ChannelId;tenant.RemindersEnabled=true;contact.Name="PRIVATE PATIENT SENTINEL";
+        contact.PatientId=Guid.NewGuid();contact.ReminderConsentAt=scenario=="consent"?null:now;
+        var reminder=new AppointmentReminder{TenantId=scope.Id,ContactId=contact.Id,PatientId=contact.PatientId.Value,ChannelId=conversation.ChannelId,AppointmentId=appointment,StartsAt=start,DueAt=now,Window="hour_before"};db.Add(reminder);await db.SaveChangesAsync();
+        var cfg=new ConfigurationBuilder().AddConfiguration(GoogleConfig()).AddConfiguration(config).AddInMemoryCollection(new Dictionary<string,string?>{{"REMINDERS_SEND_ENABLED",scenario=="paused"?"false":"true"}}).Build();
+        var h=new HospitalClient(new HttpClient(new Fake(req=>Task.FromResult(req.RequestUri!.AbsolutePath.StartsWith("/v1/patients/")?Json(new{patientId=contact.PatientId,phone=scenario=="phone"?"50370000999":contact.Phone}):Json(new{rows=new[]{new{appointmentId=appointment,scheduledStart=start,status=scenario=="cancelled"?"cancelled-by-patient":"booked"}}})))),cfg);
+        var sends=0;var k=new Fake(async req=>{
+            if(req.Method==HttpMethod.Get)return req.RequestUri!.AbsolutePath.Contains("phone_numbers")?Json(new{data=new{business_account_id="synthetic-waba"}}):Json(new{data=new[]{new{name=tenant.ReminderHourTemplate,language="es",status=scenario=="template"?"PENDING":"APPROVED",category="UTILITY",parameter_format="NAMED",components=new[]{new{type="BODY",text="Cita en {{hospital}} el {{fecha}} a las {{hora}}. BAJA"}}}}});
+            sends++;using var payload=JsonDocument.Parse(await req.Content!.ReadAsStringAsync());Assert.Equal("template",payload.RootElement.GetProperty("type").GetString());Assert.Equal(contact.Phone,payload.RootElement.GetProperty("to").GetString());Assert.DoesNotContain(contact.Name,payload.RootElement.GetRawText());
+            if(scenario=="timeout")throw new HttpRequestException("Synthetic timeout");return Json(new{messages=new[]{new{id="reminder-"+Guid.NewGuid()}}});
+        });
+        var service=new AppointmentReminderService(db,scope,h,new KapsoClient(new HttpClient(k),cfg),Service(k),cfg);
+        if(scenario=="phone") {await Assert.ThrowsAsync<HospitalIntegrationException>(()=>service.Dispatch(reminder.Id,now));Assert.Equal(0,sends);return;}
+        await service.Dispatch(reminder.Id,now);await service.Dispatch(reminder.Id,now);
+        Assert.Equal(scenario is "sent" or "timeout"?1:0,sends);
+        Assert.Equal(scenario switch{"sent"=>"sent","timeout"=>"uncertain","cancelled" or "consent"=>"cancelled",_=>"pending"},reminder.Status);
+        if(sends==1)Assert.Single(await db.Activities.Where(a=>a.Kind=="appointment_reminder").ToListAsync());
+    }
+    [Theory][InlineData("create")][InlineData("reschedule")][InlineData("cancel")]
+    public async Task AgentAppointmentActionsWaitForConfirmationAndReachHospital(string action)
+    {
+        var patient=Guid.NewGuid();var doctor=Guid.NewGuid();var appointment=Guid.NewGuid();var start=DateTimeOffset.UtcNow.AddDays(3);contact.PatientId=patient;await db.SaveChangesAsync();
+        var cfg=new ConfigurationBuilder().AddConfiguration(GoogleConfig()).AddConfiguration(config).Build();var writes=new List<string>();
+        var hospital=new HospitalClient(new HttpClient(new Fake(req=>{
+            var path=req.RequestUri!.AbsolutePath;
+            if(path.StartsWith("/v1/patients/"))return Task.FromResult(Json(new{patientId=patient,phone=contact.Phone}));
+            if(path=="/v1/agenda/booking-options")return Task.FromResult(Json(new{clinicalDayFrom="",clinicalDayTo="",maxDaysPerQuery=31,rollState="open",professionals=new[]{new{clinicianId=doctor,clinicianName="Synthetic Doctor",placeName="",defaultDurationMinutes=30,days=new[]{new{clinicalDay="",state="open",takenSlotCount=0,utcOffset="-06:00",slots=new[]{new{slotId="one",startsAt=start,durationMinutes=30,takenBy=0,offered=true}}}}}}}));
+            if(req.Method==HttpMethod.Get)return Task.FromResult(Json(new{appointmentId=appointment,patientId=patient,visitKind="follow-up",status="booked"}));
+            writes.Add(path);return Task.FromResult(Json(new{appointmentId=appointment,status="booked",overlaps=false}));
+        })),cfg);
+        var toolCall = new { id="proposal", type="function", function=new { name="propose_action", arguments=JsonSerializer.Serialize(new{action,appointmentId=appointment,doctorId=doctor,startsAt=start,durationMinutes=30}) } };
+        var modelMessage = new { role="assistant", content=(string?)null, tool_calls=new[]{toolCall} };
+        var rounds=0;var ai=new Fake(_=>Task.FromResult(++rounds==1?Json(new{choices=new[]{new{message=modelMessage}}}):Reply("Confirma la propuesta con el código indicado.")));
+        var sender=Sending();var runtime=new AgentRuntime(new HttpClient(ai),cfg,db,scope,hospital,Service(sender),new KapsoClient(new HttpClient(sender),cfg));
+        await runtime.Run(job,CancellationToken.None);Assert.Empty(writes);
+        var proposal=await db.Activities.SingleAsync(a=>a.Kind.StartsWith("proposal:"));var code=proposal.Kind[9..];
+        var incoming=new Message{TenantId=scope.Id,ConversationId=conversation.Id,Sender="patient",Body="CONFIRMAR "+code,ExternalId="confirmation-"+Guid.NewGuid()};db.Add(incoming);await db.SaveChangesAsync();
+        await runtime.Run(new Job{TenantId=scope.Id,ConversationId=conversation.Id,Key="agent:"+incoming.ExternalId},CancellationToken.None);
+        Assert.Single(writes);Assert.Equal(action=="create"?"/v1/agenda":$"/v1/agenda/{appointment}/{action}",writes[0]);Assert.StartsWith("proposal_used:",proposal.Kind);
+    }
     ConversationService Service(Fake k)=>new(db,scope,new KapsoClient(new HttpClient(k),config));
     AgentRuntime Runtime(Fake ai,Fake k)=>new(new HttpClient(ai),config,db,scope,new HospitalClient(new HttpClient(new Fake(_=>throw new Exception("Unexpected hospital request"))),config),Service(k),new KapsoClient(new HttpClient(k),config));
     static Fake Sending()=>new(_=>Task.FromResult(Json(new{messages=new[]{new{id="out-"+Guid.NewGuid()}}})));

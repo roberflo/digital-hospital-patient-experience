@@ -57,6 +57,7 @@ import {
   type Opportunity,
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { AppointmentReminders, ReminderConsent } from './appointment-reminders';
 import { ActivityWorkspace } from './activity-workspace';
 import { PatientAppointments } from './patient-appointments';
 import { PatientClinical } from './patient-clinical';
@@ -1224,6 +1225,7 @@ function ChatPanel({
           }}
         />
         <PatientAppointments contact={chat.contact} me={me} />
+        <ReminderConsent contactId={chat.contact.id} />
         <CustomerCrm
           chat={chat}
           onChange={() => {
@@ -2035,6 +2037,7 @@ function AgentView({ me }: { me: Me }) {
           )}
         </section>
       </div>
+      {admin && <AppointmentReminders me={me} />}
       {admin && (
         <div className="inline-note">
           <Settings size={16} />

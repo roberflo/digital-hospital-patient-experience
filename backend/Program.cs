@@ -48,6 +48,8 @@ builder.Services.AddHttpClient<HospitalClinicalClient>(c => { c.Timeout = TimeSp
 builder.Services.AddHttpClient<AgentRuntime>(c => c.Timeout = TimeSpan.FromSeconds(90));
 builder.Services.AddHttpClient<GoogleCalendarClient>(c => c.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddScoped<ConversationService>();
+builder.Services.AddScoped<AppointmentReminderService>();
+builder.Services.AddHostedService<AppointmentReminderWorker>();
 builder.Services.AddScoped<WhatsAppOnboarding>();
 builder.Services.AddHostedService<AgentWorker>();
 builder.Services.AddHostedService<CalendarWorker>();
@@ -88,7 +90,7 @@ if (dev) app.MapPost("/auth/dev", (DevLogin body) =>
     return fixture.Item4 == Guid.Empty ? Results.Unauthorized() : Results.Ok(new { accessToken = Identity.DevToken(fixture.Item1, fixture.Item2, fixture.Item3, fixture.Item4, config), expiresIn = 3600 });
 });
 app.UseRateLimiter();
-app.MapActivityFeed();app.MapClinical();app.MapTeam();app.MapProductivity();app.MapChannelDiagnostics();app.MapInbox();app.MapCrm(); app.MapWhatsApp(); app.MapHospital(); app.MapGoogle(); app.MapAssistant();
+app.MapReminderEndpoints();app.MapActivityFeed();app.MapClinical();app.MapTeam();app.MapProductivity();app.MapChannelDiagnostics();app.MapInbox();app.MapCrm(); app.MapWhatsApp(); app.MapHospital(); app.MapGoogle(); app.MapAssistant();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<CrmDb>();

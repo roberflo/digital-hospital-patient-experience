@@ -126,6 +126,25 @@ public sealed class HospitalClient(HttpClient http, IConfiguration configuration
         return await ParseAsync<HospitalPrescriptionPage>(response, ct);
     }
 
+    public async Task<Guid?> GetLatestIssuedPrescriptionIdAsync(Guid tenantId, Guid patientId, string phone, CancellationToken ct = default)
+    {
+        // The bridge paginates timeline order, which need not equal signing order.
+        HospitalPrescription? latest = null; string? cursor = null; var seen = new HashSet<string>();
+        for (var pageNumber = 0; pageNumber < 100; pageNumber++)
+        {
+            var page = await ListIssuedPrescriptionsAsync(tenantId, patientId, phone, cursor, ct);
+            foreach (var id in page.PrescriptionIds)
+            {
+                var prescription = await GetIssuedPrescriptionAsync(tenantId, patientId, phone, id, ct);
+                if (latest is null || prescription.SignedAt > latest.SignedAt || (prescription.SignedAt == latest.SignedAt && prescription.PrescriptionId.CompareTo(latest.PrescriptionId) > 0)) latest = prescription;
+            }
+            if (string.IsNullOrEmpty(page.NextCursor)) return latest?.PrescriptionId;
+            if (!seen.Add(page.NextCursor)) break;
+            cursor = page.NextCursor;
+        }
+        throw new HospitalIntegrationException("hospital.prescription_history_incomplete", HttpStatusCode.BadGateway);
+    }
+
     public async Task<HospitalPrescription> GetIssuedPrescriptionAsync(Guid tenantId,
         Guid patientId, string senderPhone, Guid prescriptionId, CancellationToken ct = default)
     {

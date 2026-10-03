@@ -19,7 +19,7 @@ public static class ActivityFeed
     public static string Category(string kind) => kind switch
     {
         "response" => "response", "handoff" or "assignment" => "handoff", "note" => "note",
-        "appointment" => "appointment", "clinical_review" => "clinical", "error" or "delivery" => "review",
+        "appointment" or "appointment_reminder" => "appointment", "clinical_review" => "clinical", "error" or "delivery" => "review",
         "agent_tool" => "ai_action", _ when kind.StartsWith("proposal", StringComparison.Ordinal) => "appointment", _ => "crm"
     };
     // Never disclose proposal JSON (patient/doctor identifiers and confirmation codes) in a general feed.

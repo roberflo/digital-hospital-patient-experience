@@ -4,6 +4,7 @@ hospital/api:recepcion-patient-agenda image. Keeps the existing Hospital API int
 """
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 
@@ -21,6 +22,12 @@ values = dict(value.split('=', 1) for value in config['Env'])
 if values.get('ASPNETCORE_ENVIRONMENT') != 'Development':
     raise SystemExit('Only the local development Hospital is supported.')
 selected = [key + '=' + values[key] for key in sorted(allowed) if key in values]
+delivery = root / 'secrets/hospital-delivery.env'
+if delivery.exists():
+    for line in delivery.read_text().splitlines():
+        if not re.fullmatch(r'ReceptionDelivery__Tenants__[0-9a-f-]{36}__(Enabled|ClientId|ServiceAccountSubject)=[a-zA-Z0-9-]+', line):
+            raise SystemExit('Unexpected delivery capability setting.')
+        selected.append(line)
 if any('\n' in value or '\r' in value for value in selected):
     raise SystemExit('Multiline runtime setting cannot be represented safely.')
 path = root / 'secrets/hospital-runtime.env'
