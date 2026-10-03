@@ -94,7 +94,13 @@ test('settings and connection state are honest; mobile layout fits', async ({ pa
   await expect(
     page.getByRole('heading', { name: 'Tu hospital y su guía de atención' }),
   ).toBeVisible();
-  await expect(page.getByText('Envío en pausa', { exact: true })).toBeVisible();
+  const settings = await (await page.request.get('/api/crm/settings')).json();
+  const sendLabel = settings.sendEnabled
+    ? 'Envío habilitado'
+    : settings.manualSendEnabled
+      ? 'Envío manual habilitado'
+      : 'Envío en pausa';
+  await expect(page.getByText(sendLabel, { exact: true })).toBeVisible();
   await page.screenshot({ path: `../artifacts/settings-${info.project.name}.png`, fullPage: true });
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),

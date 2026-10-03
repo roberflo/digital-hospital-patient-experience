@@ -28,7 +28,9 @@ public static class InboxWorkflow
         c.State="open";c.Status="human";c.SnoozedUntil=null;return true;
     }
     public static Activity Event(TenantScope scope,Conversation c,string actor,string kind,string body)=>
-        new(){TenantId=scope.Id,ContactId=c.ContactId,ConversationId=c.Id,Actor=actor,Kind=kind,Body=body};
+        new(){TenantId=scope.Id,ContactId=c.ContactId,ConversationId=c.Id,Actor=actor,ActorRole=actor=="Sistema"?"system":actor=="WhatsApp"?"external":"unknown",Kind=kind,Body=body};
+    public static Activity Event(TenantScope scope,Conversation c,CurrentUser user,string kind,string body)=>
+        new(){TenantId=scope.Id,ContactId=c.ContactId,ConversationId=c.Id,Actor=user.Name,ActorRole=user.Role,ActorSubject=user.Subject,Kind=kind,Body=body};
 
     public static async Task WakeDue(CrmDb db,TenantScope scope,ConversationService service,CancellationToken ct)
     {

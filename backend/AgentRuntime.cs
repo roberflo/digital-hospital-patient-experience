@@ -59,7 +59,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
                     var name = call.GetProperty("function").GetProperty("name").GetString()!; JsonElement result;
                     try { using var args = JsonDocument.Parse(call.GetProperty("function").GetProperty("arguments").GetString()!); result = await Tool(name, args.RootElement, conv, contact, channel, job, revision, ct); }
                     catch (Exception ex) when (ex is HttpRequestException or ArgumentException or JsonException or KeyNotFoundException or HospitalIntegrationException) { result = JsonSerializer.SerializeToElement(new { error = "No se pudo completar la operación. Deriva a recepción para verificar." }); }
-                    db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "agent_tool", Actor = "Agente", Body = $"Herramienta: {name}. Resultado: {(result.TryGetProperty("error", out _) ? "requiere revisión" : "completado")}." }); await db.SaveChangesAsync(ct);
+                    db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "agent_tool", Actor = "Agente", ActorRole = "agent_ai", Body = $"Herramienta: {name}. Resultado: {(result.TryGetProperty("error", out _) ? "requiere revisión" : "completado")}." }); await db.SaveChangesAsync(ct);
                     messages.Add(new JsonObject { ["role"] = "tool", ["tool_call_id"] = call.GetProperty("id").GetString(), ["content"] = result.GetRawText() });
                     if (conv.Status != "agent" || conv.State != "open") return;
                 }
@@ -83,7 +83,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         switch (name)
         {
             case "handoff": await Handoff(conv, Rules.Required(a.GetProperty("reason").GetString(), 1000), ct); result = new { transferred = true }; break;
-            case "record_note": db.Activities.Add(new Activity { TenantId = scope.Id, ContactId = contact.Id, ConversationId = conv.Id, Kind = "note", Actor = "Agente", Body = Rules.Required(a.GetProperty("note").GetString(), 2000) }); await db.SaveChangesAsync(ct); result = new { saved = true }; break;
+            case "record_note": db.Activities.Add(new Activity { TenantId = scope.Id, ContactId = contact.Id, ConversationId = conv.Id, Kind = "note", Actor = "Agente", ActorRole = "agent_ai", Body = Rules.Required(a.GetProperty("note").GetString(), 2000) }); await db.SaveChangesAsync(ct); result = new { saved = true }; break;
             case "hospital_availability":
                 Guid? doctor = Guid.TryParse(channel.DoctorId, out var fixedDoctor) ? fixedDoctor : a.TryGetProperty("doctorId", out var d) && Guid.TryParse(d.GetString(), out var id) ? id : null;
                 var date = DateOnly.Parse(a.GetProperty("date").GetString()!); result = await hospital.GetAvailabilityAsync(scope.Id, date, date, doctor, ct); break;
@@ -107,7 +107,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
                 var action = a.GetProperty("action").GetString(); if (action is not ("create" or "reschedule" or "cancel")) throw new ArgumentException("Acción inválida");
                 var code = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(3));
                 var payload = JsonNode.Parse(a.GetRawText())!.AsObject(); if (Guid.TryParse(channel.DoctorId, out var channelDoctor)) payload["doctorId"] = channelDoctor.ToString();
-                db.Activities.Add(new Activity { TenantId = scope.Id, ContactId = contact.Id, ConversationId = conv.Id, Kind = "proposal:" + code, Actor = "Agente", Body = payload.ToJsonString() }); await db.SaveChangesAsync(ct);
+                db.Activities.Add(new Activity { TenantId = scope.Id, ContactId = contact.Id, ConversationId = conv.Id, Kind = "proposal:" + code, Actor = "Agente", ActorRole = "agent_ai", Body = payload.ToJsonString() }); await db.SaveChangesAsync(ct);
                 result = new { confirmationRequired = true, code, instruction = "Responde CONFIRMAR " + code + " para ejecutar. Válido 15 minutos.", details = payload }; break;
             default: throw new ArgumentException("Herramienta no autorizada");
         }
@@ -136,7 +136,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
                     if (created.Overlaps) { await Handoff(conv, "Cita registrada con un solapamiento. Recepción debe verificar la disponibilidad.", ct); return; }
                 }
             }
-            db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "appointment", Actor = "Agente", Body = "Operación de agenda confirmada por el paciente: " + action }); await db.SaveChangesAsync(ct);
+            db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "appointment", Actor = "Agente", ActorRole = "agent_ai", Body = "Operación de agenda confirmada por el paciente: " + action }); await db.SaveChangesAsync(ct);
             await conversations.Send(conv.Id, "La agenda del hospital confirmó tu solicitud.", "agent", "confirm:" + job.Id, ct: ct);
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or HospitalIntegrationException) { await Handoff(conv, "La operación de agenda necesita conciliación. Comprueba el hospital antes de repetirla.", CancellationToken.None); }
@@ -147,7 +147,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         using var l = await conversations.Lock(conv.Id, ct); await db.Entry(conv).ReloadAsync(ct); conv.Status = "human"; conv.Summary = reason; conv.Revision++;
         var channel = await db.Channels.SingleAsync(x => x.Id == conv.ChannelId, ct);
         if (channel.DoctorId is { Length: > 0 } doctor && await db.Members.AnyAsync(x => x.Subject == doctor && x.Role == "doctor" && !x.Disabled, ct)) conv.AssignedTo = doctor;
-        db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = conv.ContactId, Kind = "handoff", Actor = "Agente", Body = reason }); await db.SaveChangesAsync(ct);
+        db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = conv.ContactId, Kind = "handoff", Actor = "Agente", ActorRole = "agent_ai", Body = reason }); await db.SaveChangesAsync(ct);
         if (channel.Enabled && Rules.WithinWindow(conv.LastInboundAt, DateTimeOffset.UtcNow)) await conversations.Send(conv.Id, "He derivado tu conversación al equipo del hospital para que pueda ayudarte. Si se trata de una emergencia, acude a los servicios de emergencia de tu localidad.", "agent", "handoff:" + activeJobId, ct: ct);
     }
     static object[] Tools() => [
@@ -187,7 +187,7 @@ public sealed class AgentWorker(IServiceScopeFactory scopes, ILogger<AgentWorker
                     {
                         job.Status = "failed"; job.Error = "Revisión humana requerida: " + ex.GetType().Name;
                         var c = await d.Conversations.SingleAsync(x => x.Id == job.ConversationId, CancellationToken.None); c.Status = "human"; c.Revision++;
-                        d.Activities.Add(new Activity { TenantId = tid, ConversationId = c.Id, ContactId = c.ContactId, Kind = "error", Actor = "Sistema", Body = "El agente no pudo completar la atención. Revisa historial e integraciones." });
+                        d.Activities.Add(new Activity { TenantId = tid, ConversationId = c.Id, ContactId = c.ContactId, Kind = "error", Actor = "Sistema", ActorRole = "system", Body = "El agente no pudo completar la atención. Revisa historial e integraciones." });
                         log.LogWarning("Agent job failed {JobId} {ErrorType}", job.Id, ex.GetType().Name);
                     }
                     await d.SaveChangesAsync(CancellationToken.None);

@@ -45,6 +45,9 @@ public sealed class Opportunity : TenantRow
 }
 public sealed class Activity : TenantRow
 {
+    public string ActorRole { get; set; } = "unknown";
+    public string? ActorSubject { get; set; }
+    public Guid? MessageId { get; set; }
     public Guid? ContactId { get; set; }
     public Guid? ConversationId { get; set; }
     public string Kind { get; set; } = "note"; public string Body { get; set; } = "";
@@ -146,6 +149,7 @@ public sealed class CrmDb(DbContextOptions<CrmDb> options, TenantScope scope, ID
         b.Entity<ConversationRead>().HasOne<Conversation>().WithMany().HasForeignKey(x=>new{x.TenantId,x.ConversationId}).HasPrincipalKey(x=>new{x.TenantId,x.Id}).OnDelete(DeleteBehavior.Restrict);
         b.Entity<Contact>().HasOne<Company>().WithMany().HasForeignKey(x=>new{x.TenantId,x.CompanyId}).HasPrincipalKey(x=>new{x.TenantId,x.Id}).OnDelete(DeleteBehavior.Restrict);
         b.Entity<Opportunity>().HasOne<Conversation>().WithMany().HasForeignKey(x=>new{x.TenantId,x.ConversationId}).HasPrincipalKey(x=>new{x.TenantId,x.Id}).OnDelete(DeleteBehavior.Restrict);
+        b.Entity<Activity>().HasIndex(x => new { x.TenantId, x.CreatedAt, x.Id });
         b.Entity<Member>().HasIndex(x => x.Subject).IsUnique();
         b.Entity<Tenant>().HasIndex(x => x.KapsoCustomerId).IsUnique();
         b.Entity<Contact>().HasIndex(x => new { x.TenantId, x.PhoneHash }).IsUnique();

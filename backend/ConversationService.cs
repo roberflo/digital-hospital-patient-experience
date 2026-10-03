@@ -5,7 +5,7 @@ namespace Recepcion;
 
 public sealed class ConversationService(CrmDb db, TenantScope scope, KapsoClient kapso)
 {
-    public async Task<Message> Send(Guid id, string body, string sender, string requestKey, string? mediaId = null, string type = "text", CancellationToken ct = default, string? actingSubject = null)
+    public async Task<Message> Send(Guid id, string body, string sender, string requestKey, string? mediaId = null, string type = "text", CancellationToken ct = default, string? actingSubject = null, CurrentUser? actor = null)
     {
         if (string.IsNullOrWhiteSpace(requestKey) || requestKey.Length > 100) throw new ArgumentException("Idempotency-Key requerido");
         using var lease = await Lock(id, ct);
@@ -14,18 +14,24 @@ public sealed class ConversationService(CrmDb db, TenantScope scope, KapsoClient
         await db.Entry(conv).ReloadAsync(ct);
         if (actingSubject is not null && conv.AssignedTo != actingSubject) throw new ArgumentException("La conversación se transfirió a otra persona. Revisa el responsable antes de responder.");
         var channel = await db.Channels.SingleAsync(x => x.Id == conv.ChannelId, ct); var contact = await db.Contacts.SingleAsync(x => x.Id == conv.ContactId, ct);
-        if (!channel.Enabled) throw new ArgumentException("Canal desactivado");
+        if (!channel.Enabled) throw new ArgumentException("Este número está desactivado. Un administrador puede activarlo en WhatsApp.");
         if (!Rules.WithinWindow(conv.LastInboundAt, DateTimeOffset.UtcNow)) throw new ArgumentException("Ventana de WhatsApp cerrada. Espera un mensaje del paciente o utiliza una plantilla aprobada desde Kapso.");
-        var message = new Message { TenantId = scope.Id, ConversationId = id, Body = body, Sender = sender, RequestKey = requestKey, MediaId = mediaId, Type = type, Status = "sending" }; db.Add(message); await db.SaveChangesAsync(ct);
+        kapso.RequireSending(sender == "human");
+        var message = new Message { TenantId = scope.Id, ConversationId = id, Body = body, Sender = sender, RequestKey = requestKey, MediaId = mediaId, Type = type, Status = "sending" }; db.Add(message);
+        db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = id, ContactId = conv.ContactId,
+            MessageId = message.Id, Kind = "response", Actor = sender == "agent" ? "Agente" : actor?.Name ?? "Equipo",
+            ActorRole = sender == "agent" ? "agent_ai" : actor?.Role ?? "unknown", ActorSubject = sender == "agent" ? null : actor?.Subject,
+            Body = type == "text" ? "Respuesta al paciente por WhatsApp." : "Archivo enviado al paciente por WhatsApp." });
+        await db.SaveChangesAsync(ct);
         try
         {
-            message.ExternalId = await kapso.Send(channel.PhoneNumberId, contact.Phone, body, mediaId, type, ct); message.Status = "sent";
+            message.ExternalId = await kapso.Send(channel.PhoneNumberId, contact.Phone, body, mediaId, type, ct, manual: sender == "human"); message.Status = "sent";
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or ArgumentException)
         {
             // The remote operation may have succeeded: retain the attempted message and never retry automatically.
             message.Status = ex is ArgumentException ? "failed" : "uncertain"; conv.Status = "human";
-            db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = id, ContactId = conv.ContactId, Kind = "delivery", Actor = "Sistema", Body = message.Status == "uncertain" ? "Entrega sin confirmar. Comprueba WhatsApp antes de volver a enviar." : "El envío no está habilitado o fue rechazado localmente." });
+            db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = id, ContactId = conv.ContactId, Kind = "delivery", Actor = "Sistema", ActorRole = "system", Body = message.Status == "uncertain" ? "Entrega sin confirmar. Comprueba WhatsApp antes de volver a enviar." : "El envío no está habilitado o fue rechazado localmente." });
         }
         conv.LastMessage=body.Length>160?body[..160]:body;conv.Revision++; conv.UpdatedAt = DateTimeOffset.UtcNow; await db.SaveChangesAsync(CancellationToken.None); return message;
     }

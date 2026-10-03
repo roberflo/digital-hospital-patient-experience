@@ -33,7 +33,7 @@ public static class HospitalEndpoints
             var key = Rules.Required(ctx.Request.Headers["Idempotency-Key"].ToString(), 100);
             if (await db.Receipts.AnyAsync(x => x.Key == "appointment:" + key)) return Results.Conflict(new { title = "Solicitud ya procesada. Comprueba la agenda antes de repetir." });
             db.Receipts.Add(new Receipt { TenantId = t.Id, Key = "appointment:" + key }); CrmEndpoints.Audit(db, t, u, "appointment.requested", contact.Id); await db.SaveChangesAsync();
-            void Record(string text){db.Activities.Add(new Activity{TenantId=t.Id,ContactId=contact.Id,Kind="appointment",Actor=u.Name,Body=text});}
+            void Record(string text){db.Activities.Add(new Activity{TenantId=t.Id,ContactId=contact.Id,Kind="appointment",Actor=u.Name,ActorRole=u.Role,ActorSubject=u.Subject,Body=text});}
             if (input.Action == "cancel")
             {
                 await h.CancelAppointmentAsync(t.Id, contact.PatientId.Value, contact.Phone, input.AppointmentId ?? throw new ArgumentException("Cita requerida")); Record("Cita cancelada en Hospital.");await db.SaveChangesAsync();return Results.Ok(new { status = "cancelled" });

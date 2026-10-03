@@ -15,12 +15,14 @@ docker compose up -d --build
 
 Abre [Recepción local](http://localhost:3215). En modo demo: usuario `admin`, contraseña `demo-recepcion`. También existen `agent`, `doctor` y `other` (otra empresa). La base contiene exclusivamente ejemplos sintéticos. `init-dev.py` conserva cualquier `.env` existente y genera secretos aleatorios en una instalación nueva.
 
-La API escucha en `127.0.0.1:5215`, el frontend en `127.0.0.1:3215`; PostgreSQL sólo está disponible en la red de contenedores. `SEND_ENABLED=false`, canales pausados y agente desactivado por defecto impiden envíos accidentales. Ninguna clave va en variables `NEXT_PUBLIC_*`.
+La API escucha en `127.0.0.1:5215`, el frontend en `127.0.0.1:3215`; PostgreSQL sólo está disponible en la red de contenedores. `SEND_ENABLED=false`, `KAPSO_MANUAL_SEND_ENABLED=false`, canales pausados y agente desactivado por defecto impiden envíos accidentales. Para atención manual en ambas bandejas, activa el canal y `KAPSO_MANUAL_SEND_ENABLED=true`; puedes conservar `SEND_ENABLED=false` y el agente apagado. El permiso manual no autoriza envíos del agente. Ninguna clave va en variables `NEXT_PUBLIC_*`.
 
 ## Funciones
 
 - Usuarios compartidos con Hospital mediante Keycloak, membresía única y cinco roles. Aislamiento de empresa en API, persistencia, canales, herramientas del agente y auditoría.
 - Contactos con búsqueda/paginación, empresas y convenios, oportunidades por etapas, actividades y notas persistentes.
+- Actividad identifica atención del agente IA, recepción humana y doctores, con paciente, acción, entrega y acceso a la conversación. Búsqueda por paciente, teléfono, profesional o nota; filtros por tipo, acción y fechas del hospital, y paginación de 30 registros. Los eventos nuevos conservan el rol al realizar la acción; los anteriores aparecen como «Histórico sin rol». La consulta clínica registra únicamente que se consultó Hospital.
+
 - Bandeja con conversaciones, asignación, pausa/reanudación, historial, estados de entrega, archivos y audios. Transcripción si Kapso la proporciona; en su ausencia, revisión humana.
 - Alta de clientes Kapso por hospital, enlaces de conexión y múltiples números generales o de doctores. La coexistencia se verifica en Kapso; ecos desde Business App pausan al bot.
 - Agente WhatsApp con NVIDIA NIM configurable: guía del negocio, horarios, consulta de citas propias, propuestas de agenda con confirmación, recetas firmadas y transferencia al equipo. No crea ni modifica prescripciones.
@@ -43,6 +45,8 @@ flowchart LR
   API --> Hospital[API Hospital]
   API --> Google[Google Calendar]
 ```
+
+La búsqueda de Actividad recorre el historial elegible del hospital, incluso registros anteriores a los últimos 150. Nombres y notas permanecen cifrados en PostgreSQL y se filtran en servidor; para historiales muy grandes se debe medir el coste antes de escalar este mecanismo. Los códigos de confirmación y el JSON de propuestas del agente no se incluyen en este historial.
 
 El navegador no recibe tokens de proveedor. El tenant procede del JWT firmado; en webhooks se resuelve por el número registrado. El teléfono y el vínculo al paciente se comprueban contra Hospital antes de cada consulta privada. Los PDFs pasan en memoria, sin enlaces públicos permanentes.
 

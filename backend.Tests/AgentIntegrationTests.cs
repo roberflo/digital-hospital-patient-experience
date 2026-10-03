@@ -177,6 +177,58 @@ public sealed class AgentIntegrationTests:IAsyncLifetime {
         await Assert.ThrowsAsync<ArgumentException>(()=>NoSend().Send(conversation.Id,"Must not send","human","transfer-race",actingSubject:"original-attendant"));
         Assert.Single(await db.Messages.ToListAsync());
     }
+    async Task<ActivityFeedPage> Feed(string? q=null,string? care=null,Guid? contactId=null,DateOnly? from=null,DateOnly? to=null,int page=1) =>
+        ((Microsoft.AspNetCore.Http.HttpResults.Ok<ActivityFeedPage>)await ActivityFeed.Read(db,scope,q,care,null,contactId,null,from,to,page,CancellationToken.None)).Value!;
+    [Fact] public async Task ActivitySearchIncludesOldHistoryAndKeepsTenantIsolation()
+    {
+        contact.Name="María Sintética";
+        for(var i=0;i<165;i++)db.Activities.Add(new Activity{TenantId=scope.Id,ContactId=contact.Id,ConversationId=conversation.Id,Actor="Recepción",ActorRole="agent",Body=i==0?"Seguimiento antiguo localizable":"Nota reciente",CreatedAt=DateTimeOffset.UtcNow.AddMinutes(i-200)});
+        await db.SaveChangesAsync();
+        Assert.Equal(165,(await Feed(q:"maria sintetica")).Total);
+        Assert.Equal(1,(await Feed(q:"antiguo localizable")).Total);
+        var first=await Feed();var second=await Feed(page:2);
+        Assert.Equal(30,first.Items.Count);Assert.Equal(30,second.Items.Count);Assert.Empty(first.Items.Select(x=>x.Id).Intersect(second.Items.Select(x=>x.Id)));
+        var otherScope=new TenantScope{Id=Guid.NewGuid()};await using var other=new CrmDb(options,otherScope,protection);
+        other.Tenants.Add(new Tenant{Id=otherScope.Id,Name="Other synthetic hospital"});await other.SaveChangesAsync();
+        var foreign=new Contact{TenantId=otherScope.Id,Name="Foreign patient",Phone="50370000999",PhoneHash=Guid.NewGuid().ToString()};other.Add(foreign);
+        other.Activities.Add(new Activity{TenantId=otherScope.Id,ContactId=foreign.Id,Actor="Foreign",Body="Cross tenant secret"});await other.SaveChangesAsync();
+        Assert.Equal(0,(await Feed(q:"Cross tenant secret")).Total);Assert.Equal(0,(await Feed(contactId:foreign.Id)).Total);
+    }
+    [Fact] public async Task ActivityKeepsHistoricalRolesRedactsProposalsAndJoinsLatestDelivery()
+    {
+        var member=new Member{TenantId=scope.Id,Subject="snapshot-"+scope.Id,Name="Synthetic Doctor",Role="doctor"};db.Add(member);
+        db.Activities.Add(new Activity{TenantId=scope.Id,ContactId=contact.Id,Actor=member.Name,ActorSubject=member.Subject,ActorRole="agent",Body="Earlier receptionist action"});
+        db.Activities.Add(new Activity{TenantId=scope.Id,ContactId=contact.Id,Actor=member.Name,Body="Legacy event"});
+        db.Activities.Add(new Activity{TenantId=scope.Id,ContactId=contact.Id,Kind="proposal:secret-code",Actor="Agente",ActorRole="agent_ai",Body="{\"confirmation\":\"secret-code\"}"});await db.SaveChangesAsync();
+        var user=new CurrentUser{Subject=member.Subject,Name=member.Name,Role="doctor"};var sender=Sending();
+        var message=await Service(sender).Send(conversation.Id,"Synthetic response","human","role-snapshot",actor:user);
+        await Service(sender).Send(conversation.Id,"Synthetic response","human","role-snapshot",actor:user);
+        message.Status="read";await db.SaveChangesAsync();
+        var feed=await Feed();Assert.Equal(4,feed.Total);Assert.Equal(1,sender.Calls);
+        Assert.Contains(feed.Items,x=>x.CareType=="reception"&&x.Body=="Earlier receptionist action");
+        Assert.Contains(feed.Items,x=>x.CareType=="unknown"&&x.Body=="Legacy event");
+        Assert.DoesNotContain(feed.Items,x=>x.Body.Contains("secret-code")||x.Kind.Contains("secret-code"));
+        Assert.Equal(0,(await Feed(q:"secret-code")).Total);
+        var doctor=Assert.Single((await Feed(care:"doctor")).Items);Assert.Equal("read",doctor.DeliveryStatus);Assert.Equal(conversation.Id,doctor.ConversationId);
+    }
+    [Fact] public async Task ActivityDateFiltersUseHospitalCalendarDays()
+    {
+        var tenant=await db.Tenants.SingleAsync(x=>x.Id==scope.Id);tenant.TimeZone="America/El_Salvador";
+        foreach(var time in new[]{"2026-10-03T05:59:59Z","2026-10-03T06:00:00Z","2026-10-04T05:59:59Z","2026-10-04T06:00:00Z"})db.Activities.Add(new Activity{TenantId=scope.Id,Body="Calendar boundary",CreatedAt=DateTimeOffset.Parse(time)});
+        await db.SaveChangesAsync();Assert.Equal(2,(await Feed(from:new(2026,10,3),to:new(2026,10,3))).Total);
+        await Assert.ThrowsAsync<ArgumentException>(()=>Feed(from:new(2026,10,4),to:new(2026,10,3)));
+    }
+    [Fact] public async Task ManualFlagAllowsHumanRepliesButNeverAutomaticReplies()
+    {
+        config["SEND_ENABLED"]="false";config["KAPSO_MANUAL_SEND_ENABLED"]="true";var sender=Sending();var service=Service(sender);
+        await Assert.ThrowsAsync<ArgumentException>(()=>service.Send(conversation.Id,"Blocked automatic","agent","auto-blocked"));
+        Assert.Equal(0,sender.Calls);Assert.Single(await db.Messages.ToListAsync());
+        var sent=await service.Send(conversation.Id,"Manual reply","human","manual-allowed");Assert.Equal("sent",sent.Status);Assert.Equal(1,sender.Calls);
+        var channel=await db.Channels.SingleAsync();channel.Enabled=false;await db.SaveChangesAsync();
+        await Assert.ThrowsAsync<ArgumentException>(()=>service.Send(conversation.Id,"Disabled channel","human","disabled-blocked"));Assert.Equal(1,sender.Calls);
+        channel.Enabled=true;config["KAPSO_MANUAL_SEND_ENABLED"]="false";await db.SaveChangesAsync();
+        await Assert.ThrowsAsync<ArgumentException>(()=>service.Send(conversation.Id,"Disabled manual","human","manual-blocked"));Assert.Equal(1,sender.Calls);
+    }
     ConversationService Service(Fake k)=>new(db,scope,new KapsoClient(new HttpClient(k),config));
     AgentRuntime Runtime(Fake ai,Fake k)=>new(new HttpClient(ai),config,db,scope,new HospitalClient(new HttpClient(new Fake(_=>throw new Exception("Unexpected hospital request"))),config),Service(k),new KapsoClient(new HttpClient(k),config));
     static Fake Sending()=>new(_=>Task.FromResult(Json(new{messages=new[]{new{id="out-"+Guid.NewGuid()}}})));

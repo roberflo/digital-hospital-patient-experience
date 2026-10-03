@@ -16,7 +16,7 @@ public static class InboxEndpoints
             if(b.Labels is {} labels){row.Labels=InboxWorkflow.Labels(labels);changes.Add("Etiquetas: "+row.Labels);}
             if(changes.Count==0)throw new ArgumentException("Indica el cambio que quieres guardar");
             row.Revision++;row.UpdatedAt=DateTimeOffset.UtcNow;
-            db.Activities.Add(InboxWorkflow.Event(scope,row,user.Name,"conversation_state",string.Join(". ",changes)));
+            db.Activities.Add(InboxWorkflow.Event(scope,row,user,"conversation_state",string.Join(". ",changes)));
             CrmEndpoints.Audit(db,scope,user,"conversation.workflow",id);await db.SaveChangesAsync();return Results.Ok(row);
         });
         api.MapPost("/conversations/{id:guid}/read",async(Guid id,ReadInput input,CrmDb db,CurrentUser user,TenantScope scope,ConversationService service)=>{
@@ -43,7 +43,7 @@ public static class InboxEndpoints
             if(b.CompanyId is {} company&&!await db.Companies.AnyAsync(x=>x.Id==company))return Results.NotFound();
             row.Name=Rules.Required(b.Name);row.Email=(b.Email??"").Trim();if(row.Email.Length>320)throw new ArgumentException("Correo demasiado largo");
             row.Tags=InboxWorkflow.Labels(b.Tags??"");row.CompanyId=b.CompanyId;row.LifecycleStage=b.LifecycleStage;
-            db.Activities.Add(new Activity{TenantId=scope.Id,ContactId=id,Actor=user.Name,Kind="contact_updated",Body="Ficha CRM actualizada: datos de contacto, etiquetas, empresa y estado del cliente."});
+            db.Activities.Add(new Activity{TenantId=scope.Id,ContactId=id,Actor=user.Name,ActorRole=user.Role,ActorSubject=user.Subject,Kind="contact_updated",Body="Ficha CRM actualizada: datos de contacto, etiquetas, empresa y estado del cliente."});
             CrmEndpoints.Audit(db,scope,user,"contact.profile",id);await db.SaveChangesAsync();return Results.Ok(row);
         });
         api.MapGet("/saved-replies",async(CrmDb db)=>await db.SavedReplies.OrderBy(x=>x.Title).Take(200).ToListAsync());

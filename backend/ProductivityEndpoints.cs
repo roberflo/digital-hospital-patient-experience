@@ -43,8 +43,8 @@ public static class ProductivityEndpoints
             if(row.Revision!=input.ExpectedRevision)return Results.Conflict(new{title="La conversación cambió. Revisa los cambios antes de aplicar la macro."});
             TeamEndpoints.RequireEditable(row,user);
             Apply(macro,row,user.Subject);
-            db.Activities.Add(InboxWorkflow.Event(scope,row,user.Name,"macro","Macro aplicada: "+macro.Name));
-            if(!string.IsNullOrWhiteSpace(macro.Note))db.Activities.Add(InboxWorkflow.Event(scope,row,user.Name,"note",macro.Note));
+            db.Activities.Add(InboxWorkflow.Event(scope,row,user,"macro","Macro aplicada: "+macro.Name));
+            if(!string.IsNullOrWhiteSpace(macro.Note))db.Activities.Add(InboxWorkflow.Event(scope,row,user,"note",macro.Note));
             CrmEndpoints.Audit(db,scope,user,"conversation.macro",id);await db.SaveChangesAsync();return Results.Ok(row);
         });
     }

@@ -57,6 +57,7 @@ import {
   type Opportunity,
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { ActivityWorkspace } from './activity-workspace';
 import { PatientAppointments } from './patient-appointments';
 import { PatientClinical } from './patient-clinical';
 import { SavedInboxViews, ConversationMacros } from './inbox-productivity';
@@ -442,7 +443,8 @@ export default function Workspace() {
                       companies: 'Relaciones y convenios que conectan tu hospital.',
                       opportunities: 'Del primer contacto al seguimiento de la atención.',
                       calendar: 'Una agenda compartida para todo tu hospital.',
-                      activity: 'El historial de tu equipo y tu agente, en un solo lugar.',
+                      activity:
+                        'Quién atendió a cada paciente, qué hizo y cómo continuó la atención.',
                       agent: 'Un compañero para tu equipo. Disponible para tus pacientes.',
                       settings: 'Personaliza cómo trabaja y se conecta tu hospital.',
                     } as Record<string, string>
@@ -451,18 +453,21 @@ export default function Workspace() {
               </p>
             )}
           </div>
-          {view !== 'settings' && view !== 'agent' && view !== 'dashboard' && (
-            <div className="search-input">
-              <Search size={16} />
-              <input
-                aria-label="Buscar"
-                placeholder="Buscar en esta vista…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-              <kbd>⌕</kbd>
-            </div>
-          )}
+          {view !== 'settings' &&
+            view !== 'agent' &&
+            view !== 'dashboard' &&
+            view !== 'activity' && (
+              <div className="search-input">
+                <Search size={16} />
+                <input
+                  aria-label="Buscar"
+                  placeholder="Buscar en esta vista…"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+                <kbd>⌕</kbd>
+              </div>
+            )}
         </div>
         <ErrorBox error={error} />
         {!me && !error ? (
@@ -495,7 +500,7 @@ export default function Workspace() {
               ) : view === 'calendar' ? (
                 <CalendarView search={search} me={me} />
               ) : view === 'activity' ? (
-                <ActivityView search={search} />
+                <ActivityWorkspace search={search} onSearch={setSearch} me={me} />
               ) : view === 'agent' ? (
                 <AgentView me={me} />
               ) : view === 'settings' ? (
@@ -528,8 +533,22 @@ function InboxView({
   const [assigning, setAssigning] = useState(false);
   const [linkedPhone, setLinkedPhone] = useState('');
   const [linkedNumber, setLinkedNumber] = useState('');
+  const [linkedConversation, setLinkedConversation] = useState('');
+  function clearLinkedConversation() {
+    setLinkedPhone('');
+    setLinkedNumber('');
+    setLinkedConversation('');
+    const url = new URL(location.href);
+    for (const key of ['conversationId', 'phone', 'phoneNumberId']) url.searchParams.delete(key);
+    history.replaceState(null, '', url.pathname + url.search);
+  }
   useEffect(() => {
     const params = new URLSearchParams(location.search);
+    if (params.get('conversationId')) {
+      setLinkedConversation(params.get('conversationId')!);
+      setSelected(params.get('conversationId')!);
+      setState('');
+    }
     if (params.get('phone')) {
       setLinkedPhone(params.get('phone')!);
       setLinkedNumber(params.get('phoneNumberId') ?? '');
@@ -544,6 +563,7 @@ function InboxView({
   useEffect(() => setPage(1), [state, assignment, channelId, priority, label]);
   useEffect(() => setChecked({}), [state, assignment, channelId, priority, label, page, search]);
   const query = new URLSearchParams({ assignment, page: String(page) });
+  if (linkedConversation) query.set('conversationId', linkedConversation);
   if (linkedPhone) query.set('phone', linkedPhone);
   if (linkedNumber) query.set('phoneNumberId', linkedNumber);
   if (state) query.set('state', state);
@@ -699,17 +719,10 @@ function InboxView({
               </button>
             ))}
           </div>
-          {linkedPhone && (
+          {(linkedPhone || linkedConversation) && (
             <div className="linked-conversation">
-              Conversación desde WhatsApp{' '}
-              <button
-                onClick={() => {
-                  setLinkedPhone('');
-                  setLinkedNumber('');
-                }}
-              >
-                Ver todas
-              </button>
+              {linkedConversation ? 'Conversación desde Actividad' : 'Conversación desde WhatsApp'}{' '}
+              <button onClick={clearLinkedConversation}>Ver todas</button>
             </div>
           )}
           {managesTeam(me) && (
@@ -851,8 +864,7 @@ function InboxView({
             me={me}
             onClose={() => {
               setSelected(null);
-              setLinkedPhone('');
-              setLinkedNumber('');
+              clearLinkedConversation();
             }}
             refresh={() => mutate()}
           />
@@ -1889,57 +1901,6 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
     </section>
   );
 }
-function ActivityView({ search }: { search: string }) {
-  const { data, error } = useSWR<Activity[]>('/activities', fetcher, { refreshInterval: 10000 });
-  return (
-    <section className="content-card">
-      <div className="card-toolbar">
-        <h2>Historial de atención</h2>
-        <span className="hint">Acciones del equipo y del agente</span>
-      </div>
-      <ErrorBox error={error} />
-      <div className="timeline activity-timeline">
-        {data
-          ?.filter((a) => (a.body + a.actor).toLowerCase().includes(search.toLowerCase()))
-          .map((a) => (
-            <div key={a.id}>
-              <span className="timeline-dot" />
-              <div className="activity-title">
-                <strong>{a.actor}</strong>
-                <span className="tag">
-                  {a.kind.startsWith('proposal')
-                    ? 'Agenda'
-                    : ((
-                        {
-                          note: 'Nota interna',
-                          handoff: 'Transferencia',
-                          agent_tool: 'Acción del agente',
-                          error: 'Requiere revisión',
-                          appointment: 'Agenda',
-                          delivery: 'Entrega',
-                        } as Record<string, string>
-                      )[a.kind] ?? a.kind)}
-                </span>
-                <time>
-                  {date(a.createdAt)} · {time(a.createdAt)}
-                </time>
-              </div>
-              <p>
-                {a.kind.startsWith('proposal')
-                  ? 'Confirmación de agenda registrada en la conversación.'
-                  : a.body}
-              </p>
-            </div>
-          ))}
-      </div>
-      {data?.length === 0 && (
-        <Empty icon={ActivityIcon} title="Aquí se construye el historial">
-          Las notas y acciones aparecerán conforme atiendas a tus pacientes.
-        </Empty>
-      )}
-    </section>
-  );
-}
 function AgentView({ me }: { me: Me }) {
   const { data } = useSWR<Activity[]>('/activities', fetcher, { refreshInterval: 5000 });
   const admin = ['admin', 'platform_admin'].includes(me.role);
@@ -2094,6 +2055,7 @@ type SettingsData = {
   kapsoConfigured: boolean;
   aiConfigured: boolean;
   sendEnabled: boolean;
+  manualSendEnabled?: boolean;
   aiModel: string;
 };
 function SettingsView({ me }: { me: Me }) {
@@ -2200,7 +2162,11 @@ function SettingsView({ me }: { me: Me }) {
                   MessageCircle,
                   'WhatsApp · Kapso',
                   data.kapsoConfigured,
-                  data.sendEnabled ? 'Envío habilitado' : 'Envío en pausa',
+                  data.sendEnabled
+                    ? 'Envío habilitado'
+                    : data.manualSendEnabled
+                      ? 'Envío manual habilitado'
+                      : 'Envío en pausa',
                 ],
                 [Sparkles, 'NVIDIA NIM', data.aiConfigured, 'Agente de atención'],
                 [CalendarDays, 'Google Calendar', data.googleConnected, 'Agenda compartida'],

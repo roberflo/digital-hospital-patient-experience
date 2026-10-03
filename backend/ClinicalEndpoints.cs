@@ -41,6 +41,9 @@ public static class ClinicalEndpoints
         var stillLinked = currentContact?.PatientId == contact.PatientId && currentContact?.Phone == contact.Phone;
         if (!stillAssigned || !stillLinked) throw new AccessDeniedException();
         CrmEndpoints.Audit(db, tenant, user, "clinical." + section + ".read", documentId ?? contact.PatientId.Value);
+        db.Activities.Add(new Activity { TenantId = tenant.Id, ContactId = contact.Id, ConversationId = id,
+            Actor = user.Name, ActorRole = user.Role, ActorSubject = user.Subject, Kind = "clinical_review",
+            Body = "Consultó Hospital durante la atención. El contenido clínico permanece en el expediente." });
         await db.SaveChangesAsync();
         return Results.Ok(result);
     }

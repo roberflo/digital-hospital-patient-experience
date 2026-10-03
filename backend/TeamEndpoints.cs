@@ -61,7 +61,7 @@ public static class TeamEndpoints
                 row.AssignedTo = target?.Subject;
                 row.Status = row.State == "resolved" ? "closed" : "human";
                 row.Revision++; row.UpdatedAt = DateTimeOffset.UtcNow;
-                db.Activities.Add(InboxWorkflow.Event(scope, row, user.Name, "assignment", $"Responsable: {previous} → {target?.Name ?? "Sin asignar"}."));
+                db.Activities.Add(InboxWorkflow.Event(scope, row, user, "assignment", $"Responsable: {previous} → {target?.Name ?? "Sin asignar"}."));
                 CrmEndpoints.Audit(db, scope, user, "conversation.assigned", row.Id);
             }
             // One SaveChanges transaction: either the entire selection changes, or none does.

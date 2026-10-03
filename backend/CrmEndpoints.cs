@@ -59,11 +59,11 @@ public static class CrmEndpoints
             if (!await db.Contacts.AnyAsync(x => x.Id == b.ContactId)) return Results.NotFound();
             if(b.ConversationId is {} source&&!await db.Conversations.AnyAsync(x=>x.Id==source&&x.ContactId==b.ContactId))return Results.NotFound();
             ValidateStage(b.Stage); if (b.Value < 0) throw new ArgumentException("Valor inválido");
-            var row = new Opportunity { TenantId = t.Id, ContactId = b.ContactId, ConversationId=b.ConversationId, Title = Rules.Required(b.Title), Value = b.Value, Stage = b.Stage }; db.Add(row);db.Add(new Activity{TenantId=t.Id,ContactId=row.ContactId,ConversationId=row.ConversationId,Kind="opportunity",Actor=u.Name,Body="Seguimiento creado: "+row.Title}); Audit(db, t, u, "opportunity.created", row.Id); await db.SaveChangesAsync(); return Results.Ok(row);
+            var row = new Opportunity { TenantId = t.Id, ContactId = b.ContactId, ConversationId=b.ConversationId, Title = Rules.Required(b.Title), Value = b.Value, Stage = b.Stage }; db.Add(row);db.Add(new Activity{TenantId=t.Id,ContactId=row.ContactId,ConversationId=row.ConversationId,Kind="opportunity",Actor=u.Name,ActorRole=u.Role,ActorSubject=u.Subject,Body="Seguimiento creado: "+row.Title}); Audit(db, t, u, "opportunity.created", row.Id); await db.SaveChangesAsync(); return Results.Ok(row);
         });
         api.MapPatch("/opportunities/{id:guid}", async (Guid id, StageInput b, CrmDb db, TenantScope t, CurrentUser u) =>
         {
-            var row = await db.Opportunities.SingleOrDefaultAsync(x => x.Id == id); if (row is null) return Results.NotFound(); ValidateStage(b.Stage); row.Stage = b.Stage; row.UpdatedAt = DateTimeOffset.UtcNow; db.Add(new Activity{TenantId=t.Id,ContactId=row.ContactId,ConversationId=row.ConversationId,Kind="opportunity",Actor=u.Name,Body="Etapa de seguimiento actualizada: "+row.Title+" → "+b.Stage}); Audit(db, t, u, "opportunity.stage", id); await db.SaveChangesAsync(); return Results.Ok(row);
+            var row = await db.Opportunities.SingleOrDefaultAsync(x => x.Id == id); if (row is null) return Results.NotFound(); ValidateStage(b.Stage); row.Stage = b.Stage; row.UpdatedAt = DateTimeOffset.UtcNow; db.Add(new Activity{TenantId=t.Id,ContactId=row.ContactId,ConversationId=row.ConversationId,Kind="opportunity",Actor=u.Name,ActorRole=u.Role,ActorSubject=u.Subject,Body="Etapa de seguimiento actualizada: "+row.Title+" → "+b.Stage}); Audit(db, t, u, "opportunity.stage", id); await db.SaveChangesAsync(); return Results.Ok(row);
         });
         api.MapGet("/activities", async (CrmDb db, Guid? contactId, Guid? conversationId) => await db.Activities.Where(x => (contactId == null || x.ContactId == contactId) && (conversationId == null || x.ConversationId == conversationId)).OrderByDescending(x => x.CreatedAt).Take(150).ToListAsync());
         api.MapPost("/activities", async (ActivityInput b, CrmDb db, TenantScope t, CurrentUser u) =>
@@ -71,7 +71,7 @@ public static class CrmEndpoints
             if (b.ContactId is { } cid && !await db.Contacts.AnyAsync(x => x.Id == cid)) return Results.NotFound();
             var contactId=b.ContactId;
             if (b.ConversationId is { } vid){var conversation=await db.Conversations.SingleOrDefaultAsync(x=>x.Id==vid);if(conversation is null||contactId is {} linked&&linked!=conversation.ContactId)return Results.NotFound();contactId=conversation.ContactId;}
-            var row = new Activity { TenantId = t.Id, ContactId = contactId, ConversationId = b.ConversationId, Body = Rules.Required(b.Body, 10000), Kind = "note", Actor = u.Name }; db.Add(row); Audit(db, t, u, "activity.created", row.Id); await db.SaveChangesAsync(); return Results.Ok(row);
+            var row = new Activity { TenantId = t.Id, ContactId = contactId, ConversationId = b.ConversationId, Body = Rules.Required(b.Body, 10000), Kind = "note", Actor = u.Name, ActorRole = u.Role, ActorSubject = u.Subject }; db.Add(row); Audit(db, t, u, "activity.created", row.Id); await db.SaveChangesAsync(); return Results.Ok(row);
         });
         api.MapGet("/members", async (CrmDb db) => await db.Members.Select(x => new { x.Subject, x.Name, x.Role, x.Disabled }).ToListAsync());
         api.MapPatch("/members/{id}", async (string id, MemberInput b, CrmDb db, CurrentUser u, TenantScope t, ConversationService locks) =>
@@ -81,7 +81,7 @@ public static class CrmEndpoints
         api.MapGet("/settings", async (CrmDb db, TenantScope t, CurrentUser u, HospitalClient h, IConfiguration c) =>
         {
             u.RequireAdmin(); var tenant = await db.Tenants.SingleAsync(x => x.Id == t.Id);
-            return new { tenant.Name, tenant.Guide, tenant.TimeZone, tenant.AgentEnabled, tenant.GoogleCalendarId, googleConnected = tenant.GoogleRefreshToken != null, hospitalConfigured = h.IsConfigured(t.Id), kapsoConfigured = !string.IsNullOrEmpty(c["KAPSO_API_KEY"]), aiConfigured = !string.IsNullOrEmpty(c["NVIDIA_API_KEY"]), sendEnabled = c["SEND_ENABLED"] == "true", aiModel = c["AI_MODEL"] ?? "nvidia/nemotron-3-super-120b-a12b" };
+            return new { tenant.Name, tenant.Guide, tenant.TimeZone, tenant.AgentEnabled, tenant.GoogleCalendarId, googleConnected = tenant.GoogleRefreshToken != null, hospitalConfigured = h.IsConfigured(t.Id), kapsoConfigured = !string.IsNullOrEmpty(c["KAPSO_API_KEY"]), aiConfigured = !string.IsNullOrEmpty(c["NVIDIA_API_KEY"]), sendEnabled = c["SEND_ENABLED"] == "true", manualSendEnabled = c["SEND_ENABLED"] == "true" || c["KAPSO_MANUAL_SEND_ENABLED"] == "true", aiModel = c["AI_MODEL"] ?? "nvidia/nemotron-3-super-120b-a12b" };
         });
         api.MapPut("/settings", async (SettingsInput b, CrmDb db, TenantScope t, CurrentUser u) =>
         {

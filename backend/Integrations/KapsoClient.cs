@@ -22,14 +22,19 @@ public sealed class KapsoClient(HttpClient http, IConfiguration config)
         if (body is not null) req.Content = JsonContent.Create(body);
         using var res = await http.SendAsync(req, ct); res.EnsureSuccessStatusCode(); return await res.Content.ReadFromJsonAsync<JsonElement>(ct);
     }
-    public async Task<string> Send(string number, string phone, string body, string? mediaId = null, string type = "text", CancellationToken ct = default)
+    public async Task<string> Send(string number, string phone, string body, string? mediaId = null, string type = "text", CancellationToken ct = default, bool manual = false)
     {
-        if (config["SEND_ENABLED"] != "true") throw new ArgumentException("Envío desactivado: configura SEND_ENABLED al habilitar el canal");
+        RequireSending(manual);
         var payload = new Dictionary<string, object> { { "messaging_product", "whatsapp" }, { "to", Rules.Phone(phone) }, { "type", type } };
         payload[type] = type == "text" ? new { body } : new Dictionary<string, object> { { "id", mediaId ?? throw new ArgumentException("Archivo requerido") } };
         using var req = Request(HttpMethod.Post, $"{number}/messages"); req.Content = JsonContent.Create(payload);
         using var res = await http.SendAsync(req, ct); res.EnsureSuccessStatusCode(); var json = await res.Content.ReadFromJsonAsync<JsonElement>(ct);
         return json.GetProperty("messages")[0].GetProperty("id").GetString()!;
+    }
+    public bool CanSend(bool manual) => config["SEND_ENABLED"] == "true" || (manual && config["KAPSO_MANUAL_SEND_ENABLED"] == "true");
+    public void RequireSending(bool manual)
+    {
+        if (!CanSend(manual)) throw new ArgumentException(manual ? "El envío manual está en pausa. Solicita a administración habilitarlo." : "El envío automático está desactivado.");
     }
     public async Task<string> Upload(string number, Stream stream, string name, string contentType, CancellationToken ct = default)
     {

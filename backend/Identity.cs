@@ -81,7 +81,7 @@ public static class DemoSeed
                 var c = new Contact { TenantId = id, Name = name, Phone = phone, PhoneHash = "demo-" + phone, Tags = tag }; db.Add(c);
                 var conversation = new Conversation { TenantId = id, ContactId = c.Id, ChannelId = channel.Id, Status = "human", LastInboundAt = DateTimeOffset.UtcNow, Summary = "Datos sintéticos para explorar el flujo de atención." }; db.Add(conversation);
                 db.Add(new Message { TenantId = id, ConversationId = conversation.Id, Body = "Hola, quisiera información para mi próxima consulta.", Sender = "patient" });
-                db.Add(new Activity { TenantId = id, ContactId = c.Id, ConversationId = conversation.Id, Body = "Conversación de demostración. Vincula un paciente real del hospital antes de consultar información clínica.", Actor = "Sistema" });
+                db.Add(new Activity { TenantId = id, ContactId = c.Id, ConversationId = conversation.Id, Body = "Conversación de demostración. Vincula un paciente real del hospital antes de consultar información clínica.", Actor = "Sistema", ActorRole = "system" });
                 db.Add(new Opportunity { TenantId = id, ContactId = c.Id, Title = "Seguimiento · " + name, Stage = tag == "Control" ? "scheduled" : "new" });
             }
             db.Add(new Company { TenantId = id, Name = "Convenio de demostración", Industry = "Salud", Email = "convenio@example.invalid" });

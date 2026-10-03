@@ -24,7 +24,7 @@ public static class ChannelDiagnostics
             var checks=health.TryGetProperty("checks",out var checksObject)?checksObject.EnumerateObject().Select(x=>new{name=x.Name,passed=Bool(x.Value,"passed")}).ToArray():[];
             return Results.Ok(new{checkedAt=DateTimeOffset.UtcNow,kind=Text(number,"kind"),coexistence=Bool(number,"is_coexistence"),providerStatus=Text(health,"status"),checks,
                 activeWebhooks=hooks.Count(x=>Bool(x,"active")),webhookUrlConfigured=!string.IsNullOrEmpty(expected),crmWebhookFound=configured,receivesMessages=receives,signatureMatches,row.LastWebhookAt,row.Enabled,
-                sendEnabled=config["SEND_ENABLED"]=="true",ready=Text(health,"status")=="healthy"&&row.Enabled&&config["SEND_ENABLED"]=="true"&&receives&&signatureMatches});
+                sendEnabled=config["SEND_ENABLED"]=="true",manualSendEnabled=kapso.CanSend(true),ready=Text(health,"status")=="healthy"&&row.Enabled&&kapso.CanSend(true)&&receives&&signatureMatches});
         }).RequireAuthorization();
     }
     static JsonElement Data(JsonElement value)=>value.TryGetProperty("data",out var data)?data:value;

@@ -30,7 +30,7 @@ public static class WhatsAppEndpoints
         {
             var conv = await db.Conversations.SingleOrDefaultAsync(x => x.Id == id); if (conv is null) return Results.NotFound();
             using (var teamLease = await svc.Lock(t.Id)) using (var l = await svc.Lock(id)) { await db.Entry(conv).ReloadAsync(); TeamEndpoints.RequireEditable(conv,u); InboxWorkflow.SetState(conv,"open"); conv.Status = "human"; conv.AssignedTo = u.Subject; conv.Revision++; await db.SaveChangesAsync(); }
-            var msg = await svc.Send(id, Rules.Required(b.Body, 4000), "human", ctx.Request.Headers["Idempotency-Key"].ToString(), actingSubject: u.Subject); CrmEndpoints.Audit(db, t, u, "message.sent", msg.Id); await db.SaveChangesAsync(); return Results.Ok(msg);
+            var msg = await svc.Send(id, Rules.Required(b.Body, 4000), "human", ctx.Request.Headers["Idempotency-Key"].ToString(), actingSubject: u.Subject, actor: u); CrmEndpoints.Audit(db, t, u, "message.sent", msg.Id); await db.SaveChangesAsync(); return Results.Ok(msg);
         });
         api.MapPost("/conversations/{id:guid}/media", async (Guid id, HttpContext ctx, CrmDb db, TenantScope t, CurrentUser u, KapsoClient kapso, ConversationService svc) =>
         {
@@ -38,11 +38,13 @@ public static class WhatsAppEndpoints
             TeamEndpoints.RequireEditable(conv,u);
             var form = await ctx.Request.ReadFormAsync(); var file = form.Files.GetFile("file"); if (file is null || file.Length == 0 || file.Length > 16 * 1024 * 1024) throw new ArgumentException("Archivo requerido, máximo 16 MB");
             var allowed = new[] { "application/pdf", "image/jpeg", "image/png", "audio/ogg", "audio/mpeg", "audio/mp4", "video/mp4" }; if (!allowed.Contains(file.ContentType)) throw new ArgumentException("Formato no permitido");
-            var channel = await db.Channels.SingleAsync(x => x.Id == conv.ChannelId); if (!channel.Enabled) throw new ArgumentException("Canal desactivado");
+            var channel = await db.Channels.SingleAsync(x => x.Id == conv.ChannelId); if (!channel.Enabled) throw new ArgumentException("Este número está desactivado. Un administrador puede activarlo en WhatsApp.");
+            kapso.RequireSending(manual: true);
+            if (!Rules.WithinWindow(conv.LastInboundAt, DateTimeOffset.UtcNow)) throw new ArgumentException("Ventana de WhatsApp cerrada. Espera un mensaje del paciente o utiliza una plantilla aprobada desde Kapso.");
             await using var stream = file.OpenReadStream(); var mid = await kapso.Upload(channel.PhoneNumberId, stream, file.FileName, file.ContentType);
             using (var teamLease = await svc.Lock(t.Id)) using (var l = await svc.Lock(id)) { await db.Entry(conv).ReloadAsync(); TeamEndpoints.RequireEditable(conv,u); InboxWorkflow.SetState(conv,"open"); conv.Status = "human"; conv.AssignedTo = u.Subject; conv.Revision++; await db.SaveChangesAsync(); }
             var type = file.ContentType.Split('/')[0]; if (type == "application") type = "document";
-            var msg = await svc.Send(id, Path.GetFileName(file.FileName), "human", ctx.Request.Headers["Idempotency-Key"].ToString(), mid, type, actingSubject: u.Subject); CrmEndpoints.Audit(db, t, u, "media.sent", msg.Id); await db.SaveChangesAsync(); return Results.Ok(msg);
+            var msg = await svc.Send(id, Path.GetFileName(file.FileName), "human", ctx.Request.Headers["Idempotency-Key"].ToString(), mid, type, actingSubject: u.Subject, actor: u); CrmEndpoints.Audit(db, t, u, "media.sent", msg.Id); await db.SaveChangesAsync(); return Results.Ok(msg);
         }).DisableAntiforgery();
         api.MapGet("/messages/{id:guid}/media", async (Guid id, CrmDb db, KapsoClient kapso) =>
         {
@@ -59,7 +61,7 @@ public static class WhatsAppEndpoints
             if(b.Status=="closed")InboxWorkflow.SetState(conv,"resolved");
             else if(b.Status=="agent"||conv.State=="resolved")InboxWorkflow.SetState(conv,"open");
             conv.Status = b.Status; conv.AssignedTo = b.AssignedTo; conv.Revision++; conv.UpdatedAt = DateTimeOffset.UtcNow;
-            db.Activities.Add(new Activity { TenantId = t.Id, ContactId = conv.ContactId, ConversationId = id, Actor = u.Name, Kind = "handoff", Body = b.Status == "agent" ? "Atención automática reanudada." : b.Status == "closed" ? "Conversación cerrada." : "Atención humana solicitada. Revisa mensajes y acciones anteriores." });
+            db.Activities.Add(new Activity { TenantId = t.Id, ContactId = conv.ContactId, ConversationId = id, Actor = u.Name, ActorRole = u.Role, ActorSubject = u.Subject, Kind = "handoff", Body = b.Status == "agent" ? "Atención automática reanudada." : b.Status == "closed" ? "Conversación cerrada." : "Atención humana solicitada. Revisa mensajes y acciones anteriores." });
             CrmEndpoints.Audit(db, t, u, "conversation." + b.Status, id); await db.SaveChangesAsync(); return Results.Ok(conv);
         });
         api.MapGet("/channels", async (CrmDb db) => await db.Channels.ToListAsync());
@@ -116,7 +118,7 @@ public static class WhatsAppEndpoints
         if (existing != null) { if (status == "read" || status == "failed" || (status == "delivered" && existing.Status != "read") || (status == "sent" && existing.Status is "sending" or "uncertain")) existing.Status = status; return; }
         var phone = Get(conversation, "phone_number") ?? Get(msg, "from") ?? Get(msg, "to"); if (string.IsNullOrEmpty(phone)) return;
         var hash = Rules.PhoneHash(phone, config["PHONE_HASH_KEY"]!); var contact = await db.Contacts.SingleOrDefaultAsync(x => x.PhoneHash == hash);
-        if (contact is null) { contact = new Contact { TenantId = scope.Id, Name = Get(conversation, "contact_name") ?? "Paciente", Phone = Rules.Phone(phone), PhoneHash = hash }; db.Add(contact); db.Activities.Add(new Activity{TenantId=scope.Id,ContactId=contact.Id,Actor="WhatsApp",Kind="contact_created",Body="Contacto creado automáticamente al recibir su primera conversación de WhatsApp."}); }
+        if (contact is null) { contact = new Contact { TenantId = scope.Id, Name = Get(conversation, "contact_name") ?? "Paciente", Phone = Rules.Phone(phone), PhoneHash = hash }; db.Add(contact); db.Activities.Add(new Activity{TenantId=scope.Id,ContactId=contact.Id,Actor="WhatsApp",ActorRole="system",Kind="contact_created",Body="Contacto creado automáticamente al recibir su primera conversación de WhatsApp."}); }
         var conv = await db.Conversations.SingleOrDefaultAsync(x => x.ChannelId == ch.Id && x.ContactId == contact.Id);
         if (conv is null) { conv = new Conversation { TenantId = scope.Id, ChannelId = ch.Id, ContactId = contact.Id, ExternalId = Get(conversation, "id") ?? "", Status = (await db.Tenants.AnyAsync(x=>x.Id==scope.Id&&x.AgentEnabled))&&ch.Enabled?"agent":"human" }; db.Add(conv); db.Activities.Add(InboxWorkflow.Event(scope,conv,"WhatsApp","conversation_created","Conversación vinculada al contacto CRM.")); }
         // Serialize with in-flight sends so an early provider echo cannot create a second row.
@@ -134,7 +136,7 @@ public static class WhatsAppEndpoints
         if(!history){conv.LastMessage=content.Length>160?content[..160]:content;conv.UpdatedAt = DateTimeOffset.UtcNow;} conv.Revision++;
         if (outbound && origin is "business_app" or "other_app" or "meta_business_agent" || passive || evt == "whatsapp.thread.standby")
         {
-            conv.Status = "human"; db.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "handoff", Actor = "WhatsApp", Body = "Atención externa detectada. Agente automático en pausa." });
+            conv.Status = "human"; db.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "handoff", Actor = "WhatsApp", ActorRole = "external", Body = "Atención externa detectada. Agente automático en pausa." });
         }
         if (!outbound && !history && !passive && evt == "whatsapp.message.received")
         {

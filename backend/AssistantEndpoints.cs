@@ -31,7 +31,7 @@ public static class AssistantEndpoints
                     else if (!executed.Add(name)) result = "Esta acción ya se realizó en este turno.";
                     else if (name is "create_note" or "create_followup")
                     {
-                        if (name == "create_note") db.Add(new Activity { TenantId = scope.Id, ContactId = input.ContactId, Actor = user.Name + " · asistente", Body = Rules.Required(a.GetProperty("note").GetString(), 2000) });
+                        if (name == "create_note") db.Add(new Activity { TenantId = scope.Id, ContactId = input.ContactId, Actor = user.Name + " · asistente", ActorRole = user.Role, ActorSubject = user.Subject, Body = Rules.Required(a.GetProperty("note").GetString(), 2000) });
                         else db.Add(new Opportunity { TenantId = scope.Id, ContactId = input.ContactId.Value, Title = Rules.Required(a.GetProperty("title").GetString()) });
                         CrmEndpoints.Audit(db, scope, user, "assistant." + name, input.ContactId.Value); await db.SaveChangesAsync(ct); result = "Guardado correctamente";
                     }
