@@ -4,6 +4,7 @@ import useSWR, { useSWRConfig } from 'swr';
 import { signOut } from 'next-auth/react';
 import {
   HeartPulse,
+  LayoutDashboard,
   Inbox,
   Users,
   Building2,
@@ -61,7 +62,9 @@ import {
   type Opportunity,
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { DashboardView } from './dashboard-view';
 const nav = [
+  ['dashboard', 'Dashboard', LayoutDashboard],
   ['inbox', 'Bandeja de entrada', Inbox],
   ['contacts', 'Contactos', Users],
   ['companies', 'Empresas', Building2],
@@ -266,16 +269,16 @@ function FormDialog({
   );
 }
 export default function Workspace() {
-  const [view, setView] = useState('inbox');
+  const [view, setView] = useState('dashboard');
   const [mobile, setMobile] = useState(false);
   const [search, setSearch] = useState('');
   const { data: me, error } = useSWR<Me>('/me', fetcher);
-  const { data: stats } = useSWR<Record<string, number>>('/overview', fetcher, {
+  const { data: stats, error: statsError } = useSWR<Record<string, number>>('/overview', fetcher, {
     refreshInterval: 10000,
   });
   useEffect(() => {
     const v = new URLSearchParams(location.search).get('view');
-    if (v) setView(v);
+    if (v && (v === 'settings' || nav.some(([id]) => id === v))) setView(v);
   }, []);
   const navigate = (v: string) => {
     setView(v);
@@ -400,6 +403,7 @@ export default function Workspace() {
               {
                 (
                   {
+                    dashboard: 'El resumen de la atención de tu hospital.',
                     inbox: 'Cada conversación, con el contexto que necesitas.',
                     contacts: 'Conoce a tus pacientes. Acompaña cada paso.',
                     companies: 'Relaciones y convenios que conectan tu hospital.',
@@ -413,7 +417,7 @@ export default function Workspace() {
               }
             </p>
           </div>
-          {view !== 'settings' && view !== 'agent' && (
+          {view !== 'settings' && view !== 'agent' && view !== 'dashboard' && (
             <div className="search-input">
               <Search size={16} />
               <input
@@ -432,8 +436,13 @@ export default function Workspace() {
         ) : (
           me && (
             <div className="page-content">
-              {view === 'inbox' ? (
-                <InboxView me={me} search={search} stats={stats} />
+              {view === 'dashboard' ? (
+                <>
+                  <ErrorBox error={statsError} />
+                  <DashboardView stats={stats} onNavigate={navigate} />
+                </>
+              ) : view === 'inbox' ? (
+                <InboxView me={me} search={search} />
               ) : view === 'contacts' ? (
                 <ContactsView search={search} />
               ) : view === 'companies' ? (
@@ -456,15 +465,7 @@ export default function Workspace() {
     </div>
   );
 }
-function InboxView({
-  me,
-  search,
-  stats,
-}: {
-  me: Me;
-  search: string;
-  stats?: Record<string, number>;
-}) {
+function InboxView({ me, search }: { me: Me; search: string }) {
   const {
     data: chats,
     error,
@@ -481,31 +482,6 @@ function InboxView({
   const active = chats?.find((c) => c.conversation.id === selected);
   return (
     <>
-      <div className="metrics">
-        {[
-          [
-            MessageCircle,
-            'Conversaciones abiertas',
-            stats?.conversations,
-            'Tu bandeja de atención',
-          ],
-          [UserRound, 'Esperando a tu equipo', stats?.human, 'Atención personal'],
-          [Sparkles, 'Con el agente', stats?.agent, 'Atención automática'],
-          [Users, 'Contactos', stats?.contacts, 'Relaciones que importan'],
-        ].map(([Icon, label, n, sub], i) => {
-          const I = Icon as typeof Inbox;
-          return (
-            <div className="metric" key={i}>
-              <div>
-                <span>{label as string}</span>
-                <I size={17} />
-              </div>
-              <strong>{(n as number) ?? '—'}</strong>
-              <small>{sub as string}</small>
-            </div>
-          );
-        })}
-      </div>
       <ErrorBox error={error} />
       <div className={cn('inbox-layout', active && 'has-selection')}>
         <section className="conversation-list">

@@ -426,10 +426,16 @@ svg {
   font-size: 10px;
   color: #9da89e;
 }
+.dashboard-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 20px;
+}
 .inbox-layout {
   display: flex;
   min-height: 610px;
-  height: calc(100dvh - 353px);
+  height: calc(100dvh - 238px);
   border: 1px solid var(--line);
   border-radius: 12px;
   overflow: hidden;

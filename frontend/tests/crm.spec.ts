@@ -3,15 +3,29 @@ async function login(page: import('@playwright/test').Page) {
   await page.goto('/login');
   await page.getByLabel('Contraseña', { exact: true }).fill('demo-recepcion');
   await page.getByRole('button', { name: 'Entrar al espacio' }).click();
-  await expect(page.getByRole('heading', { name: 'Bandeja de entrada' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
 }
 async function nav(page: import('@playwright/test').Page, name: string) {
   const menu = page.getByRole('button', { name: 'Abrir menú' });
   if (await menu.isVisible()) await menu.click();
   await page.getByRole('button', { name, exact: true }).click();
 }
-test('login, inbox, conversation and internal note persist', async ({ page }, info) => {
+test('dashboard and inbox are separate; conversation and internal note persist', async ({
+  page,
+}, info) => {
   await login(page);
+  await expect(page.getByText('Conversaciones abiertas', { exact: true })).toBeVisible();
+  await page.screenshot({
+    path: `../artifacts/dashboard-${info.project.name}.png`,
+    fullPage: true,
+  });
+  await page.getByRole('button', { name: 'Abrir bandeja', exact: true }).click();
+  await expect(page).toHaveURL(/view=inbox/);
+  await expect(page.getByText('Conversaciones abiertas', { exact: true })).toHaveCount(0);
+  await page.reload();
+  await expect(
+    page.getByRole('heading', { name: 'Bandeja de entrada', exact: true }),
+  ).toBeVisible();
   await page
     .getByRole('button')
     .filter({ has: page.getByText('Ana Martínez', { exact: true }) })
