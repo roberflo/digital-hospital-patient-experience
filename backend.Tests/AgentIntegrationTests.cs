@@ -55,6 +55,34 @@ public sealed class AgentIntegrationTests:IAsyncLifetime {
         var ai=new Fake(async _=>{await using var other=new CrmDb(options,scope,protection);await other.Tenants.Where(x=>x.Id==scope.Id).ExecuteUpdateAsync(s=>s.SetProperty(x=>x.AgentEnabled,false));return Reply("Discard this");});
         var k=new Fake(_=>throw new Exception("Must not send"));await Runtime(ai,k).Run(job,CancellationToken.None);Assert.Equal(0,k.Calls);
     }
+    [Fact]public async Task ScopedPatientAgendaUsesBoundedPatientEndpoint(){
+        var appointment=Guid.NewGuid();var day=new DateOnly(2026,10,3);
+        var handler=new Fake(req=>{
+            if(req.RequestUri!.AbsolutePath.StartsWith("/v1/patients/"))return Task.FromResult(Json(new{patientId=contact.Id,phone=contact.Phone}));
+            Assert.Equal($"/v1/agenda/patients/{contact.Id}",req.RequestUri.AbsolutePath);
+            Assert.Contains("from=2026-10-03&to=2026-10-03",req.RequestUri.Query);
+            return Task.FromResult(Json(new{rows=new[]{new{appointmentId=appointment,scheduledStart=DateTimeOffset.Parse("2026-10-03T19:00:00-06:00"),durationMinutes=30,clinicianName="Doctor sintético",status="booked"}}}));
+        });
+        var cfg=new ConfigurationBuilder().AddConfiguration(GoogleConfig()).AddInMemoryCollection(new Dictionary<string,string?>{[$"Hospital:Tenants:{scope.Id}:UsePatientAgenda"]="true"}).Build();
+        var client=new HospitalClient(new HttpClient(handler),cfg);
+        var result=await client.GetPatientAppointmentsAsync(scope.Id,contact.Id,contact.Phone,day);
+        Assert.Equal(appointment,result[0].GetProperty("appointmentId").GetGuid());
+        Assert.False(result[0].TryGetProperty("patientId",out _));
+        var before=handler.Calls;
+        await Assert.ThrowsAsync<ArgumentException>(()=>client.GetPatientAppointmentRangeAsync(scope.Id,contact.Id,contact.Phone,day,day.AddDays(31)));
+        Assert.Equal(before,handler.Calls);
+    }
+    [Fact]public async Task SlotValidationUsesLocalDayAndRequestedDoctor(){
+        var doctor=Guid.NewGuid();var start=DateTimeOffset.UtcNow.AddDays(2).Date.AddHours(1);var instant=new DateTimeOffset(start,TimeSpan.Zero);
+        var expected=HospitalClient.ClinicalDay(instant,"America/El_Salvador");
+        var handler=new Fake(req=>{
+            Assert.Contains($"from={expected:yyyy-MM-dd}&to={expected:yyyy-MM-dd}",req.RequestUri!.Query);
+            var slot=new {startsAt=instant,durationMinutes=30,offered=true,takenBy=0};
+            var day=new {slots=new[]{slot}};
+            return Task.FromResult(Json(new{professionals=new[]{new{clinicianId=Guid.NewGuid(),days=new[]{day}}}}));
+        });
+        Assert.False(await new HospitalClient(new HttpClient(handler),GoogleConfig()).IsSlotAvailableAsync(scope.Id,doctor,instant,30,"America/El_Salvador"));
+    }
     [Fact]public async Task PatientAgendaNeverReturnsOtherPatientsOrIdentifiers(){
         var own=Guid.NewGuid();var other=Guid.NewGuid();
         var handler=new Fake(req=>Task.FromResult(req.RequestUri!.AbsolutePath.StartsWith("/v1/patients/")

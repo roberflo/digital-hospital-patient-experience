@@ -127,8 +127,8 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             else
             {
                 var doctor = p.GetProperty("doctorId").GetGuid(); var start = p.GetProperty("startsAt").GetDateTimeOffset(); var duration = p.GetProperty("durationMinutes").GetInt32();
-                var day = DateOnly.FromDateTime(start.Date); var options = await hospital.GetAvailabilityAsync(scope.Id, day, day, doctor, ct);
-                if (!options.Professionals.SelectMany(x => x.Days).SelectMany(x => x.Slots).Any(x => x.StartsAt == start && x.Offered && x.TakenBy == 0 && x.DurationMinutes >= duration)) { await Handoff(conv, "El horario cambió. Recepción debe buscar otra disponibilidad.", ct); return; }
+                var zone=await db.Tenants.Where(x=>x.Id==scope.Id).Select(x=>x.TimeZone).SingleAsync(ct);
+                if (!await hospital.IsSlotAvailableAsync(scope.Id,doctor,start,duration,zone,ct)) { await Handoff(conv, "El horario cambió. Recepción debe buscar otra disponibilidad.", ct); return; }
                 if (action == "reschedule") await hospital.RescheduleAppointmentAsync(scope.Id, contact.PatientId!.Value, contact.Phone, p.GetProperty("appointmentId").GetGuid(), doctor, start, duration, ct);
                 else
                 {

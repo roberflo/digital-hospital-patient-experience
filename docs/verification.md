@@ -6,9 +6,9 @@ Fecha de desarrollo: 2026-10-02 (America/El_Salvador). Ejecución local con Dock
 |---|---|---|
 | Build API | pasó | `docker compose build api`, publicación Release .NET 10 |
 | Build frontend | pasó | `docker compose build web`, Next standalone + TypeScript |
-| Backend | 42 pasaron, 0 fallos, 0 omitidas | `scripts/test-backend.sh`, PostgreSQL temporal real y proveedores simulados |
-| API | 65 verificaciones pasaron | `python3 tests/api_smoke.py`, API real local |
-| Navegador | 10 pasaron | `npm test --prefix frontend`, Chromium escritorio + móvil contra contenedores compilados |
+| Backend | 54 pasaron, 0 fallos, 0 omitidas | `scripts/test-backend.sh`, PostgreSQL temporal real y proveedores simulados |
+| API | 82 verificaciones pasaron | `python3 tests/api_smoke.py`, API real local |
+| Navegador | 14 escenarios verificados; ver detalles en chatwoot-review.md | `npm test --prefix frontend`, Chromium escritorio + móvil contra contenedores compilados |
 | Adaptador Hospital | pasó | `tests/hospital-client/HospitalClient.Checks.csproj` ejecutado con SDK 10 |
 | Bridge Hospital | 33 servicio/HTTP-JWT + 12 arquitectura + 3 OpenAPI + 1 cliente TS pasaron | copia aislada del hospital; detalles en `integrations/hospital/README.md` |
 | Kapso MCP | conexión y lecturas reales correctas | initialize, tools/list y lectura del número configurado; servidor kapso-mcp 2.0.0 |
@@ -49,3 +49,7 @@ La entrega es una aplicación ejecutable con verificaciones concretas. Los adapt
 ### Resultado de la búsqueda de números Kapso
 
 Las dos claves facilitadas permiten consultar el mismo proyecto `carsales`. La lista completa accesible contiene únicamente `Sandbox WhatsApp`, ID `597907523413541`; no reporta coexistencia, no tiene webhooks y su comprobación de salud devuelve `unhealthy`. No hay un número operativo verificable con estos accesos. No se enviaron mensajes externos. Se necesita acceso al proyecto de los números reales y la URL HTTPS pública de esta API para completar la prueba de recepción y entrega real.
+
+## Agenda Hospital: alcance actual
+
+Se agregó la consulta por paciente en Hospital (guard/auditoría, filtro tenant/paciente, rango máximo 31 días), y su consumo desde el agente y la ficha de la bandeja. Se corrigió la validación de horarios nocturnos por zona del hospital. Build y pruebas dirigidas pasan; consultar `integrations/hospital/PATIENT-AGENDA.md` para conteos y límites de la evidencia. La nueva API no está desplegada y la conexión persistente local espera autorización de la cuenta Keycloak; no se declara aún creación/reprogramación/cancelación real desde CRM.

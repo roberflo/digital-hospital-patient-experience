@@ -1,0 +1,9 @@
+# Local integration only: docker compose -f docker-compose.yml -f docker-compose.hospital.yml up -d
+# Shares the Hospital API network; never attach Recepción to hospital_hospital-keys.
+services:
+  api:
+    networks: [default, hospital]
+networks:
+  hospital:
+    external: true
+    name: hospital

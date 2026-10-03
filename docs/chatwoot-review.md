@@ -20,7 +20,7 @@ Los controles usan selectores, botones y diálogos compactos; no se añadieron m
 
 - 49 pruebas backend, incluidos límites/validación de macros y vistas.
 - 82 comprobaciones API, incluidas privacidad de vistas, tenant, permisos de macros, conflicto de revisión y nota única sin envío al paciente.
-- 14 escenarios de navegador: 12 pasaron en la ejecución completa; las 2 pruebas de macros detectaron etiquetas accesibles incompletas, se corrigieron y ambas pasaron al repetirlas en escritorio y móvil.
+- 14 escenarios de navegador: macros verificadas en escritorio y móvil tras corregir etiquetas accesibles. La regresión posterior pasó 13 escenarios y detectó una carrera de hidratación del menú móvil; se corrigió la fecha renderizada y el estado del menú, y el escenario afectado pasó al repetirlo.
 - Builds .NET/Next.js correctos, migración aplicada en base local y desde cero en la base de pruebas.
 
 ## Próximas prioridades

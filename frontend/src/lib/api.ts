@@ -1,10 +1,18 @@
-export async function api<T = unknown>(path: string, method = 'GET', body?: unknown): Promise<T> {
+export async function api<T = unknown>(
+  path: string,
+  method = 'GET',
+  body?: unknown,
+  requestKey?: string,
+): Promise<T> {
   const res = await fetch('/api/crm' + path, {
     method,
     headers:
       body instanceof FormData
-        ? { 'Idempotency-Key': crypto.randomUUID() }
-        : { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+        ? { 'Idempotency-Key': requestKey ?? crypto.randomUUID() }
+        : {
+            'Content-Type': 'application/json',
+            'Idempotency-Key': requestKey ?? crypto.randomUUID(),
+          },
     body: body instanceof FormData ? body : body === undefined ? undefined : JSON.stringify(body),
   });
   if (!res.ok) {

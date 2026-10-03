@@ -68,6 +68,8 @@ if (dev) app.MapPost("/auth/dev", (DevLogin body) =>
 {
     if (body.Password != (config["DEV_PASSWORD"] ?? "demo-recepcion")) return Results.Unauthorized();
     var fixture = body.User switch { "admin" => ("dev-admin", "Administrador demo", "admin", DemoSeed.TenantId), "agent" => ("dev-agent", "Recepción demo", "agent", DemoSeed.TenantId), "doctor" => ("dev-doctor", "Doctor demo", "doctor", DemoSeed.TenantId), "other" => ("dev-other", "Otro negocio", "admin", DemoSeed.SecondTenantId), _ => ("", "", "", Guid.Empty) };
+    if(body.User=="hospital"&&Guid.TryParse(config["DEV_HOSPITAL_TENANT_ID"],out var hospitalTenant)&&hospitalTenant!=Guid.Empty)
+        fixture=("dev-hospital-reception","Recepción · Hospital local (prueba)","agent",hospitalTenant);
     return fixture.Item4 == Guid.Empty ? Results.Unauthorized() : Results.Ok(new { accessToken = Identity.DevToken(fixture.Item1, fixture.Item2, fixture.Item3, fixture.Item4, config), expiresIn = 3600 });
 });
 app.UseRateLimiter();
@@ -76,7 +78,12 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<CrmDb>();
     if (dev || config["INITIALIZE_DATABASE"] == "true") { await db.Database.MigrateAsync(); }
-    if (dev) await DemoSeed.Run(db, scope.ServiceProvider.GetRequiredService<TenantScope>());
+    if (dev) {
+        await DemoSeed.Run(db, scope.ServiceProvider.GetRequiredService<TenantScope>());
+        if(Guid.TryParse(config["DEV_HOSPITAL_TENANT_ID"],out var hospitalTenant)&&hospitalTenant!=Guid.Empty&&!await db.Tenants.AnyAsync(x=>x.Id==hospitalTenant)){
+            db.Tenants.Add(new Tenant{Id=hospitalTenant,Name="Hospital local · clínica sintética",AgentEnabled=false});await db.SaveChangesAsync();
+        }
+    }
     else if (Guid.TryParse(config["BOOTSTRAP_TENANT_ID"], out var tid) && !await db.Tenants.AnyAsync(x => x.Id == tid)) { db.Tenants.Add(new Tenant { Id = tid, Name = config["BOOTSTRAP_TENANT_NAME"] ?? "Hospital" }); await db.SaveChangesAsync(); }
 }
 await app.RunAsync();

@@ -36,6 +36,7 @@ Para pruebas se admite `AccessToken` en lugar de client credentials, pero expira
 | Paciente vinculado | `GET /v1/patients/{patientId}` | Responde `patientId`, `givenNames`, `familyNames`, `phone`, etc. El adaptador devuelve una proyección mínima. |
 | Buscar paciente | `GET /v1/patients/search?queryShape=...&term=...` | Sólo `dui`, `record-number`, `name-tokens`; **no existe búsqueda por teléfono**. |
 | Disponibilidad | `GET /v1/agenda/booking-options?from=YYYY-MM-DD&to=YYYY-MM-DD&clinicianId=UUID` | `professionals[].days[].slots[]`: `offered`, `takenBy`, `startsAt`, `durationMinutes`. Respetar `maxDaysPerQuery` y estados de día. |
+| Citas de paciente | `GET /v1/agenda/patients/{patientId}?from=YYYY-MM-DD&to=YYYY-MM-DD` | Nueva ruta aplicada en Hospital, máximo 31 días; ver `integrations/hospital/PATIENT-AGENDA.md`. |
 | Agenda | `GET /v1/agenda/day?clinicalDay=YYYY-MM-DD` | Vista de personal; no pasar filas de otros pacientes al LLM de una conversación. |
 | Comprobar cita | `GET /v1/agenda/{id}?patientId=UUID` | Hospital valida pertenencia exacta. El adaptador repite comparación antes de mutar. |
 | Agendar | `POST /v1/agenda` | `{patientId, clinicianId, startsAt, durationMinutes, visitKind}` → `{appointmentId,status,overlaps}`. |
@@ -74,3 +75,9 @@ PASS: hospital client phone linkage, tenant/expiry guard, cross-patient appointm
 Con SDK 10: `dotnet run --project tests/hospital-client/HospitalClient.Checks.csproj`. Esto prueba el adaptador, no sustituye pruebas reales de Keycloak, base de datos ni el bridge en Hospital.
 
 Ese mismo comando se ejecutó posteriormente en `mcr.microsoft.com/dotnet/sdk:10.0` y también pasó. El puente ya tiene patch compilado en copia aislada del hospital y pruebas dirigidas: 33 del servicio/HTTP-JWT, 12 de arquitectura, 3 de baseline OpenAPI y 1 del cliente TypeScript generado, sin fallos ni omitidas. Ver `integrations/hospital/README.md` para evidencia y verificaciones de despliegue pendientes.
+
+## Ampliación de agenda (2026-10-02)
+
+La bandeja consulta próximas citas por paciente vinculado mediante el nuevo endpoint acotado. Configura `UsePatientAgenda=true` al desplegar la nueva API para que también lo use el agente. La UI de Agenda comunica errores de disponibilidad, conserva la clave del intento y registra acciones exitosas en el historial CRM. La validación usa la zona horaria del hospital, incluido un horario UTC que corresponde al día clínico anterior.
+
+Código y pruebas preparados; la conexión persistente local está pendiente de autorización explícita para el cliente Keycloak dedicado. Ver `integrations/hospital/PATIENT-AGENDA.md` para evidencia y procedimiento.

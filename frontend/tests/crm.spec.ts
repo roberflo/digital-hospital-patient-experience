@@ -139,6 +139,12 @@ test('personal views persist and conversation search filters messages', async ({
   await page.reload();
   await page.getByLabel('Vistas guardadas', { exact: true }).selectOption({ label: view });
   await expect(page.getByLabel('Filtrar por estado')).toHaveValue('pending');
+  await page.getByRole('button', { name: 'Administrar vistas guardadas' }).click();
+  await page.getByRole('button', { name: 'Eliminar vista ' + view, exact: true }).click();
+  await expect(
+    page.getByRole('button', { name: 'Eliminar vista ' + view, exact: true }),
+  ).toHaveCount(0);
+  await page.keyboard.press('Escape');
   await page.getByLabel('Filtrar por estado').selectOption('open');
   await page
     .getByRole('button')
@@ -179,6 +185,13 @@ test('supervisor creates and applies an internal macro', async ({ page }, info) 
   await expect(page.getByText('Prioridad: Alta', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Aplicar a esta conversación', exact: true }).click();
   await expect(page.getByText('Macro aplicada', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Acciones rápidas', exact: true }).click();
+  await page.getByRole('button', { name: 'Administrar macros', exact: true }).click();
+  await page.getByRole('button', { name: 'Eliminar macro ' + macro, exact: true }).click();
+  await expect(
+    page.getByRole('button', { name: 'Eliminar macro ' + macro, exact: true }),
+  ).toHaveCount(0);
+  await page.keyboard.press('Escape');
   await nav(page, 'Actividad');
   await expect(page.getByText('Nota macro ' + macro, { exact: true })).toBeVisible();
 });

@@ -62,6 +62,7 @@ import {
   type Opportunity,
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { PatientAppointments } from './patient-appointments';
 import { SavedInboxViews, ConversationMacros } from './inbox-productivity';
 import { DashboardView } from './dashboard-view';
 import {
@@ -281,10 +282,22 @@ export default function Workspace() {
   const [view, setView] = useState('dashboard');
   const [mobile, setMobile] = useState(false);
   const [search, setSearch] = useState('');
+  const [todayLabel, setTodayLabel] = useState('');
   const { data: me, error } = useSWR<Me>('/me', fetcher);
   const { data: stats, error: statsError } = useSWR<Record<string, number>>('/overview', fetcher, {
     refreshInterval: 10000,
   });
+  useEffect(() => {
+    if (me)
+      setTodayLabel(
+        new Date().toLocaleDateString('es-SV', {
+          weekday: 'short',
+          day: 'numeric',
+          month: 'long',
+          timeZone: me.tenant.timeZone,
+        }),
+      );
+  }, [me?.tenant.timeZone]);
   useEffect(() => {
     const v = new URLSearchParams(location.search).get('view');
     if (v && (v === 'settings' || nav.some(([id]) => id === v))) setView(v);
@@ -380,7 +393,13 @@ export default function Workspace() {
       <main className={cn('main', view === 'inbox' && 'main-inbox')}>
         <header className="topbar">
           <div>
-            <button className="mobile-menu" onClick={() => setMobile(true)} aria-label="Abrir menú">
+            <button
+              className="mobile-menu"
+              disabled={!me}
+              onClick={() => setMobile(true)}
+              aria-label="Abrir menú"
+              aria-expanded={mobile}
+            >
               <Menu />
             </button>
             <span className="breadcrumb">Espacio de trabajo</span>
@@ -388,13 +407,7 @@ export default function Workspace() {
             <strong>{title}</strong>
           </div>
           <div className="topbar-right">
-            <span className="today">
-              {new Date().toLocaleDateString('es-SV', {
-                weekday: 'short',
-                day: 'numeric',
-                month: 'long',
-              })}
-            </span>
+            <span className="today">{todayLabel}</span>
             <span className="separator" />
             <span className="secure">
               <ShieldCheck size={15} /> Sesión protegida
@@ -1024,6 +1037,7 @@ function ChatPanel({
             refreshActivities();
           }}
         />
+        <PatientAppointments contact={chat.contact} me={me} />
         <CustomerCrm
           chat={chat}
           onChange={() => {
@@ -1400,13 +1414,29 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
   const [doctor, setDoctor] = useState('');
   const [cancel, setCancel] = useState<AgendaRow | null>(null);
   const appointmentBusy = useRef(false);
+  const appointmentRequest = useRef<{ body: string; key: string } | null>(null);
+  async function saveAppointment(input: unknown) {
+    const body = JSON.stringify(input);
+    if (appointmentRequest.current?.body !== body)
+      appointmentRequest.current = { body, key: crypto.randomUUID() };
+    return api<{ overlaps?: boolean }>(
+      '/hospital/appointments',
+      'POST',
+      input,
+      appointmentRequest.current.key,
+    );
+  }
   const [savingAppointment, setSavingAppointment] = useState(false);
   const { data, error, mutate } = useSWR<{ rows: AgendaRow[] }>(
     `/hospital/agenda?date=${day}`,
     fetcher,
     { shouldRetryOnError: false },
   );
-  const { data: availability } = useSWR<Availability>(
+  const {
+    data: availability,
+    error: availabilityError,
+    isLoading: availabilityLoading,
+  } = useSWR<Availability>(
     create || modify ? `/hospital/availability?date=${day}` : null,
     fetcher,
     { shouldRetryOnError: false },
@@ -1498,10 +1528,20 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
                 )[r.status] ?? r.status}
               </span>
               {r.overlaps && <span className="error">Solapamiento</span>}
-              <Button variant="ghost" size="sm" onClick={() => setModify(r)}>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={r.status !== 'booked' && r.status !== 'not-recorded'}
+                onClick={() => setModify(r)}
+              >
                 Reprogramar
               </Button>
-              <Button variant="ghost" size="sm" onClick={() => setCancel(r)}>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={r.status !== 'booked' && r.status !== 'not-recorded'}
+                onClick={() => setCancel(r)}
+              >
                 Cancelar
               </Button>
             </article>
@@ -1534,7 +1574,7 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
               appointmentBusy.current = true;
               setSavingAppointment(true);
               try {
-                const result = await api<{ overlaps?: boolean }>('/hospital/appointments', 'POST', {
+                const result = await saveAppointment({
                   action: modify ? 'reschedule' : 'create',
                   appointmentId: modify?.appointmentId,
                   contactId: f.get('contactId'),
@@ -1547,6 +1587,7 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
                     ? 'Cita registrada con solapamiento: verifica la agenda.'
                     : 'Agenda actualizada',
                 );
+                appointmentRequest.current = null;
                 setCreate(false);
                 setModify(null);
                 mutate();
@@ -1579,6 +1620,13 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
               Fecha
               <input type="date" value={day} onChange={(e) => setDay(e.target.value)} required />
             </label>
+            <ErrorBox error={availabilityError} />
+            {availabilityLoading && <p className="hint">Consultando horarios del hospital…</p>}
+            {availability && !availability.professionals.length && (
+              <p className="hint">
+                El hospital no tiene doctores disponibles en el padrón para esta consulta.
+              </p>
+            )}
             <label>
               Doctor
               <select value={doctor} onChange={(e) => setDoctor(e.target.value)} required>
@@ -1601,6 +1649,12 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
                 ))}
               </select>
             </label>
+            {doctor && availability && !slots.length && (
+              <p className="hint">
+                No hay cupos disponibles para este doctor en la fecha seleccionada. Cambia el día o
+                el doctor.
+              </p>
+            )}
             <p className="hint">
               Si un paciente no aparece, vincula primero su expediente desde la conversación.
             </p>
@@ -1634,7 +1688,7 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
               appointmentBusy.current = true;
               setSavingAppointment(true);
               try {
-                await api('/hospital/appointments', 'POST', {
+                await saveAppointment({
                   action: 'cancel',
                   appointmentId: cancel?.appointmentId,
                   contactId: c.id,
@@ -1642,6 +1696,7 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
                   startsAt: cancel?.scheduledStart,
                   durationMinutes: cancel?.durationMinutes,
                 });
+                appointmentRequest.current = null;
                 toast.success('Cita cancelada');
                 setCancel(null);
                 mutate();

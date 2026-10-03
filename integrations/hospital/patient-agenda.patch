@@ -1,0 +1,702 @@
+--- /dev/null
++++ b/docs/features/17-agenda-y-citas/reception-patient-agenda.spec.md
+@@ -0,0 +1,31 @@
++# Consulta de citas del paciente desde Recepción
++
++Estado: aceptada para implementación por solicitud del usuario; sin decisión clínica nueva.
++
++Recepción consulta citas del paciente vinculado sin enumerar otros pacientes. Hospital conserva agenda y auditoría.
++
++## Invariantes
++
++- INV-1: el tenant viene exclusivamente del JWT y el patientId pasa por PatientAccessBehavior.
++- INV-2: SQL limita paciente y tenant antes de materializar citas.
++- INV-3: los días se interpretan en la zona del hospital y los estados usan la misma derivación que agenda.
++
++## Criterios
++
++| Número | Criterio | Cómo se prueba |
++|---|---|---|
++| 1 | GET /v1/agenda/patients/{patientId}?from=&to= autenticado, límites requeridos, máximo 31 días inclusivos. | Test ruta + handler límites inválidos/extremos; HTTP real pendiente. |
++| 2 | Consulta filtra patientId y tenant en SQL; rango de intervalos clínicos. | Repositorio EF real con tenant/paciente ajeno (InMemory) y fecha local cruzando medianoche UTC; evidencia SQL PostgreSQL pendiente. |
++| 3 | Respuesta mínima: from, to, rows con appointmentId, clinicianId, clinicianName, scheduledStart, durationMinutes, status. | Test DTO y estado cancelado/no registrado; diagnóstico de query sin patientId. |
++| 4 | Guard y auditoría existentes se ejecutan; consulta de conjunto de artefactos del paciente no fabrica resourceId. | Contrato IPatientScopedRequest/IPatientAccessDescriptor ; prueba HTTP de aislamiento pendiente. |
++| 5 | Devuelve estado actual, incluye canceladas para conciliación, orden estable por comienzo e ID. | Handler con fixtures sintéticos; ruta real. |
++
++## Anticriterios
++
++No leer agenda completa para filtrar luego; no PHI clínica o contacto; no tenant en body/query; no nuevas tablas; no cambios a semántica de reserva, autorizaciones ni escrituras.
++
++## Preguntas
++
++- Asumida: incluye canceladas dentro del rango para permitir verificar cancelación.
++- Asumida: rango máximo 31 días usa el límite actual de agenda interna.
++- Bloqueantes: ninguna.
+--- /dev/null
++++ b/docs/plans/reception-patient-agenda.plan.md
+@@ -0,0 +1,28 @@
++# Plan consulta de citas del paciente
++
++1. Rojo: contrato de ruta exige consulta patient-scoped existente en controller.
++2. Agregar query/handler paciente con guard/auditoría; reutilizar ClinicalDay, estado y nombres de profesionales.
++3. Agregar método repositorio con patientId + intervalos y filtro tenant existente; ampliar fakes.
++4. Acción controller y DTO mínimo; sin cambios a Program ni migraciones.
++5. Pruebas dirigidas Application, Endpoints, Infrastructure y arquitectura; copia aislada para conservar cambios ajenos. Regenerar OpenAPI sólo en copia aislada, entregar delta.
++6. Prueba real JWT Reception con fixture sintético y comparación paciente ajeno; integración CRM a cargo del coordinador.
++
++Riesgos: cruce de día UTC, filtrado después de materializar, auditoría sin ResourceId. No se hace: reserva atómica/idempotencia, Google bidireccional ni nueva agenda.
++
++## Evidencia de ejecución — 2026-10-02
++
++SDK10 en contenedor, árbol aislado; no se ejecutó la suite backend completa.
++
++- Rojo ruta: «to have an item matching (a.Template == "patients/{patientId:guid}") because Recepción must read one patient's appointments without enumerating the hospital.» 1 failed/0 passed.
++- Rojo diagnóstico: ToString contenía PatientId; rojo fecha extrema: ArgumentOutOfRangeException en ClinicalDay.UtcRangeFor. Ambas regresiones corregidas.
++- Scheduling Application: 0 failed /152 passed /0 skipped /152 total.
++- Scheduling Endpoints: 0 failed /80 passed /0 skipped /80 total.
++- Scheduling Infrastructure: 0 failed /32 passed /5 skipped /37 total. Test nuevo usa EF InMemory con contexto/proveedor exclusivo, dos tenants y dos pacientes; no certifica SQL PostgreSQL ni aislamiento HTTP.
++- Arquitectura filtros PatientAccessResourceIdentity, RequestMarker, SchedulingBoundary: 13 passed.
++- OpenApiBaselineTests: 3 passed; delta exacto una ruta y dos schemas.
++- generated-client-is-current.test.ts: 1 passed.
++- git diff --check de archivos de la feature: sin incidencias.
++
++El fixture InMemory inicialmente contaminaba modelos de otros tests con NeverInvokedPhiProtector; se aisló su service provider sin modificar assertions ni producto. La consulta nueva no se ha probado todavía por HTTP con JWT real ni se ha comprobado el SQL emitido. Las lecturas reales previas de agenda/disponibilidad en el Hospital activo sí respondieron200 con dev-recepcion-c, pero no prueban este endpoint nuevo.
++
++No migraciones, envíos, altas de clientes OAuth, cambios de Program ni reemplazo del API activo. Imagen sidecar construida separadamente; arranque e integración requieren el entorno runtime y autorización de identidad coordinados fuera de este parche.
+--- /dev/null
++++ b/backend/src/Modules/Scheduling/Hospital.Scheduling.Application/Queries/GetPatientAgendaQuery.cs
+@@ -0,0 +1,21 @@
++using Hospital.Application.Abstractions;
++using Hospital.Application.Abstractions.Auditing;
++using Hospital.Scheduling.Domain;
++using Hospital.SharedKernel;
++using MediatR;
++
++namespace Hospital.Scheduling.Application.Queries;
++
++public sealed record GetPatientAgendaQuery(PatientId PatientId, DateOnly From, DateOnly To)
++    : IRequest<Result<PatientAgendaResult>>, IPatientScopedRequest, IPatientAccessDescriptor
++{
++    public override string ToString() => nameof(GetPatientAgendaQuery);
++    public string ResourceType => PatientResourceTypes.AgendaDayView;
++    public AuditAction Action => AuditAction.Read;
++    /// <summary>This read names a set of appointments for one patient, never a single artifact (ADR-0027).</summary>
++    public bool NamesNoSingleArtifact => true;
++}
++
++public sealed record PatientAgendaResult(DateOnly From, DateOnly To, IReadOnlyList<PatientAgendaRow> Rows);
++public sealed record PatientAgendaRow(Guid AppointmentId, Guid ClinicianId, string ClinicianName,
++    DateTimeOffset ScheduledStart, int DurationMinutes, AppointmentDisplayState Status);
+--- /dev/null
++++ b/backend/src/Modules/Scheduling/Hospital.Scheduling.Application/Queries/GetPatientAgendaQueryHandler.cs
+@@ -0,0 +1,39 @@
++using Hospital.Application.Abstractions;
++using Hospital.Application.Abstractions.Clinic;
++using Hospital.Application.Abstractions.Professionals;
++using Hospital.Scheduling.Application.Ports;
++using Hospital.SharedKernel;
++using MediatR;
++
++namespace Hospital.Scheduling.Application.Queries;
++
++public sealed class GetPatientAgendaQueryHandler(IAppointmentRepository repository,
++    IClinicCalendar calendar, IClock clock, IActorDisplayNameReader actorNames)
++    : IRequestHandler<GetPatientAgendaQuery, Result<PatientAgendaResult>>
++{
++    public async Task<Result<PatientAgendaResult>> Handle(GetPatientAgendaQuery request, CancellationToken ct)
++    {
++        if (request.From == DateOnly.MinValue || request.To == DateOnly.MaxValue)
++            return Error.Validation("scheduling.invalid_clinical_day", "from/to");
++        if (request.To < request.From)
++            return Error.Validation("scheduling.range_bounds_out_of_order", "to");
++        var days = request.To.DayNumber - request.From.DayNumber + 1;
++        if (days > GetRangeViewQuery.MaxDaysPerQuery)
++            return Error.Validation("scheduling.range_exceeds_horizon", "to");
++
++        var zone = await calendar.ResolveTimeZoneAsync(ct);
++        var windows = Enumerable.Range(0, days)
++            .Select(offset => ClinicalDay.UtcRangeFor(request.From.AddDays(offset), zone)).ToArray();
++        // The repository narrows in SQL, before names or appointment events are materialized.
++        var appointments = await repository.GetPatientScheduledForDaysAsync(request.PatientId, windows, ct);
++        var names = await actorNames.GetDisplayNamesAsync(
++            appointments.Select(a => new ActorId(a.IntendedClinicianId)).Distinct().ToArray(), ct);
++        var opened = ClinicalDayClosure.CurrentDayOpenedAtUtc(clock.UtcNow, zone);
++        return new PatientAgendaResult(request.From, request.To,
++            appointments.OrderBy(a => a.StartUtc).ThenBy(a => a.Id.Value).Select(a => new PatientAgendaRow(
++                a.Id.Value, a.IntendedClinicianId,
++                names.GetValueOrDefault(new ActorId(a.IntendedClinicianId), string.Empty),
++                TimeZoneInfo.ConvertTime(a.StartUtc, zone), a.DurationMinutes,
++                a.ComputeDisplayState(opened))).ToArray());
++    }
++}
+--- a/backend/src/Modules/Scheduling/Hospital.Scheduling.Application/Ports/IAppointmentRepository.cs
++++ b/backend/src/Modules/Scheduling/Hospital.Scheduling.Application/Ports/IAppointmentRepository.cs
+@@ -10,6 +10,11 @@
+ /// caller-supplied seam that could silently disagree with it (code-reviewer C-2).</remarks>
+ public interface IAppointmentRepository
+ {
++    Task<IReadOnlyList<Appointment>> GetPatientScheduledForDaysAsync(
++        PatientId patientId,
++        IReadOnlyList<(DateTimeOffset FromUtcInclusive, DateTimeOffset ToUtcExclusive)> dayWindowsUtc,
++        CancellationToken cancellationToken);
++
+     Task AddAsync(Appointment appointment, CancellationToken cancellationToken);
+ 
+     Task<Appointment?> GetByIdAsync(AppointmentId id, CancellationToken cancellationToken);
+--- a/backend/src/Modules/Scheduling/Hospital.Scheduling.Infrastructure/Repositories/AppointmentRepository.cs
++++ b/backend/src/Modules/Scheduling/Hospital.Scheduling.Infrastructure/Repositories/AppointmentRepository.cs
+@@ -18,6 +18,19 @@
+ {
+     private readonly SchedulingDbContext _dbContext = dbContext ?? throw new ArgumentNullException(nameof(dbContext));
+ 
++    public async Task<IReadOnlyList<Appointment>> GetPatientScheduledForDaysAsync(
++        PatientId patientId,
++        IReadOnlyList<(DateTimeOffset FromUtcInclusive, DateTimeOffset ToUtcExclusive)> dayWindowsUtc,
++        CancellationToken cancellationToken)
++    {
++        if (dayWindowsUtc.Count == 0) return [];
++        return await _dbContext.Appointments
++            .Where(a => a.PatientId == patientId)
++            .Where(DayWindowPredicate(dayWindowsUtc))
++            .OrderBy(a => a.StartUtc).ThenBy(a => a.Id)
++            .ToListAsync(cancellationToken);
++    }
++
+     public Task AddAsync(Appointment appointment, CancellationToken cancellationToken)
+     {
+         ArgumentNullException.ThrowIfNull(appointment);
+--- a/backend/src/Modules/Scheduling/Hospital.Scheduling.Endpoints/AgendaController.cs
++++ b/backend/src/Modules/Scheduling/Hospital.Scheduling.Endpoints/AgendaController.cs
+@@ -34,6 +34,21 @@
+ [ApiVersion("1.0")]
+ public sealed class AgendaController(ISender sender, IClinicCalendar clinicCalendar, IClock clock) : ApiControllerBase
+ {
++    [HttpGet("patients/{patientId:guid}")]
++    [ProducesResponseType<PatientAgendaResponse>(StatusCodes.Status200OK)]
++    [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
++    [ProducesResponseType<ProblemDetails>(StatusCodes.Status404NotFound)]
++    public async Task<ActionResult<PatientAgendaResponse>> GetPatientAgenda(
++        Guid patientId, [FromQuery] string? from, [FromQuery] string? to, CancellationToken ct)
++    {
++        if (!DateOnly.TryParseExact(from, "yyyy-MM-dd", out var fromDay)
++            || !DateOnly.TryParseExact(to, "yyyy-MM-dd", out var toDay))
++            return Result<PatientAgendaResponse>.Failure(
++                Error.Validation("scheduling.invalid_clinical_day", "from/to")).ToActionResult(this);
++        return (await sender.Send(new GetPatientAgendaQuery(new PatientId(patientId), fromDay, toDay), ct))
++            .ToBoundaryActionResult(this, PatientAgendaResponse.FromResult);
++    }
++
+     /// <summary>
+     /// Criteria 2/14/18 — the day, read strongly consistent in the same request that renders it
+     /// (rule 12): no cache, no projection, no revalidation. <paramref name="clinicalDay"/> is
+--- /dev/null
++++ b/backend/src/Modules/Scheduling/Hospital.Scheduling.Endpoints/Contracts/PatientAgendaContracts.cs
+@@ -0,0 +1,14 @@
++using Hospital.Http.Abstractions;
++using Hospital.Scheduling.Application.Queries;
++
++namespace Hospital.Scheduling.Endpoints.Contracts;
++
++public sealed record PatientAgendaResponse(string From, string To, IReadOnlyList<PatientAgendaRowResponse> Rows) : IBoundaryDto
++{
++    public static PatientAgendaResponse FromResult(PatientAgendaResult result) => new(
++        result.From.ToString("yyyy-MM-dd"), result.To.ToString("yyyy-MM-dd"),
++        result.Rows.Select(r => new PatientAgendaRowResponse(r.AppointmentId, r.ClinicianId,
++            r.ClinicianName, r.ScheduledStart, r.DurationMinutes, r.Status.ToWire())).ToArray());
++}
++public sealed record PatientAgendaRowResponse(Guid AppointmentId, Guid ClinicianId, string ClinicianName,
++    DateTimeOffset ScheduledStart, int DurationMinutes, string Status);
+--- a/backend/tests/Modules/Scheduling/Hospital.Scheduling.Application.Tests/TestDoubles.cs
++++ b/backend/tests/Modules/Scheduling/Hospital.Scheduling.Application.Tests/TestDoubles.cs
+@@ -21,6 +21,13 @@
+     public IReadOnlyList<Appointment> ScheduledForDay { get; set; } = [];
+ 
+     public bool SavedChanges { get; private set; }
++
++    public Task<IReadOnlyList<Appointment>> GetPatientScheduledForDaysAsync(
++        PatientId patientId,
++        IReadOnlyList<(DateTimeOffset FromUtcInclusive, DateTimeOffset ToUtcExclusive)> windows,
++        CancellationToken ct)
++        => Task.FromResult<IReadOnlyList<Appointment>>([.. ScheduledForDay.Where(a => a.PatientId == patientId
++            && windows.Any(w => a.StartUtc >= w.FromUtcInclusive && a.StartUtc < w.ToUtcExclusive))]);
+ 
+     public Task AddAsync(Appointment appointment, CancellationToken cancellationToken)
+     {
+--- a/backend/tests/Modules/Identity/Hospital.Identity.Endpoints.Tests/DeactivationOrchestrationTests.cs
++++ b/backend/tests/Modules/Identity/Hospital.Identity.Endpoints.Tests/DeactivationOrchestrationTests.cs
+@@ -374,6 +374,13 @@
+         /// durable.</summary>
+         public bool ThrowOnSave { get; set; }
+ 
++    public Task<IReadOnlyList<Appointment>> GetPatientScheduledForDaysAsync(
++        PatientId patientId,
++        IReadOnlyList<(DateTimeOffset FromUtcInclusive, DateTimeOffset ToUtcExclusive)> windows,
++        CancellationToken ct)
++        => Task.FromResult<IReadOnlyList<Appointment>>([.. Added.Where(a => a.PatientId == patientId
++            && windows.Any(w => a.StartUtc >= w.FromUtcInclusive && a.StartUtc < w.ToUtcExclusive))]);
++
+         public Task AddAsync(Appointment appointment, CancellationToken cancellationToken)
+         {
+             Added.Add(appointment);
+--- /dev/null
++++ b/backend/tests/Modules/Scheduling/Hospital.Scheduling.Application.Tests/PatientAgendaQueryTests.cs
+@@ -0,0 +1,80 @@
++using FluentAssertions;
++using Hospital.Application.Abstractions;
++using Hospital.Scheduling.Application.Queries;
++using Hospital.Scheduling.Domain;
++using Hospital.SharedKernel;
++
++namespace Hospital.Scheduling.Application.Tests;
++
++public sealed class PatientAgendaQueryTests
++{
++    private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-10-02T18:00:00Z");
++    private static readonly TimeZoneInfo Zone = TimeZoneInfo.FindSystemTimeZoneById("America/El_Salvador");
++
++    [Theory]
++    [InlineData("2026-10-03", "2026-10-02", "scheduling.range_bounds_out_of_order")]
++    [InlineData("2026-10-01", "2026-11-01", "scheduling.range_exceeds_horizon")]
++    public async Task Invalid_ranges_fail_before_names_are_read(string from, string to, string code)
++    {
++        var names = new FakeActorDisplayNameReader();
++        var handler = new GetPatientAgendaQueryHandler(new FakeAppointmentRepository(),
++            new FixedClinicCalendar(Zone), new FixedClock(Now), names);
++        var result = await handler.Handle(new(new PatientId(Guid.NewGuid()), DateOnly.Parse(from), DateOnly.Parse(to)), default);
++        result.IsSuccess.Should().BeFalse();
++        result.Error!.Code.Should().Be(code);
++        names.CallCount.Should().Be(0);
++    }
++
++    [Fact]
++    public async Task Patient_range_uses_clinic_day_and_preserves_cancellation_and_current_state()
++    {
++        var patient = new PatientId(Guid.NewGuid());
++        Appointment Make(PatientId owner, string at) => Appointment.Schedule(new(Guid.NewGuid()),
++            new TenantId(Guid.NewGuid()), owner, Guid.NewGuid(), DateTimeOffset.Parse(at), 30,
++            VisitKind.FollowUp, Guid.NewGuid(), Now.AddDays(-10));
++        var past = Make(patient, "2026-10-02T01:00:00Z"); // 19h on October 1 in the clinic.
++        var cancelled = Make(patient, "2026-10-02T02:00:00Z");
++        cancelled.Cancel(Guid.NewGuid(), Now.AddDays(-2), CancellationReason.PatientRequest, true);
++        var future = Make(patient, "2026-10-04T14:00:00Z");
++        var other = Make(new PatientId(Guid.NewGuid()), "2026-10-02T01:00:00Z");
++        var repo = new FakeAppointmentRepository { ScheduledForDay = [future, other, cancelled, past] };
++        var handler = new GetPatientAgendaQueryHandler(repo, new FixedClinicCalendar(Zone),
++            new FixedClock(Now), new FakeActorDisplayNameReader());
++        var result = await handler.Handle(new(patient, new(2026, 10, 1), new(2026, 10, 1)), default);
++        result.IsSuccess.Should().BeTrue();
++        result.Value.Rows.Select(x => x.AppointmentId).Should().Equal(past.Id.Value, cancelled.Id.Value);
++        result.Value.Rows[0].ScheduledStart.Offset.Should().Be(TimeSpan.FromHours(-6));
++        result.Value.Rows[0].ScheduledStart.Day.Should().Be(1);
++        result.Value.Rows[0].Status.Should().Be(AppointmentDisplayState.NotRecorded);
++        result.Value.Rows[1].Status.Should().Be(AppointmentDisplayState.CancelledByPatient);
++    }
++
++    [Fact]
++    public void Query_diagnostics_never_contain_patient_identifiers()
++    {
++        var patient = new PatientId(Guid.NewGuid());
++        new GetPatientAgendaQuery(patient, new(2026, 10, 1), new(2026, 10, 2))
++            .ToString().Should().NotContain(patient.Value.ToString());
++    }
++
++    [Fact]
++    public async Task Unrepresentable_exclusive_day_end_is_a_validation_error()
++    {
++        var handler = new GetPatientAgendaQueryHandler(new FakeAppointmentRepository(),
++            new FixedClinicCalendar(Zone), new FixedClock(Now), new FakeActorDisplayNameReader());
++        var result = await handler.Handle(new(new(Guid.NewGuid()), DateOnly.MaxValue, DateOnly.MaxValue), default);
++        result.IsSuccess.Should().BeFalse();
++        result.Error!.Code.Should().Be("scheduling.invalid_clinical_day");
++    }
++
++    [Fact]
++    public void Patient_list_uses_existing_guard_and_artifact_set_audit_contract()
++    {
++        var q = new GetPatientAgendaQuery(new(Guid.NewGuid()), new(2026, 10, 1), new(2026, 10, 2));
++        q.Should().BeAssignableTo<IPatientScopedRequest>();
++        IPatientAccessDescriptor d = q;
++        d.NamesNoSingleArtifact.Should().BeTrue();
++        d.ResourceId.Should().BeNull();
++        d.ResourceType.Should().Be(PatientResourceTypes.AgendaDayView);
++    }
++}
+--- /dev/null
++++ b/backend/tests/Modules/Scheduling/Hospital.Scheduling.Infrastructure.Tests/PatientAgendaRepositoryTests.cs
+@@ -0,0 +1,44 @@
++using FluentAssertions;
++using Hospital.Scheduling.Domain;
++using Hospital.Scheduling.Infrastructure.Persistence;
++using Hospital.Scheduling.Infrastructure.Repositories;
++using Hospital.SharedKernel;
++using Microsoft.EntityFrameworkCore;
++using Microsoft.Extensions.DependencyInjection;
++
++namespace Hospital.Scheduling.Infrastructure.Tests;
++
++public sealed class PatientAgendaRepositoryTests
++{
++    [Fact]
++    public async Task Actual_repository_returns_only_requested_patient_tenant_and_window()
++    {
++        // Keep this model-only protector out of other tests' cached EF model/converters.
++        using var provider = new ServiceCollection().AddEntityFrameworkInMemoryDatabase().BuildServiceProvider();
++        var options = new DbContextOptionsBuilder<SchedulingDbContext>()
++            .UseInternalServiceProvider(provider)
++            .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
++        var tenant = new TenantId(Guid.NewGuid());
++        var patient = new PatientId(Guid.NewGuid());
++        var start = DateTimeOffset.Parse("2026-10-02T14:00:00Z");
++        await using var db = new SchedulingDbContext(options,
++            new FixedSchedulingTenantScope(tenant), new NeverInvokedPhiProtector());
++        Appointment Make(TenantId t, PatientId p, DateTimeOffset at) => Appointment.Schedule(
++            new(Guid.NewGuid()), t, p, Guid.NewGuid(), at, 30, VisitKind.FollowUp, Guid.NewGuid(), start.AddDays(-1));
++        var expected = Make(tenant, patient, start);
++        db.Appointments.AddRange(expected,
++            Make(tenant, new(Guid.NewGuid()), start), Make(tenant, patient, start.AddDays(1)));
++        await db.SaveChangesAsync();
++        var otherTenant = new TenantId(Guid.NewGuid());
++        await using (var otherDb = new SchedulingDbContext(options,
++            new FixedSchedulingTenantScope(otherTenant), new NeverInvokedPhiProtector()))
++        {
++            otherDb.Appointments.Add(Make(otherTenant, patient, start));
++            await otherDb.SaveChangesAsync();
++        }
++        db.ChangeTracker.Clear();
++        var rows = await new AppointmentRepository(db).GetPatientScheduledForDaysAsync(patient,
++            [(start, start.AddDays(1))], default);
++        rows.Should().ContainSingle().Which.Id.Should().Be(expected.Id);
++    }
++}
+--- /dev/null
++++ b/backend/tests/Modules/Scheduling/Hospital.Scheduling.Endpoints.Tests/PatientAgendaContractTests.cs
+@@ -0,0 +1,40 @@
++using System.Reflection;
++using FluentAssertions;
++using Hospital.Scheduling.Endpoints;
++using Hospital.Scheduling.Endpoints.Contracts;
++using Hospital.Scheduling.Application.Queries;
++using Hospital.Scheduling.Domain;
++using Microsoft.AspNetCore.Authorization;
++using System.Text.Json;
++using Microsoft.AspNetCore.Mvc;
++
++namespace Hospital.Scheduling.Endpoints.Tests;
++
++public sealed class PatientAgendaContractTests
++{
++    [Fact]
++    public void Wire_contains_only_appointment_details_and_preserves_the_clinic_offset()
++    {
++        var result = new PatientAgendaResult(new(2026, 10, 1), new(2026, 10, 2),
++            [new(Guid.NewGuid(), Guid.NewGuid(), "Doctora Sintética",
++                DateTimeOffset.Parse("2026-10-01T19:00:00-06:00"), 30, AppointmentDisplayState.CancelledByPatient)]);
++        var dto = PatientAgendaResponse.FromResult(result);
++        using var json = JsonDocument.Parse(JsonSerializer.Serialize(dto, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
++        json.RootElement.EnumerateObject().Select(p => p.Name).Should().BeEquivalentTo("from", "to", "rows");
++        json.RootElement.GetProperty("rows")[0].EnumerateObject().Select(p => p.Name).Should().BeEquivalentTo(
++            "appointmentId", "clinicianId", "clinicianName", "scheduledStart", "durationMinutes", "status");
++        dto.Rows.Single().Status.Should().Be("cancelled-by-patient");
++        dto.Rows.Single().ScheduledStart.Offset.Should().Be(TimeSpan.FromHours(-6));
++    }
++
++    [Fact]
++    public void Patient_agenda_is_an_explicit_authenticated_read()
++    {
++        typeof(AgendaController).GetCustomAttributes<AuthorizeAttribute>(inherit: true).Should().NotBeEmpty();
++        typeof(AgendaController).GetCustomAttributes<AllowAnonymousAttribute>(inherit: true).Should().BeEmpty();
++        typeof(AgendaController).GetMethods()
++            .SelectMany(m => m.GetCustomAttributes<HttpGetAttribute>())
++            .Should().Contain(a => a.Template == "patients/{patientId:guid}",
++                "Recepción must read one patient's appointments without enumerating the hospital");
++    }
++}
+--- a/backend/tests/contract/openapi.v1.json
++++ b/backend/tests/contract/openapi.v1.json
+@@ -4350,6 +4350,67 @@
+         ],
+         "type": "object"
+       },
++      "PatientAgendaResponse": {
++        "properties": {
++          "from": {
++            "type": "string"
++          },
++          "rows": {
++            "items": {
++              "$ref": "#/components/schemas/PatientAgendaRowResponse"
++            },
++            "type": "array"
++          },
++          "to": {
++            "type": "string"
++          }
++        },
++        "required": [
++          "from",
++          "to",
++          "rows"
++        ],
++        "type": "object"
++      },
++      "PatientAgendaRowResponse": {
++        "properties": {
++          "appointmentId": {
++            "format": "uuid",
++            "type": "string"
++          },
++          "clinicianId": {
++            "format": "uuid",
++            "type": "string"
++          },
++          "clinicianName": {
++            "type": "string"
++          },
++          "durationMinutes": {
++            "format": "int32",
++            "pattern": "^-?(?:0|[1-9]\\d*)$",
++            "type": [
++              "integer",
++              "string"
++            ]
++          },
++          "scheduledStart": {
++            "format": "date-time",
++            "type": "string"
++          },
++          "status": {
++            "type": "string"
++          }
++        },
++        "required": [
++          "appointmentId",
++          "clinicianId",
++          "clinicianName",
++          "scheduledStart",
++          "durationMinutes",
++          "status"
++        ],
++        "type": "object"
++      },
+       "PatientAntecedentesByCategoryResponse": {
+         "properties": {
+           "alergico": {
+@@ -7683,6 +7744,100 @@
+               "application/json": {
+                 "schema": {
+                   "$ref": "#/components/schemas/LastSeenClinicianResponse"
++                }
++              }
++            },
++            "description": "OK"
++          },
++          "400": {
++            "content": {
++              "application/json": {
++                "schema": {
++                  "$ref": "#/components/schemas/ProblemDetails"
++                }
++              }
++            },
++            "description": "Bad Request"
++          },
++          "401": {
++            "content": {
++              "application/json": {
++                "schema": {
++                  "$ref": "#/components/schemas/ProblemDetails"
++                }
++              }
++            },
++            "description": "Unauthorized"
++          },
++          "403": {
++            "content": {
++              "application/json": {
++                "schema": {
++                  "$ref": "#/components/schemas/ProblemDetails"
++                }
++              }
++            },
++            "description": "Forbidden"
++          },
++          "404": {
++            "content": {
++              "application/json": {
++                "schema": {
++                  "$ref": "#/components/schemas/ProblemDetails"
++                }
++              }
++            },
++            "description": "Not Found"
++          },
++          "500": {
++            "content": {
++              "application/json": {
++                "schema": {
++                  "$ref": "#/components/schemas/ProblemDetails"
++                }
++              }
++            },
++            "description": "Internal Server Error"
++          }
++        },
++        "tags": [
++          "Agenda"
++        ]
++      }
++    },
++    "/v1/agenda/patients/{patientId}": {
++      "get": {
++        "parameters": [
++          {
++            "in": "path",
++            "name": "patientId",
++            "required": true,
++            "schema": {
++              "format": "uuid",
++              "type": "string"
++            }
++          },
++          {
++            "in": "query",
++            "name": "from",
++            "schema": {
++              "type": "string"
++            }
++          },
++          {
++            "in": "query",
++            "name": "to",
++            "schema": {
++              "type": "string"
++            }
++          }
++        ],
++        "responses": {
++          "200": {
++            "content": {
++              "application/json": {
++                "schema": {
++                  "$ref": "#/components/schemas/PatientAgendaResponse"
+                 }
+               }
+             },
+--- a/frontend/web/src/lib/api/v1.ts
++++ b/frontend/web/src/lib/api/v1.ts
+@@ -649,6 +649,91 @@
+         patch?: never;
+         trace?: never;
+     };
++    "/v1/agenda/patients/{patientId}": {
++        parameters: {
++            query?: never;
++            header?: never;
++            path?: never;
++            cookie?: never;
++        };
++        get: {
++            parameters: {
++                query?: {
++                    from?: string;
++                    to?: string;
++                };
++                header?: never;
++                path: {
++                    patientId: string;
++                };
++                cookie?: never;
++            };
++            requestBody?: never;
++            responses: {
++                /** @description OK */
++                200: {
++                    headers: {
++                        [name: string]: unknown;
++                    };
++                    content: {
++                        "application/json": components["schemas"]["PatientAgendaResponse"];
++                    };
++                };
++                /** @description Bad Request */
++                400: {
++                    headers: {
++                        [name: string]: unknown;
++                    };
++                    content: {
++                        "application/json": components["schemas"]["ProblemDetails"];
++                    };
++                };
++                /** @description Unauthorized */
++                401: {
++                    headers: {
++                        [name: string]: unknown;
++                    };
++                    content: {
++                        "application/json": components["schemas"]["ProblemDetails"];
++                    };
++                };
++                /** @description Forbidden */
++                403: {
++                    headers: {
++                        [name: string]: unknown;
++                    };
++                    content: {
++                        "application/json": components["schemas"]["ProblemDetails"];
++                    };
++                };
++                /** @description Not Found */
++                404: {
++                    headers: {
++                        [name: string]: unknown;
++                    };
++                    content: {
++                        "application/json": components["schemas"]["ProblemDetails"];
++                    };
++                };
++                /** @description Internal Server Error */
++                500: {
++                    headers: {
++                        [name: string]: unknown;
++                    };
++                    content: {
++                        "application/json": components["schemas"]["ProblemDetails"];
++                    };
++                };
++            };
++        };
++        put?: never;
++        post?: never;
++        delete?: never;
++        options?: never;
++        head?: never;
++        patch?: never;
++        trace?: never;
++    };
+     "/v1/agenda/providers/{clinicianId}/blackouts": {
+         parameters: {
+             query?: never;
+@@ -9403,6 +9488,23 @@
+             patientId: string;
+             recordNumber: null | string;
+         };
++        PatientAgendaResponse: {
++            from: string;
++            rows: components["schemas"]["PatientAgendaRowResponse"][];
++            to: string;
++        };
++        PatientAgendaRowResponse: {
++            /** Format: uuid */
++            appointmentId: string;
++            /** Format: uuid */
++            clinicianId: string;
++            clinicianName: string;
++            /** Format: int32 */
++            durationMinutes: number | string;
++            /** Format: date-time */
++            scheduledStart: string;
++            status: string;
++        };
+         PatientAntecedentesByCategoryResponse: {
+             alergico: components["schemas"]["AntecedenteCategoryResponse"];
+             familiar: components["schemas"]["AntecedenteCategoryResponse"];

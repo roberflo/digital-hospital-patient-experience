@@ -40,9 +40,35 @@ public sealed class HospitalClient(HttpClient http, IConfiguration configuration
     public Task<JsonElement> GetAgendaDayAsync(Guid tenantId, DateOnly day, CancellationToken ct = default) =>
         ReadAsync<JsonElement>(tenantId, $"v1/agenda/day?clinicalDay={day:yyyy-MM-dd}", ct);
 
+    public static DateOnly ClinicalDay(DateTimeOffset instant, string timeZone) =>
+        DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(instant,TimeZoneInfo.FindSystemTimeZoneById(timeZone)).Date);
+
+    public async Task<bool> IsSlotAvailableAsync(Guid tenantId,Guid doctor,DateTimeOffset start,int duration,string timeZone,CancellationToken ct=default)
+    {
+        ValidateAppointment(doctor,start,duration);
+        var day=ClinicalDay(start,timeZone);
+        var options=await GetAvailabilityAsync(tenantId,day,day,doctor,ct);
+        return options.Professionals.Where(p=>p.ClinicianId==doctor).SelectMany(p=>p.Days).SelectMany(d=>d.Slots)
+            .Any(slot=>slot.StartsAt==start&&slot.Offered&&slot.TakenBy==0&&slot.DurationMinutes>=duration);
+    }
+
+    public async Task<JsonElement> GetPatientAppointmentRangeAsync(Guid tenantId,Guid patientId,string phone,DateOnly from,DateOnly to,CancellationToken ct=default)
+    {
+        if(to<from||to.DayNumber-from.DayNumber>30)throw new ArgumentException("Consulta hasta 31 días de citas");
+        await GetVerifiedPatientAsync(tenantId,patientId,phone,ct);
+        return await ReadAsync<JsonElement>(tenantId,$"v1/agenda/patients/{patientId:D}?from={from:yyyy-MM-dd}&to={to:yyyy-MM-dd}",ct);
+    }
+
     public async Task<JsonElement> GetPatientAppointmentsAsync(Guid tenantId, Guid patientId,
         string phone, DateOnly day, CancellationToken ct = default)
     {
+        if(bool.TryParse(Tenant(tenantId)["UsePatientAgenda"],out var scoped)&&scoped){
+            var page=await GetPatientAppointmentRangeAsync(tenantId,patientId,phone,day,day,ct);
+            return JsonSerializer.SerializeToElement(page.GetProperty("rows").EnumerateArray().Select(x=>new{
+                appointmentId=x.GetProperty("appointmentId").GetGuid(),startsAt=x.GetProperty("scheduledStart").GetDateTimeOffset(),
+                durationMinutes=x.GetProperty("durationMinutes").GetInt32(),doctor=x.GetProperty("clinicianName").GetString(),status=x.GetProperty("status").GetString()
+            }).ToArray(),Json);
+        }
         await GetVerifiedPatientAsync(tenantId, patientId, phone, ct);
         var agenda = await GetAgendaDayAsync(tenantId, day, ct);
         // Filter inside the trusted adapter before anything reaches a patient or model.

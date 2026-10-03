@@ -3,7 +3,7 @@ import { signIn } from 'next-auth/react';
 import { useState } from 'react';
 import { HeartPulse, ArrowRight, MessageCircle, CalendarCheck, ShieldCheck } from 'lucide-react';
 import { Button } from './ui/button';
-export default function Login({ demo }: { demo: boolean }) {
+export default function Login({ demo, hospitalDemo }: { demo: boolean; hospitalDemo: boolean }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   return (
@@ -71,6 +71,9 @@ export default function Login({ demo }: { demo: boolean }) {
                   <option value="admin">Administrador</option>
                   <option value="agent">Recepcionista</option>
                   <option value="doctor">Doctor</option>
+                  {hospitalDemo && (
+                    <option value="hospital">Hospital local · citas de prueba</option>
+                  )}
                 </select>
               </label>
               <label>
