@@ -69,12 +69,21 @@ public sealed class WhatsAppOnboarding(CrmDb db, TenantScope scope, CurrentUser 
                 CrmEndpoints.Audit(db, scope, user, "channel.connected", channel.Id);
             }
             else { channel.Coexistence = Bool(number, "is_coexistence"); channel.KapsoCustomerId = customer; }
-            // Save verified ownership before receiving any webhook for the new number.
-            await db.SaveChangesAsync(ct);
+        }
+        // Commit ownership before enabling delivery: an immediate provider event must
+        // be able to find this channel from a different database connection.
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+        await using var webhookTx = await db.Database.BeginTransactionAsync(ct);
+        await Lock(ct); // Serialize webhook reconciliation across API replicas too.
+        foreach (var number in connected.DistinctBy(x => Text(x, "phone_number_id")))
+        {
+            var id = Text(number, "phone_number_id")!;
             try { if (await EnsureWebhook(id, ct)) hooks++; else warnings.Add("Número guardado. La plataforma debe configurar la URL HTTPS de recepción y su firma."); }
             catch (HttpRequestException) { warnings.Add("Número guardado. Kapso no pudo configurar la recepción; vuelve a pulsar Verificar conexión."); }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested) { warnings.Add("Número guardado. La configuración de recepción tardó demasiado; vuelve a verificar."); }
         }
-        await tx.CommitAsync(ct);
+        await webhookTx.CommitAsync(ct);
         return new SyncResult(connected.Count, added, hooks, warnings.Distinct().ToArray());
     }
     async Task Lock(CancellationToken ct) => await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_advisory_xact_lock({BitConverter.ToInt64(scope.Id.ToByteArray(), 0)})", ct);

@@ -52,6 +52,8 @@ public sealed class WhatsAppOnboardingTests : IAsyncLifetime
         var service=Service(async req=>{
             if(req.RequestUri!.AbsolutePath.EndsWith("/phone_numbers")){Assert.Contains(customer,req.RequestUri.Query);return Json(new{data=new[]{Number()},meta=new{total_pages=1}});}
             if(req.Method==HttpMethod.Get) return Json(new{data=created?new object[]{new{id="hook",url="https://hooks.example.test/webhooks/kapso",kind="kapso",active=true,secret_key="test-signing-secret",payload_version="v2",events=WhatsAppOnboarding.Events}}:Array.Empty<object>()});
+            await using var observer = new CrmDb(new DbContextOptionsBuilder<CrmDb>().UseNpgsql(Environment.GetEnvironmentVariable("TEST_DATABASE")).Options,scope,new EphemeralDataProtectionProvider());
+            Assert.True(await observer.Channels.AnyAsync(x=>x.PhoneNumberId==number));
             using var doc=JsonDocument.Parse(await req.Content!.ReadAsStringAsync());var hook=doc.RootElement.GetProperty("whatsapp_webhook");
             Assert.Equal("test-signing-secret",hook.GetProperty("secret_key").GetString());Assert.Equal("v2",hook.GetProperty("payload_version").GetString());created=true;writes++;return Json(new{data=new{id="hook"}});
         });
