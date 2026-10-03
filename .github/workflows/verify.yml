@@ -25,6 +25,9 @@ jobs:
       - run: python3 tests/api_smoke.py
       - run: scripts/test-backend.sh
       - run: npm ci --prefix frontend
+      - run: npm run typecheck --prefix frontend
+      - run: npm run lint --prefix frontend
+      - run: npm run test:server --prefix frontend
       - run: npm run format:check --prefix frontend
       - run: cd frontend && npx playwright install --with-deps chromium
       - run: cd frontend && npx playwright test

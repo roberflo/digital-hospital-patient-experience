@@ -20,13 +20,10 @@ import {
   ChevronRight,
   Send,
   Paperclip,
-  MoreHorizontal,
-  Bot,
   Sparkles,
   UserRound,
   Check,
   CheckCheck,
-  Clock,
   ShieldCheck,
   Link2,
   LogOut,
@@ -39,11 +36,9 @@ import {
   Play,
   ArrowLeft,
   AlertCircle,
-  CheckCircle2,
   Loader2,
   ExternalLink,
   Stethoscope,
-  Command,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from './ui/button';
@@ -526,6 +521,13 @@ function InboxView({ me, search }: { me: Me; search: string }) {
             <h2>
               Conversaciones <span>{filtered?.length ?? 0}</span>
             </h2>
+            <a
+              href="/inbox"
+              className="text-xs text-primary"
+              title="Abrir historial directo de WhatsApp"
+            >
+              WhatsApp ↗
+            </a>
             <Button
               variant="ghost"
               size="icon"

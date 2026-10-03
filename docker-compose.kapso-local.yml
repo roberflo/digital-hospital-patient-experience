@@ -1,0 +1,21 @@
+# Opt-in, temporary local webhook access. Requires explicit operator authorization.
+# Include docker-compose.yml (and docker-compose.hospital.yml when Hospital is connected).
+services:
+  kapso-gateway:
+    image: nginx@sha256:df221db836e1754089190208cee7eeda94f233197056426eda74a43ab1abeac2
+    entrypoint: [nginx, -g, "daemon off;"]
+    volumes: [./integrations/kapso/nginx.conf:/etc/nginx/nginx.conf:ro]
+    read_only: true
+    tmpfs: [/var/cache/nginx, /var/run]
+    networks: [default, kapso-tunnel]
+    depends_on: [api]
+  kapso-tunnel:
+    image: cloudflare/cloudflared@sha256:072c067d25ccbe61d46e18f0d0723255f2bb5304f7317caa95b27031520ff92c
+    command: [tunnel, --no-autoupdate, --protocol, http2, --url, "http://kapso-gateway:8080"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks: [kapso-tunnel]
+    depends_on: [kapso-gateway]
+networks:
+  kapso-tunnel: {}
