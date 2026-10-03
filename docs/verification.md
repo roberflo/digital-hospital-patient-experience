@@ -8,7 +8,7 @@ Fecha de desarrollo: 2026-10-02 (America/El_Salvador). Ejecución local con Dock
 | Build frontend | pasó | `docker compose build web`, Next standalone + TypeScript |
 | Backend | 54 pasaron, 0 fallos, 0 omitidas | `scripts/test-backend.sh`, PostgreSQL temporal real y proveedores simulados |
 | API | 82 verificaciones pasaron | `python3 tests/api_smoke.py`, API real local |
-| Navegador | 14 escenarios verificados; ver detalles en chatwoot-review.md | `npm test --prefix frontend`, Chromium escritorio + móvil contra contenedores compilados |
+| Navegador | 14/14 pasaron en una ejecución completa tras corregir el nombre junto al contador de no leídos | `npm test --prefix frontend`, Chromium escritorio + móvil contra contenedores compilados |
 | Adaptador Hospital | pasó | `tests/hospital-client/HospitalClient.Checks.csproj` ejecutado con SDK 10 |
 | Bridge Hospital | 33 servicio/HTTP-JWT + 12 arquitectura + 3 OpenAPI + 1 cliente TS pasaron | copia aislada del hospital; detalles en `integrations/hospital/README.md` |
 | Kapso MCP | conexión y lecturas reales correctas | initialize, tools/list y lectura del número configurado; servidor kapso-mcp 2.0.0 |
@@ -36,6 +36,8 @@ No se ha validado SSO contra un Keycloak real, Google OAuth real, entrega real d
 No se han realizado pruebas de carga, recuperación total de un host perdido, evaluación clínica formal del modelo ni auditoría externa de seguridad. La restauración probada verifica PostgreSQL; la disponibilidad conjunta del keyring y las variables estables debe ensayarse en el entorno de operación. El pipeline GitHub Actions reproduce build, API, backend y navegador con credenciales sintéticas; su estado remoto se consulta en Actions y no se infiere de estos resultados locales.
 
 La entrega es una aplicación ejecutable con verificaciones concretas. Los adaptadores probados y los documentos de despliegue no se presentan como una instalación productiva ya habilitada.
+
+La ejecución remota de `27a8498` detectó ocho fallos al seleccionar a Ana con mensajes sin leer: el contador formaba parte del texto del nombre. El nombre ahora tiene su propio elemento; la prueba de bandeja fuerza el contador en la respuesta de listado para cubrir ese estado también sobre una base local ya leída. La suite local completa pasó después del cambio; las demás llamadas de esa prueba siguen usando la API real.
 
 ## Bandeja y CRM: ampliación de atención
 

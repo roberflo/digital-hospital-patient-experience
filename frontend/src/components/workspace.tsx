@@ -633,7 +633,7 @@ function InboxView({ me, search }: { me: Me; search: string }) {
                   <div>
                     <div className="conversation-title">
                       <strong>
-                        {contact.name}
+                        <span>{contact.name}</span>
                         {unreadCount > 0 && (
                           <span
                             className="unread-count"

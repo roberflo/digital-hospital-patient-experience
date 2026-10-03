@@ -13,6 +13,17 @@ async function nav(page: import('@playwright/test').Page, name: string) {
 test('dashboard and inbox are separate; conversation and internal note persist', async ({
   page,
 }, info) => {
+  // Keep the unread rendering case deterministic even after earlier local runs marked Ana read.
+  await page.route('**/api/crm/conversations?*', async (route) => {
+    const response = await route.fetch();
+    const chats = await response.json();
+    await route.fulfill({
+      response,
+      json: chats.map((chat: { contact: { name: string }; unreadCount: number }) =>
+        chat.contact.name === 'Ana Martínez' ? { ...chat, unreadCount: 1 } : chat,
+      ),
+    });
+  });
   await login(page);
   await expect(page.getByText('Conversaciones abiertas', { exact: true })).toBeVisible();
   await page.screenshot({
@@ -30,6 +41,7 @@ test('dashboard and inbox are separate; conversation and internal note persist',
   await expect(
     page.getByRole('heading', { name: 'Bandeja de entrada', exact: true }),
   ).toBeVisible();
+  await expect(page.getByLabel('1 mensajes sin leer').first()).toBeVisible();
   await page
     .getByRole('button')
     .filter({ has: page.getByText('Ana Martínez', { exact: true }) })
