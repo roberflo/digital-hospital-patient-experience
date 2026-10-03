@@ -19,6 +19,8 @@ const ALLOWED = new Set([
   'platform',
   'assistant',
   'saved-replies',
+  'inbox-views',
+  'macros',
 ]);
 async function proxy(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
   const { path } = await params;

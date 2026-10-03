@@ -125,3 +125,60 @@ test('inbox updates conversation workflow and shared CRM profile', async ({ page
   await nav(page, 'Contactos');
   await expect(page.getByText(email, { exact: true })).toBeVisible();
 });
+
+test('personal views persist and conversation search filters messages', async ({ page }, info) => {
+  await login(page);
+  await nav(page, 'Bandeja de entrada');
+  await page.getByLabel('Filtrar por estado').selectOption('pending');
+  await page.getByRole('button', { name: 'Administrar vistas guardadas' }).click();
+  const view = 'Pendientes E2E ' + info.project.name + Date.now();
+  await page.getByLabel('Nombre de la vista').fill(view);
+  await page.getByRole('button', { name: 'Guardar filtros actuales' }).click();
+  await expect(page.getByText('Vista guardada', { exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.reload();
+  await page.getByLabel('Vistas guardadas', { exact: true }).selectOption({ label: view });
+  await expect(page.getByLabel('Filtrar por estado')).toHaveValue('pending');
+  await page.getByLabel('Filtrar por estado').selectOption('open');
+  await page
+    .getByRole('button')
+    .filter({ has: page.getByText('Ana Martínez', { exact: true }) })
+    .click();
+  await page.getByRole('button', { name: 'Buscar mensajes', exact: true }).click();
+  await page.getByLabel('Buscar en esta conversación').fill('inexistente-e2e');
+  await expect(page.getByText('No hay mensajes que coincidan.', { exact: true })).toBeVisible();
+  await page.getByLabel('Buscar en esta conversación').fill('próxima consulta');
+  await expect(page.locator('.bubble')).toHaveCount(1);
+  await page.getByRole('button', { name: 'Mostrar archivos', exact: true }).click();
+  await expect(
+    page.getByText('No hay archivos en los mensajes cargados.', { exact: true }),
+  ).toBeVisible();
+  await page.getByRole('button', { name: 'Mostrar archivos', exact: true }).click();
+  await page.getByRole('button', { name: 'Buscar mensajes', exact: true }).click();
+});
+
+test('supervisor creates and applies an internal macro', async ({ page }, info) => {
+  await login(page);
+  await nav(page, 'Bandeja de entrada');
+  await page.getByLabel('Filtrar por estado').selectOption('');
+  await page
+    .getByRole('button')
+    .filter({ has: page.getByText('Ana Martínez', { exact: true }) })
+    .click();
+  await page.getByRole('button', { name: 'Acciones rápidas', exact: true }).click();
+  await page.getByRole('button', { name: 'Administrar macros', exact: true }).click();
+  const macro = 'Revisión E2E ' + info.project.name + Date.now();
+  await page.getByLabel('Nombre de macro', { exact: true }).fill(macro);
+  await page.getByLabel('Cambiar prioridad', { exact: true }).selectOption('high');
+  await page.getByLabel('Nota interna de la macro').fill('Nota macro ' + macro);
+  await page.getByRole('button', { name: 'Crear macro', exact: true }).click();
+  await expect(page.getByText('Macro creada', { exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Acciones rápidas', exact: true }).click();
+  await page.getByLabel('Procedimiento', { exact: true }).selectOption({ label: macro });
+  await expect(page.getByText('Prioridad: Alta', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Aplicar a esta conversación', exact: true }).click();
+  await expect(page.getByText('Macro aplicada', { exact: true })).toBeVisible();
+  await nav(page, 'Actividad');
+  await expect(page.getByText('Nota macro ' + macro, { exact: true })).toBeVisible();
+});

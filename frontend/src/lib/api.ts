@@ -67,6 +67,7 @@ export type Message = {
   body: string;
   type: string;
   mediaId?: string;
+  mediaName?: string;
   status: string;
   createdAt: string;
   receivedAt: string;

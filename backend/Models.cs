@@ -84,6 +84,19 @@ public sealed class SavedReply : TenantRow {
     public string Title { get; set; } = "";
     public string Body { get; set; } = "";
 }
+public sealed class InboxView : TenantRow {
+    public string Subject { get; set; } = "";
+    public string Name { get; set; } = "";
+    public string Filters { get; set; } = "";
+}
+public sealed class ConversationMacro : TenantRow {
+    public string Name { get; set; } = "";
+    public string? State { get; set; }
+    public string? Priority { get; set; }
+    public string Labels { get; set; } = "";
+    public string Note { get; set; } = "";
+    public bool TakeOwnership { get; set; }
+}
 public sealed class Message : TenantRow
 {
     public DateTimeOffset ReceivedAt { get; set; } = DateTimeOffset.UtcNow;
@@ -119,11 +132,14 @@ public sealed class CrmDb(DbContextOptions<CrmDb> options, TenantScope scope, ID
     public DbSet<Message> Messages => Set<Message>(); public DbSet<Job> Jobs => Set<Job>();
     public DbSet<Receipt> Receipts => Set<Receipt>(); public DbSet<Audit> Audits => Set<Audit>();
     public DbSet<ConversationRead> ConversationReads => Set<ConversationRead>();
+    public DbSet<InboxView> InboxViews => Set<InboxView>();
+    public DbSet<ConversationMacro> Macros => Set<ConversationMacro>();
     public DbSet<SavedReply> SavedReplies => Set<SavedReply>();
     public DbSet<CalendarLink> CalendarLinks => Set<CalendarLink>();
     protected override void OnModelCreating(ModelBuilder b)
     {
-        Map<ConversationRead>(b); Map<SavedReply>(b);
+        Map<ConversationRead>(b); Map<SavedReply>(b); Map<InboxView>(b); Map<ConversationMacro>(b);
+        b.Entity<InboxView>().HasIndex(x=>new{x.TenantId,x.Subject});
         Map<Member>(b); Map<Contact>(b); Map<Company>(b); Map<Opportunity>(b); Map<Activity>(b); Map<Channel>(b);
         Map<Conversation>(b); Map<Message>(b); Map<Job>(b); Map<Receipt>(b); Map<Audit>(b); Map<CalendarLink>(b);
         b.Entity<ConversationRead>().HasIndex(x => new {x.TenantId, x.ConversationId, x.Subject}).IsUnique();
@@ -153,6 +169,7 @@ public sealed class CrmDb(DbContextOptions<CrmDb> options, TenantScope scope, ID
         b.Entity<Activity>().Property(x => x.Body).HasConversion(encrypted); b.Entity<Conversation>().Property(x => x.Summary).HasConversion(encrypted);
         b.Entity<Conversation>().Property(x=>x.LastMessage).HasConversion(encrypted!);
         b.Entity<SavedReply>().Property(x=>x.Body).HasConversion(encrypted);
+        b.Entity<ConversationMacro>().Property(x=>x.Note).HasConversion(encrypted);
         b.Entity<Tenant>().Property(x => x.Guide).HasConversion(encrypted); b.Entity<Tenant>().Property(x => x.GoogleRefreshToken).HasConversion(encrypted!);
     }
     void Map<T>(ModelBuilder b) where T : TenantRow

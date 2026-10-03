@@ -62,6 +62,7 @@ import {
   type Opportunity,
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { SavedInboxViews, ConversationMacros } from './inbox-productivity';
 import { DashboardView } from './dashboard-view';
 import {
   WorkflowControls,
@@ -521,6 +522,19 @@ function InboxView({ me, search }: { me: Me; search: string }) {
               <RefreshCw size={15} />
             </Button>
           </div>
+          <SavedInboxViews
+            filters={{ state, assignment, channelId, priority, label, mode: filter }}
+            onApply={(f) => {
+              setState(f.state);
+              setAssignment(f.assignment);
+              setChannelId(f.channelId);
+              setPriority(f.priority);
+              setLabel(f.label);
+              setFilter(f.mode);
+              setPage(1);
+              setSelected(null);
+            }}
+          />
           <div className="inbox-filters">
             <select
               aria-label="Filtrar por estado"
@@ -705,6 +719,17 @@ function ChatPanel({
   const [note, setNote] = useState(false);
   const [patient, setPatient] = useState(false);
   const [details, setDetails] = useState(false);
+  const [findMessages, setFindMessages] = useState(false);
+  const [messageSearch, setMessageSearch] = useState('');
+  const [onlyFiles, setOnlyFiles] = useState(false);
+  const visibleMessages = messages?.filter(
+    (m) =>
+      (!onlyFiles || !!m.mediaId) &&
+      (!findMessages ||
+        (m.body + ' ' + (m.mediaName ?? ''))
+          .toLocaleLowerCase('es')
+          .includes(messageSearch.toLocaleLowerCase('es'))),
+  );
   const bottom = useRef<HTMLDivElement>(null);
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: 'nearest' });
@@ -770,6 +795,24 @@ function ChatPanel({
             <Button
               variant="ghost"
               size="icon"
+              aria-label="Buscar mensajes"
+              aria-pressed={findMessages}
+              onClick={() => setFindMessages(!findMessages)}
+            >
+              <Search />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Mostrar archivos"
+              aria-pressed={onlyFiles}
+              onClick={() => setOnlyFiles(!onlyFiles)}
+            >
+              <Paperclip />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
               aria-label="Ver información del paciente"
               onClick={() => setDetails(!details)}
             >
@@ -798,12 +841,43 @@ function ChatPanel({
             <ArrowUpRight size={13} />
           </button>
         </div>
+        <div className="conversation-actions">
+          <ConversationMacros
+            chat={chat}
+            me={me}
+            onChange={() => {
+              refresh();
+              refreshActivities();
+            }}
+          />
+          {(findMessages || onlyFiles) && (
+            <span>{visibleMessages?.length ?? 0} resultados · últimos 200 mensajes</span>
+          )}
+        </div>
+        {findMessages && (
+          <div className="message-search">
+            <Search size={14} />
+            <input
+              aria-label="Buscar en esta conversación"
+              placeholder="Buscar texto o nombre de archivo…"
+              value={messageSearch}
+              onChange={(e) => setMessageSearch(e.target.value)}
+            />
+          </div>
+        )}
         <ErrorBox error={error} />
         <div className="messages">
           <div className="day-divider">
             <span>Historial de atención</span>
           </div>
-          {messages?.map((m) => (
+          {visibleMessages?.length === 0 && (
+            <p className="hint">
+              {onlyFiles
+                ? 'No hay archivos en los mensajes cargados.'
+                : 'No hay mensajes que coincidan.'}
+            </p>
+          )}
+          {visibleMessages?.map((m) => (
             <div className={cn('message-row', m.sender !== 'patient' && 'outgoing')} key={m.id}>
               {m.sender === 'patient' && <Avatar name={chat.contact.name} />}
               <div className="bubble">

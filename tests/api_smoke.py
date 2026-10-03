@@ -130,4 +130,31 @@ check(call('/api/saved-replies/'+reply['id'],'DELETE',token=a)[0]==200,'Remove s
 channel_id=chat['channel']['id']
 check(call('/api/channels/'+channel_id+'/diagnostics','POST',{},agent)[0]==403,'Channel diagnostics restricted to administrator')
 check(call('/api/channels/'+channel_id+'/diagnostics','POST',{},a)[0]==400,'Synthetic channel never claims a live connection')
+# Personal views and shared hospital macros.
+filters={'state':'pending','assignment':'mine','channelId':channel_id,'priority':'high','label':'Cita','mode':'human'}
+status,view=call('/api/inbox-views','POST',{'name':'Mi bandeja sintética','filters':filters},a)
+check(status==200,'Personal inbox view persists')
+check(any(x['id']==view['id'] for x in call('/api/inbox-views',token=a)[1]),'Owner retrieves saved view')
+check(not any(x['id']==view['id'] for x in call('/api/inbox-views',token=agent)[1]),'Saved view is private even within same tenant')
+check(call('/api/inbox-views/'+view['id'],'DELETE',token=agent)[0]==404,'Another user cannot delete personal view')
+check(call('/api/inbox-views','POST',{'name':'Invalid','filters':dict(filters,assignment='everyone')},a)[0]==400,'Unknown saved filter rejected')
+check(call('/api/inbox-views','POST',{'name':'Foreign','filters':filters},b)[0]==404,'Foreign channel cannot be saved')
+macro_body={'name':'Revisión sintética','state':'pending','priority':'high','labels':'revision-doctor','note':'Revisión interna sintética','takeOwnership':True}
+check(call('/api/macros','POST',macro_body,agent)[0]==403,'Agent cannot author shared macros')
+status,macro=call('/api/macros','POST',macro_body,a)
+check(status==200,'Supervisor creates shared macro')
+check(not any(x['id']==macro['id'] for x in call('/api/macros',token=b)[1]),'Macros isolated by tenant')
+current=call('/api/conversations?contactId='+c['id'],token=agent)[1][0]['conversation']
+apply_body={'expectedRevision':current['revision']}
+message_count=len(call(base+'/messages',token=a)[1])
+status,applied=call(base+'/macros/'+macro['id'],'POST',apply_body,agent)
+check(status==200 and applied['state']=='pending' and applied['assignedTo']=='dev-agent' and 'revision-doctor' in applied['labels'],'Macro updates workflow labels and assignment together')
+check(call(base+'/macros/'+macro['id'],'POST',apply_body,agent)[0]==409,'Duplicate macro request cannot replay against old revision')
+check(call(base+'/macros/'+macro['id'],'POST',apply_body,b)[0]==404,'Cross-tenant macro application rejected')
+activities=call('/api/activities?conversationId='+cid,token=a)[1]
+check(sum(x['kind']=='note' and x['body']=='Revisión interna sintética' for x in activities)==1,'Macro internal note recorded exactly once')
+check(len(call(base+'/messages',token=a)[1])==message_count,'Macro never sends a patient message')
+check(call('/api/macros/'+macro['id'],'DELETE',token=agent)[0]==403,'Macro removal restricted to supervisors')
+check(call('/api/macros/'+macro['id'],'DELETE',token=a)[0]==200,'Remove synthetic macro')
+check(call('/api/inbox-views/'+view['id'],'DELETE',token=a)[0]==200,'Owner removes synthetic view')
 print('RESULT:',count,'passed, 0 failed')

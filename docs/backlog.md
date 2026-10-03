@@ -38,6 +38,8 @@ Fecha: 2026-10-02. Alcance: CRM agent-first para un hospital por empresa, usuari
 | B14 | Ficha CRM, empresa, ciclo del cliente, seguimientos e historial desde el chat | Implementado; aislamiento y persistencia verificados |
 | B15 | Diagnóstico real de Kapso y vinculación del webhook | Diagnóstico implementado; único número accesible sandbox no operativo, falta acceso al número real y URL pública |
 
+| B16 | Vistas personales, macros auditadas, búsqueda de mensajes y filtro de archivos | Implementado y probado; ver chatwoot-review.md |
+
 ## Secuencia
 
 1. Inspeccionar contratos de Hospital y proveedores, establecer riesgos y decisiones.
