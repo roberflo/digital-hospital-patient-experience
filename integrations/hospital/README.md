@@ -33,10 +33,10 @@ Asumida: el propietario autoriza entregar recetas existentes al teléfono vincul
 POST /v1/reception/patients/{patientId}/prescriptions/list
   {"phone":"+503...","cursor":null}
   -> {"prescriptionIds":["UUID"],"nextCursor":null}
-POST /v1/reception/patients/{patientId}/prescriptions/{prescriptionId}
+POST /v1/reception/prescriptions/{prescriptionId}
   {"phone":"+503..."}
   -> {prescriptionId,patientId,encounterId,state:"signed",signedAt,contentWithheld:false,lines:[...]}
-POST /v1/reception/patients/{patientId}/prescriptions/{prescriptionId}/pdf
+POST /v1/reception/prescriptions/{prescriptionId}/pdf
   {"phone":"+503..."}
   -> application/pdf
 ```
@@ -98,3 +98,9 @@ Revisión del autor: Bugs (realm_access no objeto corregido); Seguridad (tenant/
 ## Revisión independiente del coordinador
 
 2026-10-02: revisados los cuatro pases de REVIEW.md. Bugs: IDs de timeline coinciden con receta y permisos se comprueban antes de leer; Seguridad: caller firmado, tenant/sub/azp/role exactos, número actual, signed-only y audit awaited; Conformidad: AC1–9 reflejados, límites de evidencia indicados arriba; Diseño: endpoints sin interfaz, no aplica. No se detectaron nuevos hallazgos importantes en el patch. Esta revisión de código no reemplaza el smoke de stores reales ni la aprobación de CODEOWNERS para merge.
+
+## Revisión de publicación, 2026-10-03
+
+Detalle y PDF usan una única ID de receta; el servicio autentica la capacidad antes de resolver su propietario por tenant. Recepción valida el propietario del detalle contra su paciente vinculado antes de pedir PDF, incluso con teléfonos compartidos. La composición del documento se comparte con el print job canónico del Hospital. Regresiones de arquitectura detectaron el render duplicado y el binding de dos identificadores; se corrigió el código sin debilitar sus assertions.
+
+Resultados finales: 36/36 bridge, 274/274 arquitectura, 52/52 contratos; suite completa 3507 aprobadas, 2 fallos conocidos Vitals, 429 omitidas, 3938 total (origin/main 3893 +45 pruebas propias). Revisión independiente completó bugs, seguridad, conformidad y diseño sin nuevos Important. La conexión real de agenda sí se probó en PostgreSQL local por API e interfaz; la entrega de recetas sigue deshabilitada y requiere su propia habilitación y prueba clínica.

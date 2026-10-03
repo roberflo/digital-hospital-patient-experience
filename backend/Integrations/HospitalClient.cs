@@ -132,7 +132,7 @@ public sealed class HospitalClient(HttpClient http, IConfiguration configuration
         RequireClinicalDelivery(tenantId);
         await GetVerifiedPatientAsync(tenantId, patientId, senderPhone, ct);
         using var response = await SendAsync(tenantId, HttpMethod.Post,
-            $"v1/reception/patients/{patientId:D}/prescriptions/{prescriptionId:D}", new { phone = senderPhone }, ct);
+            $"v1/reception/prescriptions/{prescriptionId:D}", new { phone = senderPhone }, ct);
         var prescription = await ParseAsync<HospitalPrescription>(response, ct);
         if (prescription.PrescriptionId != prescriptionId || prescription.PatientId != patientId
             || prescription.State != "signed" || prescription.ContentWithheld)
@@ -143,11 +143,12 @@ public sealed class HospitalClient(HttpClient http, IConfiguration configuration
     public async Task<byte[]> GetPrescriptionPdfAsync(Guid tenantId, Guid patientId,
         string senderPhone, Guid prescriptionId, CancellationToken ct = default)
     {
-        RequireClinicalDelivery(tenantId);
-        await GetVerifiedPatientAsync(tenantId, patientId, senderPhone, ct);
-        // The bridge validates prescription ownership and current signed state before rendering.
+        // The bridge resolves the immutable owner from the prescription id. Bind that owner
+        // to this CRM contact before requesting the PDF, including shared-phone households.
+        await GetIssuedPrescriptionAsync(tenantId, patientId, senderPhone, prescriptionId, ct);
+        // The bridge rechecks current phone and signed state before rendering.
         using var response = await SendAsync(tenantId, HttpMethod.Post,
-            $"v1/reception/patients/{patientId:D}/prescriptions/{prescriptionId:D}/pdf", new { phone = senderPhone }, ct);
+            $"v1/reception/prescriptions/{prescriptionId:D}/pdf", new { phone = senderPhone }, ct);
         if (response.Content.Headers.ContentType?.MediaType != "application/pdf")
             throw new HospitalIntegrationException("hospital.invalid_pdf_response", HttpStatusCode.BadGateway);
         return await response.Content.ReadAsByteArrayAsync(ct);

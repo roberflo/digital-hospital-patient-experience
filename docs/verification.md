@@ -6,11 +6,12 @@ Fecha de desarrollo: 2026-10-02 (America/El_Salvador). Ejecución local con Dock
 |---|---|---|
 | Build API | pasó | `docker compose build api`, publicación Release .NET 10 |
 | Build frontend | pasó | `docker compose build web`, Next standalone + TypeScript |
-| Backend | 54 pasaron, 0 fallos, 0 omitidas | `scripts/test-backend.sh`, PostgreSQL temporal real y proveedores simulados |
+| Backend | 56 pasaron, 0 fallos, 0 omitidas | `scripts/test-backend.sh`, PostgreSQL temporal real y proveedores simulados |
 | API | 82 verificaciones pasaron | `python3 tests/api_smoke.py`, API real local |
 | Navegador | 14/14 pasaron en una ejecución completa tras corregir el nombre junto al contador de no leídos | `npm test --prefix frontend`, Chromium escritorio + móvil contra contenedores compilados |
 | Adaptador Hospital | pasó | `tests/hospital-client/HospitalClient.Checks.csproj` ejecutado con SDK 10 |
-| Bridge Hospital | 33 servicio/HTTP-JWT + 12 arquitectura + 3 OpenAPI + 1 cliente TS pasaron | copia aislada del hospital; detalles en `integrations/hospital/README.md` |
+| Bridge Hospital | 36/36 servicio/HTTP-JWT; arquitectura 274/274; contratos 52/52 | copia aislada del hospital; revisión independiente sin hallazgos Important nuevos |
+| Suite Hospital completa | 3507 aprobadas, 2 fallos conocidos Vitals, 429 omitidas; 3938 total | base origin/main 3893 + 45 pruebas propias (36 bridge y 9 agenda); no se declara toda la suite verde |
 | Kapso MCP | conexión y lecturas reales correctas | initialize, tools/list y lectura del número configurado; servidor kapso-mcp 2.0.0 |
 | NVIDIA NIM | modelos, tool calling y 2 comprobaciones del asistente pasaron | proveedor real, prompt y contacto sintéticos; modelo `nvidia/nemotron-3-super-120b-a12b` |
 | Backup | pasó | dump + keyring generados; dump restaurado en base temporal y consulta sobre campos cifrados |
@@ -31,7 +32,7 @@ Fecha de desarrollo: 2026-10-02 (America/El_Salvador). Ejecución local con Dock
 
 ## Lo que todavía requiere el entorno objetivo
 
-No se ha validado SSO contra un Keycloak real, Google OAuth real, entrega real de WhatsApp, coexistencia real ni agenda/recetas contra stores del Hospital desplegado. El número de Kapso verificado es sandbox sin coexistencia. El bridge Hospital usa fixtures de repositorios y renderer en sus pruebas dirigidas; no se ejecutó la suite completa de Hospital ni se sustituyó la revisión de sus CODEOWNERS.
+Se validó autenticación de servicio Keycloak y CRUD de agenda contra stores reales del Hospital local sintético. No se ha validado SSO interactivo de producción, Google OAuth real, entrega real de WhatsApp, coexistencia real ni entrega de recetas contra stores reales. El número de Kapso verificado es sandbox sin coexistencia. El bridge Hospital usa fixtures de repositorios y renderer en sus pruebas dirigidas; la suite completa final de Hospital conserva los dos fallos Vitals previamente documentados; no se sustituye la revisión de sus CODEOWNERS.
 
 No se han realizado pruebas de carga, recuperación total de un host perdido, evaluación clínica formal del modelo ni auditoría externa de seguridad. La restauración probada verifica PostgreSQL; la disponibilidad conjunta del keyring y las variables estables debe ensayarse en el entorno de operación. El pipeline GitHub Actions reproduce build, API, backend y navegador con credenciales sintéticas; su estado remoto se consulta en Actions y no se infiere de estos resultados locales.
 
@@ -54,4 +55,8 @@ Las dos claves facilitadas permiten consultar el mismo proyecto `carsales`. La l
 
 ## Agenda Hospital: alcance actual
 
-Se agregó la consulta por paciente en Hospital (guard/auditoría, filtro tenant/paciente, rango máximo 31 días), y su consumo desde el agente y la ficha de la bandeja. Se corrigió la validación de horarios nocturnos por zona del hospital. Build y pruebas dirigidas pasan; consultar `integrations/hospital/PATIENT-AGENDA.md` para conteos y límites de la evidencia. La nueva API no está desplegada y la conexión persistente local espera autorización de la cuenta Keycloak; no se declara aún creación/reprogramación/cancelación real desde CRM.
+Se agregó la consulta por paciente en Hospital (guard/auditoría, filtro tenant/paciente, rango máximo 31 días), y su consumo desde el agente y la ficha de la bandeja. Se corrigió la validación de horarios nocturnos por zona del hospital. Build y pruebas dirigidas pasan; consultar `integrations/hospital/PATIENT-AGENDA.md` para conteos y límites de la evidencia. El 2026-10-03, tras autorización explícita de la cuenta de servicio, se activó la API local adicional y se probó creación, consulta, reprogramación y cancelación real desde CRM, tanto por API como por interfaz. Cada estado se contrastó con la API original Hospital sobre PostgreSQL. El smoke reproducible es `python3 tests/hospital_live.py`; las citas sintéticas terminaron canceladas, preservando el historial.
+
+## Ajuste del contrato de recetas (2026-10-03)
+
+La lectura/PDF recibe únicamente el identificador de receta en la ruta. Hospital resuelve su propietario y valida el teléfono; Recepción verifica también que el propietario devuelto coincide con su contacto antes de pedir el PDF, incluso cuando dos pacientes comparten teléfono. Regresión ejecutada en rojo: `Unexpected Hospital route: /v1/reception/patients/.../prescriptions/.../pdf` (2 fallos); después de actualizar rutas y prevalidar propietario, backend 56/56. El puente de recetas permanece deshabilitado localmente y no se declara validada una entrega clínica real.

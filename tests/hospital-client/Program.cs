@@ -25,7 +25,7 @@ var handler = new FakeHandler(request =>
         return Ok(new { patientId = patient, givenNames = "Paciente", familyNames = "Sintético", phone = "+503 7000-0001" });
     if (request.RequestUri.AbsolutePath == $"/v1/agenda/{appointment}")
         return Ok(new { appointmentId = appointment, patientId = otherPatient, visitKind = "follow-up", status = "booked" });
-    if (request.RequestUri.AbsolutePath == $"/v1/reception/patients/{patient}/prescriptions/{prescription}")
+    if (request.RequestUri.AbsolutePath == $"/v1/reception/prescriptions/{prescription}")
         return Ok(new { prescriptionId = prescription, patientId = otherPatient, encounterId = Guid.NewGuid(), state = "signed", signedAt = DateTimeOffset.UtcNow, lines = Array.Empty<object>() });
     return new HttpResponseMessage(HttpStatusCode.Forbidden) { Content = new StringContent("sensitive upstream content") };
 });

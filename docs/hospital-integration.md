@@ -43,8 +43,8 @@ Para pruebas se admite `AccessToken` en lugar de client credentials, pero expira
 | Reprogramar | `POST /v1/agenda/{id}/reschedule` | `{startsAt,clinicianId,durationMinutes}` → 204. |
 | Cancelar por paciente | `POST /v1/agenda/{id}/cancel` | `{reason:"patient-requested",cancelledByPatient:true}` → 204. Nunca DELETE. |
 | Listar recetas por bot | `POST /v1/reception/patients/{id}/prescriptions/list` | Body phone/cursor; sólo IDs signed. Requiere cuenta servicio dedicada y teléfono actual. |
-| Receta emitida por bot | `POST /v1/reception/patients/{patientId}/prescriptions/{id}` | Body phone; DTO mínimo, paciente coincidente, signed. |
-| PDF receta por bot | `POST /v1/reception/patients/{patientId}/prescriptions/{id}/pdf` | Body phone → application/pdf. Reutiliza mapper/renderer y perfil del firmante. |
+| Consultar receta ya emitida | `POST /v1/reception/prescriptions/{id}` | Body phone; DTO mínimo, paciente coincidente, signed. |
+| PDF receta por bot | `POST /v1/reception/prescriptions/{id}/pdf` | Body phone → application/pdf. Reutiliza mapper/renderer y perfil del firmante. |
 
 `visitKind`: `first-visit`, `follow-up`, `procedure`, `results`, `paperwork`, `same-day-urgent`. Las fechas de citas llevan offset; los días de agenda pertenecen a la zona horaria del hospital.
 
@@ -80,4 +80,4 @@ Ese mismo comando se ejecutó posteriormente en `mcr.microsoft.com/dotnet/sdk:10
 
 La bandeja consulta próximas citas por paciente vinculado mediante el nuevo endpoint acotado. Configura `UsePatientAgenda=true` al desplegar la nueva API para que también lo use el agente. La UI de Agenda comunica errores de disponibilidad, conserva la clave del intento y registra acciones exitosas en el historial CRM. La validación usa la zona horaria del hospital, incluido un horario UTC que corresponde al día clínico anterior.
 
-Código y pruebas preparados; la conexión persistente local está pendiente de autorización explícita para el cliente Keycloak dedicado. Ver `integrations/hospital/PATIENT-AGENDA.md` para evidencia y procedimiento.
+Conexión local autorizada y activa desde el 2026-10-03. Crear, consultar, reprogramar y cancelar pasó desde API e interfaz de Recepción, contrastando cada estado con Hospital. Ver `integrations/hospital/PATIENT-AGENDA.md` para evidencia y procedimiento.

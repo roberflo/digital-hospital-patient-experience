@@ -40,7 +40,7 @@ Fecha: 2026-10-02. Alcance: CRM agent-first para un hospital por empresa, usuari
 
 | B16 | Vistas personales, macros auditadas, búsqueda de mensajes y filtro de archivos | Implementado y probado; ver chatwoot-review.md |
 
-| B17 | Consulta de citas por paciente y conexión de agenda Hospital | API Hospital aplicada, cliente/UI preparados y pruebas dirigidas aprobadas; activación local pendiente de autorización Keycloak |
+| B17 | Consulta de citas por paciente y conexión de agenda Hospital | Conexión local autorizada y CRUD real verificado por API e interfaz contra Hospital; publicación de ambos repos en curso |
 
 ## Secuencia
 

@@ -1,6 +1,6 @@
 # Consulta de citas por paciente
 
-Cambio aplicado en el checkout Hospital y preservado en `patient-agenda.patch`. No se hizo commit en el índice compartido de Hospital.
+Cambio aplicado en el checkout Hospital y preservado en `patient-agenda.patch`. La publicación se prepara desde una copia aislada de origin/main para preservar el índice compartido.
 
 - `GET /v1/agenda/patients/{patientId}?from=YYYY-MM-DD&to=YYYY-MM-DD`
 - Hasta 31 días, incluye canceladas. Proyección: appointmentId, clinicianId, clinicianName, scheduledStart (offset hospital), durationMinutes, status.
@@ -10,25 +10,35 @@ Cambio aplicado en el checkout Hospital y preservado en `patient-agenda.patch`. 
 
 ## Evidencia ejecutada
 
+Publicación final (2026-10-03): suite completa 3507 aprobadas / 2 fallos conocidos Vitals / 429 omitidas / 3938 total. Las 45 pruebas añadidas (36 bridge, 9 agenda) pasan; arquitectura 274/274 y contratos 52/52.
+
 Application: 152/152; Endpoints: 80/80; Infrastructure: 32 aprobadas, 5 omitidas (gates live existentes); arquitectura: 13/13; fakes de Identity: 8/8; OpenAPI: 3/3; generación del cliente TypeScript: 1/1.
 
 TDD: ruta ausente, ToString que incluía patientId y fecha extrema que desbordaba el intervalo se detectaron en rojo y se corrigieron. Revisión independiente cerró ambos hallazgos. Los cambios OpenAPI/TS añaden únicamente una ruta y dos esquemas, preservando diferencias ajenas.
 
-Pruebas HTTP con JWT real, aislamiento en PostgreSQL y auditoría persistida de esta nueva ruta **pendientes**; los tests InMemory no las reemplazan. No se ejecutó la suite completa de Hospital.
+El 2026-10-03 se probó el CRUD real con JWT de servicio, stores PostgreSQL existentes y paciente sintético C: creación, lectura, reprogramación y cancelación desde Recepción. Cada fase se contrastó con la nueva API y la API original Hospital. El ciclo se repitió satisfactoriamente sobre la imagen final corregida (manifest `sha256:2286e7716f97c39e5b5c9343f77a5552a0c415d285d8a21dddbfbc1788048c36`). También pasó el rechazo de otro tenant desde CRM (404), rango mayor de 31 días (400) e historial CRM de las tres acciones. La comprobación directa de filas de auditoría Hospital y los gates completos de aislamiento siguen siendo evidencia distinta; no se infieren de este smoke.
 
-## Imagen local preparada
+## Imagen local activa
 
-`hospital/api:recepcion-patient-agenda` compiló correctamente. No está desplegada. El contenedor Hospital actual proviene de un checkout temporal que ya no existe; por ello se preparó `patient-agenda.compose.yml` para una API adicional sin reemplazar la activa. La API adicional usa exclusivamente el entorno de runtime de la API existente; nunca todo el `.env` de Hospital ni credenciales de migración.
+`hospital/api:recepcion-patient-agenda` está activa localmente mediante `patient-agenda.compose.yml`, sin reemplazar la API original. El contenedor original proviene de un checkout temporal que ya no existe. `scripts/start-hospital-local.py` utiliza una lista explícita de variables de base de datos app/jobs/keyring, cifrado y validación JWT; excluye Keycloak Admin, MinIO y credenciales de migración. El archivo privado tiene modo 0600 y está ignorado por Git.
 
 Recepción se une únicamente a la red `hospital` mediante `docker-compose.hospital.yml`. Sólo la API Hospital adicional requiere su red de llaves habitual. No se exponen puertos nuevos al host.
 
-## Conexión pendiente de autorización
+## Conexión local autorizada
 
-La revisión automática requirió autorización específica antes de crear el cliente Keycloak persistente `recepcion-agenda-local-c`, limitado al rol Recepción en el tenant sintético C. `scripts/connect-hospital-local.py` está preparado y su sintaxis fue validada, pero **no se ejecutó**. No se guardaron credenciales ni se habilitó el usuario de integración en la UI.
+El usuario autorizó explícitamente crear el cliente Keycloak `recepcion-agenda-local-c`, limitado al rol Recepción en el tenant sintético C, y guardar su secreto en `.env` local ignorado. Se ejecutó `scripts/connect-hospital-local.py`; se validaron tenant, audiencia y ausencia de roles clínicos/administrativos. No habilita entrega de recetas ni proveedores de mensajería.
 
-Después de autorizar: provisionar cliente, preparar el env privado de runtime para la API adicional, iniciarla, conectar Recepción con el override y probar consultar → crear → reprogramar → cancelar con un paciente sintético. El selector de login «Hospital local · citas de prueba» sólo aparece cuando se configura `DEV_HOSPITAL_TENANT_ID`; es exclusivamente Development y no reemplaza SSO de producción.
+El selector de login «Hospital local · citas de prueba» está disponible en localhost:3215, con la contraseña de desarrollo configurada. Es exclusivamente Development y no reemplaza SSO de producción. La fecha de las citas probadas es 2026-10-05, zona America/El_Salvador.
 
-La autorización del usuario debe mantenerse como condición; no sustituirla usando tokens de otra cuenta para activar la conexión.
+Comandos de operación local después de provisionar la cuenta autorizada:
+
+```sh
+python3 scripts/start-hospital-local.py
+python3 tests/hospital_live.py
+python3 tests/hospital_live.py --inspect 2026-10-05
+```
+
+La prueba crea una cita, la mueve y termina cancelándola; conserva el historial hospitalario. El modo `--inspect` sólo lee. La prueba visual repitió el flujo desde la pantalla, creando a las 09:00, moviendo a las 10:00 y cancelando; se verificó cada estado directamente en Hospital y tras recargar. Evidencia local: `artifacts/hospital-crud-ui.png`. Nunca se borra físicamente una cita para simular la D de CRUD.
 
 ## Límite de reserva
 
