@@ -22,6 +22,20 @@ public sealed class AgentIntegrationTests:IAsyncLifetime {
         job=new(){TenantId=scope.Id,ConversationId=conversation.Id,Key="agent:in-"+scope.Id};db.Add(job);await db.SaveChangesAsync();
     }
     public async Task DisposeAsync(){if(db!=null)await db.DisposeAsync();}
+    [Theory][InlineData("pending")][InlineData("snoozed")][InlineData("resolved")]
+    public async Task InactiveWorkflowNeverCallsModel(string state){
+        conversation.State=state;await db.SaveChangesAsync();
+        var ai=new Fake(_=>throw new Exception("Must not invoke model"));var k=new Fake(_=>throw new Exception("Must not send"));
+        await Runtime(ai,k).Run(job,CancellationToken.None);Assert.Equal(0,ai.Calls);Assert.Equal(0,k.Calls);
+    }
+    [Fact]public async Task ExpiredSnoozeReopensOnceWithoutSending(){
+        conversation.State="snoozed";conversation.Status="human";conversation.SnoozedUntil=DateTimeOffset.UtcNow.AddMinutes(-1);await db.SaveChangesAsync();
+        var k=new Fake(_=>throw new Exception("Must not send"));
+        await InboxWorkflow.WakeDue(db,scope,Service(k),CancellationToken.None);
+        await InboxWorkflow.WakeDue(db,scope,Service(k),CancellationToken.None);
+        Assert.Equal("open",conversation.State);Assert.Equal("human",conversation.Status);Assert.Null(conversation.SnoozedUntil);
+        Assert.Single(await db.Activities.Where(x=>x.ConversationId==conversation.Id&&x.Kind=="conversation_state").ToListAsync());Assert.Equal(0,k.Calls);
+    }
     [Fact]public async Task HumanOwnedConversationNeverCallsModel(){conversation.Status="human";await db.SaveChangesAsync();var ai=new Fake(_=>throw new Exception("Must not invoke model"));var k=new Fake(_=>throw new Exception("Must not send"));await Runtime(ai,k).Run(job,CancellationToken.None);Assert.Equal(0,ai.Calls);Assert.Equal(0,k.Calls);}
     [Fact]public async Task KapsoOnboardingRecoversCustomerWithoutDuplicating(){
         var handler=new Fake(req=>{Assert.Equal(HttpMethod.Get,req.Method);Assert.Contains(scope.Id.ToString(),req.RequestUri!.Query);return Task.FromResult(Json(new{data=new[]{new{id="existing-customer",external_customer_id=scope.Id.ToString()}}}));});

@@ -24,7 +24,7 @@ public sealed class ConversationService(CrmDb db, TenantScope scope, KapsoClient
             message.Status = ex is ArgumentException ? "failed" : "uncertain"; conv.Status = "human";
             db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = id, ContactId = conv.ContactId, Kind = "delivery", Actor = "Sistema", Body = message.Status == "uncertain" ? "Entrega sin confirmar. Comprueba WhatsApp antes de volver a enviar." : "El envío no está habilitado o fue rechazado localmente." });
         }
-        conv.Revision++; conv.UpdatedAt = DateTimeOffset.UtcNow; await db.SaveChangesAsync(CancellationToken.None); return message;
+        conv.LastMessage=body.Length>160?body[..160]:body;conv.Revision++; conv.UpdatedAt = DateTimeOffset.UtcNow; await db.SaveChangesAsync(CancellationToken.None); return message;
     }
     public async Task<IDisposable> Lock(Guid id, CancellationToken ct = default)
     {

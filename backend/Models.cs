@@ -28,6 +28,8 @@ public sealed class Contact : TenantRow
 {
     public string Name { get; set; } = ""; public string Phone { get; set; } = "";
     public string PhoneHash { get; set; } = ""; public string Email { get; set; } = "";
+    public Guid? CompanyId { get; set; }
+    public string LifecycleStage { get; set; } = "lead";
     public Guid? PatientId { get; set; }
     public string Tags { get; set; } = "";
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
@@ -35,6 +37,7 @@ public sealed class Contact : TenantRow
 public sealed class Company : TenantRow { public string Name { get; set; } = ""; public string Industry { get; set; } = ""; public string Email { get; set; } = ""; public string Phone { get; set; } = ""; }
 public sealed class Opportunity : TenantRow
 {
+    public Guid? ConversationId { get; set; }
     public string Title { get; set; } = ""; public Guid ContactId { get; set; }
     public decimal Value { get; set; }
     public string Stage { get; set; } = "new";
@@ -54,9 +57,15 @@ public sealed class Channel : TenantRow
     public bool Coexistence { get; set; }
     public bool Enabled { get; set; }
     public string? KapsoCustomerId { get; set; }
+    public DateTimeOffset? LastWebhookAt { get; set; }
 }
 public sealed class Conversation : TenantRow
 {
+    public string State { get; set; } = "open";
+    public string Priority { get; set; } = "normal";
+    public string Labels { get; set; } = "";
+    public DateTimeOffset? SnoozedUntil { get; set; }
+    public string? LastMessage { get; set; }
     public Guid ContactId { get; set; }
     public Guid ChannelId { get; set; }
     public string ExternalId { get; set; } = ""; public string Status { get; set; } = "human";
@@ -66,8 +75,19 @@ public sealed class Conversation : TenantRow
     public DateTimeOffset? LastInboundAt { get; set; }
     public long Revision { get; set; }
 }
+public sealed class ConversationRead : TenantRow {
+    public Guid ConversationId { get; set; }
+    public string Subject { get; set; } = "";
+    public DateTimeOffset LastReadAt { get; set; }
+}
+public sealed class SavedReply : TenantRow {
+    public string Title { get; set; } = "";
+    public string Body { get; set; } = "";
+}
 public sealed class Message : TenantRow
 {
+    public DateTimeOffset ReceivedAt { get; set; } = DateTimeOffset.UtcNow;
+    public bool IsHistory { get; set; }
     public Guid ConversationId { get; set; }
     public string? ExternalId { get; set; }
     public string Sender { get; set; } = "patient"; public string Body { get; set; } = "";
@@ -98,11 +118,18 @@ public sealed class CrmDb(DbContextOptions<CrmDb> options, TenantScope scope, ID
     public DbSet<Channel> Channels => Set<Channel>(); public DbSet<Conversation> Conversations => Set<Conversation>();
     public DbSet<Message> Messages => Set<Message>(); public DbSet<Job> Jobs => Set<Job>();
     public DbSet<Receipt> Receipts => Set<Receipt>(); public DbSet<Audit> Audits => Set<Audit>();
+    public DbSet<ConversationRead> ConversationReads => Set<ConversationRead>();
+    public DbSet<SavedReply> SavedReplies => Set<SavedReply>();
     public DbSet<CalendarLink> CalendarLinks => Set<CalendarLink>();
     protected override void OnModelCreating(ModelBuilder b)
     {
+        Map<ConversationRead>(b); Map<SavedReply>(b);
         Map<Member>(b); Map<Contact>(b); Map<Company>(b); Map<Opportunity>(b); Map<Activity>(b); Map<Channel>(b);
         Map<Conversation>(b); Map<Message>(b); Map<Job>(b); Map<Receipt>(b); Map<Audit>(b); Map<CalendarLink>(b);
+        b.Entity<ConversationRead>().HasIndex(x => new {x.TenantId, x.ConversationId, x.Subject}).IsUnique();
+        b.Entity<ConversationRead>().HasOne<Conversation>().WithMany().HasForeignKey(x=>new{x.TenantId,x.ConversationId}).HasPrincipalKey(x=>new{x.TenantId,x.Id}).OnDelete(DeleteBehavior.Restrict);
+        b.Entity<Contact>().HasOne<Company>().WithMany().HasForeignKey(x=>new{x.TenantId,x.CompanyId}).HasPrincipalKey(x=>new{x.TenantId,x.Id}).OnDelete(DeleteBehavior.Restrict);
+        b.Entity<Opportunity>().HasOne<Conversation>().WithMany().HasForeignKey(x=>new{x.TenantId,x.ConversationId}).HasPrincipalKey(x=>new{x.TenantId,x.Id}).OnDelete(DeleteBehavior.Restrict);
         b.Entity<Member>().HasIndex(x => x.Subject).IsUnique();
         b.Entity<Tenant>().HasIndex(x => x.KapsoCustomerId).IsUnique();
         b.Entity<Contact>().HasIndex(x => new { x.TenantId, x.PhoneHash }).IsUnique();
@@ -124,6 +151,8 @@ public sealed class CrmDb(DbContextOptions<CrmDb> options, TenantScope scope, ID
         b.Entity<Contact>().Property(x => x.Phone).HasConversion(encrypted); b.Entity<Contact>().Property(x => x.Name).HasConversion(encrypted);
         b.Entity<Contact>().Property(x => x.Email).HasConversion(encrypted); b.Entity<Message>().Property(x => x.Body).HasConversion(encrypted);
         b.Entity<Activity>().Property(x => x.Body).HasConversion(encrypted); b.Entity<Conversation>().Property(x => x.Summary).HasConversion(encrypted);
+        b.Entity<Conversation>().Property(x=>x.LastMessage).HasConversion(encrypted!);
+        b.Entity<SavedReply>().Property(x=>x.Body).HasConversion(encrypted);
         b.Entity<Tenant>().Property(x => x.Guide).HasConversion(encrypted); b.Entity<Tenant>().Property(x => x.GoogleRefreshToken).HasConversion(encrypted!);
     }
     void Map<T>(ModelBuilder b) where T : TenantRow

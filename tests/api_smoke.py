@@ -87,4 +87,47 @@ check(call('/api/conversations/'+cid+'/messages','POST',{'body':'No enviar'},a,h
 check(call('/api/audit',token=agent)[0]==403,'Audit limited to supervisors')
 check(any(x['action']=='contact.created' for x in call('/api/audit',token=a)[1]),'Audit records persisted')
 check(call('/api/google/connect','POST',{},agent)[0]==403,'Google connection limited to administrators')
+# Inbox workflow and CRM share a tenant-scoped patient and conversation.
+from datetime import datetime,timezone,timedelta
+base='/api/conversations/'+cid
+current=call('/api/conversations?contactId='+c['id'],token=a)[1][0]
+check(current['unreadCount']==1,'Inbound message starts unread')
+check(call(base+'/read','POST',{'throughMessageId':str(uuid.uuid4())},a)[0]==404,'Unknown read marker rejected')
+check(call(base+'/read','POST',{'throughMessageId':msgs[0]['id']},a)[0]==200,'Mark conversation read for current user')
+check(call('/api/conversations?contactId='+c['id'],token=a)[1][0]['unreadCount']==0,'Read count cleared')
+check(call('/api/conversations?contactId='+c['id'],token=agent)[1][0]['unreadCount']==1,'Read state isolated per user')
+revision=current['conversation']['revision']
+status,workflow=call(base+'/workflow','PATCH',{'state':'pending','priority':'urgent','labels':'Cita, cita, receta','expectedRevision':revision},a)
+check(status==200 and workflow['state']=='pending' and workflow['status']=='human','Pending pauses automation')
+check(workflow['labels']=='cita, receta','Conversation labels normalized')
+assigned=call(base,'PATCH',{'status':'human','assignedTo':'dev-agent'},a)
+check(assigned[0]==200 and assigned[1]['state']=='pending','Assigning a human preserves pending workflow state')
+check(call(base+'/workflow','PATCH',{'priority':'low','expectedRevision':revision},a)[0]==409,'Stale conversation update rejected')
+check(call(base+'/workflow','PATCH',{'state':'resolved'},b)[0]==404,'Workflow isolated by tenant')
+check(any(x['conversation']['id']==cid for x in call('/api/conversations?state=pending&priority=urgent&label=cita',token=a)[1]),'Inbox combines state priority and label filters')
+check(not any(x['conversation']['id']==cid for x in call('/api/conversations?state=resolved',token=a)[1]),'State filter excludes other states')
+check(call(base+'/workflow','PATCH',{'state':'snoozed'},a)[0]==400,'Snooze requires a future time')
+check(call(base+'/workflow','PATCH',{'state':'snoozed','snoozedUntil':(datetime.now(timezone.utc)+timedelta(hours=1)).isoformat()},a)[0]==200,'Conversation can be snoozed')
+p['message']['id']='wamid.reopen.'+suffix
+check(webhook(p)[0]==200,'New inbound message accepted while snoozed')
+reopened=call('/api/conversations?contactId='+c['id'],token=a)[1][0]['conversation']
+check(reopened['state']=='open' and reopened['status']=='human' and reopened['snoozedUntil'] is None,'New message reopens for human attention')
+check(call('/api/contacts/'+c['id']+'/profile','PATCH',{'name':c['name'],'email':'crm@example.invalid','tags':'Seguimiento','lifecycleStage':'active','companyId':None},a)[0]==200,'Update CRM patient profile from inbox')
+status,followup=call('/api/opportunities','POST',{'title':'Seguimiento desde WhatsApp','contactId':c['id'],'conversationId':cid,'value':0,'stage':'new'},a)
+check(status==200 and followup['conversationId']==cid,'CRM followup linked to source conversation')
+context=call('/api/contacts/'+c['id']+'/context',token=a)[1]
+check(context['contact']['lifecycleStage']=='active' and any(x['id']==followup['id'] for x in context['opportunities']) and any(x['kind']=='conversation_state' for x in context['activities']),'Unified CRM context includes profile followups and state history')
+check(call('/api/contacts/'+c['id']+'/context',token=b)[0]==404,'Customer context isolated by tenant')
+other_contact=next(x for x in call('/api/contacts',token=a)[1] if x['id']!=c['id'])
+check(call('/api/opportunities','POST',{'title':'Incorrect relation','contactId':other_contact['id'],'conversationId':cid,'value':0,'stage':'new'},a)[0]==404,'Cannot link followup to another patient conversation')
+check(call('/api/activities','POST',{'body':'Incorrect relation','contactId':other_contact['id'],'conversationId':cid},a)[0]==404,'Cannot link note to another patient conversation')
+check(call('/api/saved-replies','POST',{'title':'No permitido','body':'Test'},agent)[0]==403,'Only supervisors manage saved replies')
+status,reply=call('/api/saved-replies','POST',{'title':'Saludo sintético','body':'Hola, ¿en qué podemos ayudarte?'},a)
+check(status==200,'Saved reply created')
+check(any(x['id']==reply['id'] for x in call('/api/saved-replies',token=agent)[1]),'Agents can use tenant saved replies')
+check(not any(x['id']==reply['id'] for x in call('/api/saved-replies',token=b)[1]),'Saved replies isolated by tenant')
+check(call('/api/saved-replies/'+reply['id'],'DELETE',token=a)[0]==200,'Remove synthetic saved reply')
+channel_id=chat['channel']['id']
+check(call('/api/channels/'+channel_id+'/diagnostics','POST',{},agent)[0]==403,'Channel diagnostics restricted to administrator')
+check(call('/api/channels/'+channel_id+'/diagnostics','POST',{},a)[0]==400,'Synthetic channel never claims a live connection')
 print('RESULT:',count,'passed, 0 failed')

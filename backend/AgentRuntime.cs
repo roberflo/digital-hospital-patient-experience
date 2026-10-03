@@ -14,7 +14,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         var tenant = await db.Tenants.SingleAsync(x => x.Id == scope.Id, ct);
         var conv = await db.Conversations.SingleAsync(x => x.Id == job.ConversationId, ct);
         var channel = await db.Channels.SingleAsync(x => x.Id == conv.ChannelId, ct);
-        if (!tenant.AgentEnabled || !channel.Enabled || conv.Status != "agent") return;
+        if (!tenant.AgentEnabled || !channel.Enabled || conv.Status != "agent" || conv.State != "open") return;
         var revision = conv.Revision; var contact = await db.Contacts.SingleAsync(x => x.Id == conv.ContactId, ct);
         var history = await db.Messages.Where(x => x.ConversationId == conv.Id).OrderByDescending(x => x.CreatedAt).Take(24).ToListAsync(ct); history.Reverse();
         var latest = history.LastOrDefault(x => x.Sender == "patient"); if (latest is null || job.Key != "agent:" + latest.ExternalId) return;
@@ -61,7 +61,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
                     catch (Exception ex) when (ex is HttpRequestException or ArgumentException or JsonException or KeyNotFoundException or HospitalIntegrationException) { result = JsonSerializer.SerializeToElement(new { error = "No se pudo completar la operación. Deriva a recepción para verificar." }); }
                     db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "agent_tool", Actor = "Agente", Body = $"Herramienta: {name}. Resultado: {(result.TryGetProperty("error", out _) ? "requiere revisión" : "completado")}." }); await db.SaveChangesAsync(ct);
                     messages.Add(new JsonObject { ["role"] = "tool", ["tool_call_id"] = call.GetProperty("id").GetString(), ["content"] = result.GetRawText() });
-                    if (conv.Status != "agent") return;
+                    if (conv.Status != "agent" || conv.State != "open") return;
                 }
                 continue;
             }
@@ -76,7 +76,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         }
         await Handoff(conv, "El agente necesita ayuda para completar la solicitud.", ct);
     }
-    async Task<bool> Active(Guid id, long revision, CancellationToken ct) => await db.Tenants.AnyAsync(x => x.Id == scope.Id && x.AgentEnabled, ct) && await db.Conversations.AsNoTracking().AnyAsync(x => x.Id == id && x.Status == "agent" && x.Revision == revision && db.Channels.Any(c => c.Id == x.ChannelId && c.Enabled), ct);
+    async Task<bool> Active(Guid id, long revision, CancellationToken ct) => await db.Tenants.AnyAsync(x => x.Id == scope.Id && x.AgentEnabled, ct) && await db.Conversations.AsNoTracking().AnyAsync(x => x.Id == id && x.Status == "agent" && x.State == "open" && x.Revision == revision && db.Channels.Any(c => c.Id == x.ChannelId && c.Enabled), ct);
     async Task<JsonElement> Tool(string name, JsonElement a, Conversation conv, Contact contact, Channel channel, Job job, long revision, CancellationToken ct)
     {
         object result;
@@ -115,7 +115,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
     }
     async Task Confirm(Conversation conv, Contact contact, string code, Job job, CancellationToken ct)
     {
-        using var lease = await conversations.Lock(conv.Id, ct); await db.Entry(conv).ReloadAsync(ct); if (conv.Status != "agent") return;
+        using var lease = await conversations.Lock(conv.Id, ct); await db.Entry(conv).ReloadAsync(ct); if (conv.Status != "agent" || conv.State != "open") return;
         var proposal = await db.Activities.Where(x => x.ConversationId == conv.Id && x.Kind == "proposal:" + code && x.CreatedAt > DateTimeOffset.UtcNow.AddMinutes(-15)).OrderByDescending(x => x.CreatedAt).FirstOrDefaultAsync(ct);
         if (proposal is null) { await conversations.Send(conv.Id, "La confirmación expiró o no existe. Solicita de nuevo la operación.", "agent", "confirm:" + job.Id, ct: ct); return; }
         RequirePatient(contact); proposal.Kind = "proposal_used:" + code; await db.SaveChangesAsync(ct); // Consume before external write; never replay uncertain operations.
@@ -175,6 +175,7 @@ public sealed class AgentWorker(IServiceScopeFactory scopes, ILogger<AgentWorker
                 foreach (var tid in tenants)
                 {
                     using var s = scopes.CreateScope(); var scope = s.ServiceProvider.GetRequiredService<TenantScope>(); scope.Id = tid; var d = s.ServiceProvider.GetRequiredService<CrmDb>();
+                    await InboxWorkflow.WakeDue(d,scope,s.ServiceProvider.GetRequiredService<ConversationService>(),stoppingToken);
                     var abandoned = await d.Jobs.Where(x => x.Status == "running" && x.StartedAt < DateTimeOffset.UtcNow.AddMinutes(-5)).ToListAsync(stoppingToken);
                     foreach (var stale in abandoned) { stale.Status = "uncertain"; stale.Error = "Worker interrumpido; requiere conciliación."; var c = await d.Conversations.SingleAsync(x => x.Id == stale.ConversationId, stoppingToken); c.Status = "human"; c.Revision++; }
                     await d.SaveChangesAsync(stoppingToken);

@@ -9,7 +9,7 @@ public static class CrmEndpoints
     {
         var api = app.MapGroup("/api").RequireAuthorization();
         api.MapGet("/me", async (CrmDb db, TenantScope t, CurrentUser u) => new { u.Subject, u.Name, u.Role, tenant = await db.Tenants.Where(x => x.Id == t.Id).Select(x => new { x.Id, x.Name, x.TimeZone, x.AgentEnabled }).SingleAsync() });
-        api.MapGet("/overview", async (CrmDb db) => new { contacts = await db.Contacts.CountAsync(), conversations = await db.Conversations.CountAsync(x => x.Status != "closed"), human = await db.Conversations.CountAsync(x => x.Status == "human"), agent = await db.Conversations.CountAsync(x => x.Status == "agent"), opportunities = await db.Opportunities.CountAsync(x => x.Stage != "won" && x.Stage != "lost"), pending = await db.Jobs.CountAsync(x => x.Status == "pending"), failed = await db.Jobs.CountAsync(x => x.Status == "failed" || x.Status == "uncertain") });
+        api.MapGet("/overview", async (CrmDb db) => new { contacts = await db.Contacts.CountAsync(), conversations = await db.Conversations.CountAsync(x => x.State != "resolved"), human = await db.Conversations.CountAsync(x => x.Status == "human" && x.State == "open"), agent = await db.Conversations.CountAsync(x => x.Status == "agent" && x.State == "open"), opportunities = await db.Opportunities.CountAsync(x => x.Stage != "won" && x.Stage != "lost"), pending = await db.Jobs.CountAsync(x => x.Status == "pending"), failed = await db.Jobs.CountAsync(x => x.Status == "failed" || x.Status == "uncertain") });
         api.MapGet("/contacts", async (CrmDb db, string? q, int? page) =>
         {
             var offset = (Math.Clamp(page ?? 1, 1, 10000) - 1) * 100;
@@ -56,19 +56,22 @@ public static class CrmEndpoints
         api.MapGet("/opportunities", async (CrmDb db) => await db.Opportunities.OrderByDescending(x => x.UpdatedAt).Take(500).ToListAsync());
         api.MapPost("/opportunities", async (OpportunityInput b, CrmDb db, TenantScope t, CurrentUser u) =>
         {
-            if (!await db.Contacts.AnyAsync(x => x.Id == b.ContactId)) return Results.NotFound(); ValidateStage(b.Stage); if (b.Value < 0) throw new ArgumentException("Valor inválido");
-            var row = new Opportunity { TenantId = t.Id, ContactId = b.ContactId, Title = Rules.Required(b.Title), Value = b.Value, Stage = b.Stage }; db.Add(row); Audit(db, t, u, "opportunity.created", row.Id); await db.SaveChangesAsync(); return Results.Ok(row);
+            if (!await db.Contacts.AnyAsync(x => x.Id == b.ContactId)) return Results.NotFound();
+            if(b.ConversationId is {} source&&!await db.Conversations.AnyAsync(x=>x.Id==source&&x.ContactId==b.ContactId))return Results.NotFound();
+            ValidateStage(b.Stage); if (b.Value < 0) throw new ArgumentException("Valor inválido");
+            var row = new Opportunity { TenantId = t.Id, ContactId = b.ContactId, ConversationId=b.ConversationId, Title = Rules.Required(b.Title), Value = b.Value, Stage = b.Stage }; db.Add(row);db.Add(new Activity{TenantId=t.Id,ContactId=row.ContactId,ConversationId=row.ConversationId,Kind="opportunity",Actor=u.Name,Body="Seguimiento creado: "+row.Title}); Audit(db, t, u, "opportunity.created", row.Id); await db.SaveChangesAsync(); return Results.Ok(row);
         });
         api.MapPatch("/opportunities/{id:guid}", async (Guid id, StageInput b, CrmDb db, TenantScope t, CurrentUser u) =>
         {
-            var row = await db.Opportunities.SingleOrDefaultAsync(x => x.Id == id); if (row is null) return Results.NotFound(); ValidateStage(b.Stage); row.Stage = b.Stage; row.UpdatedAt = DateTimeOffset.UtcNow; Audit(db, t, u, "opportunity.stage", id); await db.SaveChangesAsync(); return Results.Ok(row);
+            var row = await db.Opportunities.SingleOrDefaultAsync(x => x.Id == id); if (row is null) return Results.NotFound(); ValidateStage(b.Stage); row.Stage = b.Stage; row.UpdatedAt = DateTimeOffset.UtcNow; db.Add(new Activity{TenantId=t.Id,ContactId=row.ContactId,ConversationId=row.ConversationId,Kind="opportunity",Actor=u.Name,Body="Etapa de seguimiento actualizada: "+row.Title+" → "+b.Stage}); Audit(db, t, u, "opportunity.stage", id); await db.SaveChangesAsync(); return Results.Ok(row);
         });
         api.MapGet("/activities", async (CrmDb db, Guid? contactId, Guid? conversationId) => await db.Activities.Where(x => (contactId == null || x.ContactId == contactId) && (conversationId == null || x.ConversationId == conversationId)).OrderByDescending(x => x.CreatedAt).Take(150).ToListAsync());
         api.MapPost("/activities", async (ActivityInput b, CrmDb db, TenantScope t, CurrentUser u) =>
         {
             if (b.ContactId is { } cid && !await db.Contacts.AnyAsync(x => x.Id == cid)) return Results.NotFound();
-            if (b.ConversationId is { } vid && !await db.Conversations.AnyAsync(x => x.Id == vid)) return Results.NotFound();
-            var row = new Activity { TenantId = t.Id, ContactId = b.ContactId, ConversationId = b.ConversationId, Body = Rules.Required(b.Body, 10000), Kind = "note", Actor = u.Name }; db.Add(row); Audit(db, t, u, "activity.created", row.Id); await db.SaveChangesAsync(); return Results.Ok(row);
+            var contactId=b.ContactId;
+            if (b.ConversationId is { } vid){var conversation=await db.Conversations.SingleOrDefaultAsync(x=>x.Id==vid);if(conversation is null||contactId is {} linked&&linked!=conversation.ContactId)return Results.NotFound();contactId=conversation.ContactId;}
+            var row = new Activity { TenantId = t.Id, ContactId = contactId, ConversationId = b.ConversationId, Body = Rules.Required(b.Body, 10000), Kind = "note", Actor = u.Name }; db.Add(row); Audit(db, t, u, "activity.created", row.Id); await db.SaveChangesAsync(); return Results.Ok(row);
         });
         api.MapGet("/members", async (CrmDb db) => await db.Members.Select(x => new { x.Subject, x.Name, x.Role, x.Disabled }).ToListAsync());
         api.MapPatch("/members/{id}", async (string id, MemberInput b, CrmDb db, CurrentUser u, TenantScope t) =>
@@ -100,7 +103,7 @@ public static class CrmEndpoints
 }
 public record ContactInput(string Name, string Phone, string? Email, string? Tags);
 public record CompanyInput(string Name, string? Industry, string? Email, string? Phone);
-public record OpportunityInput(string Title, Guid ContactId, decimal Value, string Stage);
+public record OpportunityInput(string Title, Guid ContactId, decimal Value, string Stage, Guid? ConversationId=null);
 public record StageInput(string Stage);
 public record ActivityInput(string Body, Guid? ContactId, Guid? ConversationId);
 public record PatientLinkInput(Guid PatientId);
