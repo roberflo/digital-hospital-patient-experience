@@ -163,3 +163,22 @@ test('send checks fresh window and binds recipient before any provider send', as
   assert.equal(writes, 1);
   process.env.KAPSO_MANUAL_SEND_ENABLED = 'false';
 });
+
+test('shared signed receiver routes each number separately without trusting inconsistent scopes', () => {
+  const other = '1234567890';
+  const items = [
+    { phone_number_id: number, conversation },
+    { phone_number_id: other, conversation: { ...conversation, phone_number_id: other } },
+    { phone_number_id: number, conversation: { ...conversation, phone_number_id: other } },
+  ];
+  const events = decodeEvents({ batch: true, data: items }, 'whatsapp.conversation.created');
+  assert.deepEqual(
+    events.map((e) => e.phoneNumberId),
+    [number, other],
+  );
+  let delivered = 0;
+  const stop = subscribe(number, () => delivered++);
+  events.forEach(publish);
+  stop();
+  assert.equal(delivered, 1);
+});

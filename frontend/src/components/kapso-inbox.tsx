@@ -1,5 +1,6 @@
 'use client';
 import Link from 'next/link';
+import useSWR from 'swr';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
@@ -77,10 +78,69 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...init, cache: 'no-store' });
   const body = await response.json();
   if (!response.ok)
-    throw new RequestError(body.error || 'No se pudo cargar WhatsApp.', response.status);
+    throw new RequestError(
+      body.error || body.title || 'No se pudo cargar WhatsApp.',
+      response.status,
+    );
   return body;
 }
 export default function KapsoInbox() {
+  const { data: channels, error } = useSWR<{ id: string; name: string; phoneNumberId: string }[]>(
+    '/api/crm/channels',
+    api,
+  );
+  const [chosen, setChosen] = useState('');
+  useEffect(() => {
+    setChosen(new URLSearchParams(window.location.search).get('phoneNumberId') || '');
+  }, []);
+  const numbers = channels?.filter((c) => /^\d+$/.test(c.phoneNumberId)) || [];
+  const current = numbers.find((c) => c.phoneNumberId === chosen) || numbers[0];
+  if (error)
+    return (
+      <main className="p-8">
+        <p role="alert">{error.message}</p>
+        <Link href="/login">Iniciar sesión</Link>
+      </main>
+    );
+  if (!channels) return <main className="p-8">Cargando números de tu hospital…</main>;
+  if (!current)
+    return (
+      <main className="mx-auto max-w-xl p-10">
+        <MessageCircle size={36} />
+        <h1 className="mt-4 text-2xl font-semibold">Conecta tu WhatsApp</h1>
+        <p className="my-4">
+          Agrega el número de tu hospital para comenzar a recibir conversaciones.
+        </p>
+        <Link href="/whatsapp" className="text-primary">
+          Agregar mi número →
+        </Link>
+        <p className="mt-5">
+          <Link href="/?view=inbox">Volver al CRM</Link>
+        </p>
+      </main>
+    );
+  return (
+    <InboxForNumber
+      key={current.phoneNumberId}
+      number={current.phoneNumberId}
+      selector={
+        <select
+          aria-label="Número de WhatsApp"
+          value={current.phoneNumberId}
+          onChange={(event) => setChosen(event.target.value)}
+        >
+          {numbers.map((c) => (
+            <option key={c.id} value={c.phoneNumberId}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+      }
+    />
+  );
+}
+function InboxForNumber({ number, selector }: { number: string; selector: React.ReactNode }) {
+  const numberQuery = `phoneNumberId=${encodeURIComponent(number)}`;
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selected, setSelected] = useState<Conversation | null>(null);
   const selectedRef = useRef<Conversation | null>(null);
@@ -115,46 +175,52 @@ export default function KapsoInbox() {
     }
     setError(e instanceof Error ? e.message : 'No se pudo conectar.');
   }, []);
-  const refreshList = useCallback(async (after?: string) => {
-    const result = await api<Page<Conversation> & { manualSendEnabled: boolean }>(
-      `/api/conversations${after ? `?after=${encodeURIComponent(after)}` : ''}`,
-    );
-    revoked.current = false;
-    setConversations((old) => {
-      const merged = new Map(
-        (after ? old : old.filter((c) => !result.data.some((n) => n.id === c.id))).map((c) => [
-          c.id,
-          c,
-        ]),
+  const refreshList = useCallback(
+    async (after?: string) => {
+      const result = await api<Page<Conversation> & { manualSendEnabled: boolean }>(
+        `/api/conversations?${numberQuery}${after ? `&after=${encodeURIComponent(after)}` : ''}`,
       );
-      for (const c of result.data) merged.set(c.id, c);
-      return [...merged.values()].sort((a, b) =>
-        (b.last_active_at || '').localeCompare(a.last_active_at || ''),
+      revoked.current = false;
+      setConversations((old) => {
+        const merged = new Map(
+          (after ? old : old.filter((c) => !result.data.some((n) => n.id === c.id))).map((c) => [
+            c.id,
+            c,
+          ]),
+        );
+        for (const c of result.data) merged.set(c.id, c);
+        return [...merged.values()].sort((a, b) =>
+          (b.last_active_at || '').localeCompare(a.last_active_at || ''),
+        );
+      });
+      if (after) hasLoadedMore.current = true;
+      if (after || !hasLoadedMore.current)
+        setListCursor(result.paging?.next ? result.paging.cursors?.after || null : null);
+      setManualSend(result.manualSendEnabled);
+      const current = result.data.find((c) => c.id === selectedRef.current?.id);
+      if (current) {
+        selectedRef.current = current;
+        setSelected(current);
+      }
+      setLoading(false);
+    },
+    [numberQuery],
+  );
+  const refreshChat = useCallback(
+    async (id: string, older?: string, initial = false) => {
+      const result = await api<Page<Message> & { conversation: Conversation }>(
+        `/api/conversations/${encodeURIComponent(id)}/messages?${numberQuery}${older ? `&cursor=${encodeURIComponent(older)}` : ''}`,
       );
-    });
-    if (after) hasLoadedMore.current = true;
-    if (after || !hasLoadedMore.current)
-      setListCursor(result.paging?.next ? result.paging.cursors?.after || null : null);
-    setManualSend(result.manualSendEnabled);
-    const current = result.data.find((c) => c.id === selectedRef.current?.id);
-    if (current) {
-      selectedRef.current = current;
-      setSelected(current);
-    }
-    setLoading(false);
-  }, []);
-  const refreshChat = useCallback(async (id: string, older?: string, initial = false) => {
-    const result = await api<Page<Message> & { conversation: Conversation }>(
-      `/api/conversations/${encodeURIComponent(id)}/messages${older ? `?cursor=${encodeURIComponent(older)}` : ''}`,
-    );
-    if (selectedRef.current?.id !== id || revoked.current) return;
-    for (const message of result.data) seen.current.add(message.id);
-    setMessages((old) => mergeMessages(initial ? [] : old, result.data));
-    if (older || initial)
-      setMessageCursor(result.paging?.next ? result.paging.cursors?.after || null : null);
-    selectedRef.current = result.conversation;
-    setSelected(result.conversation);
-  }, []);
+      if (selectedRef.current?.id !== id || revoked.current) return;
+      for (const message of result.data) seen.current.add(message.id);
+      setMessages((old) => mergeMessages(initial ? [] : old, result.data));
+      if (older || initial)
+        setMessageCursor(result.paging?.next ? result.paging.cursors?.after || null : null);
+      selectedRef.current = result.conversation;
+      setSelected(result.conversation);
+    },
+    [numberQuery],
+  );
   useEffect(() => {
     let alive = true;
     const update = async () => {
@@ -175,7 +241,7 @@ export default function KapsoInbox() {
     const poll = setInterval(() => {
       void update();
     }, 15000);
-    const source = new EventSource('/api/kapso/stream');
+    const source = new EventSource(`/api/kapso/stream?${numberQuery}`);
     source.onopen = () => {
       setLive(true);
       void update();
@@ -227,7 +293,7 @@ export default function KapsoInbox() {
       clearInterval(poll);
       source.close();
     };
-  }, [refreshList, refreshChat, fail]);
+  }, [refreshList, refreshChat, fail, numberQuery]);
   useEffect(() => {
     if (shouldScroll.current && scroller.current)
       scroller.current.scrollTop = scroller.current.scrollHeight;
@@ -297,7 +363,7 @@ export default function KapsoInbox() {
     shouldScroll.current = true;
     setMessages((old) => mergeMessages(old, [optimistic]));
     try {
-      const result = await api<{ message: Message }>('/api/messages', {
+      const result = await api<{ message: Message }>(`/api/messages?${numberQuery}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ conversationId: current.id, to: current.phone_number, text: value }),
@@ -336,9 +402,9 @@ export default function KapsoInbox() {
         <Link href="/?view=inbox" className={styles.backLink}>
           <ArrowLeft size={16} /> Volver al CRM
         </Link>
-        <span>
-          <ShieldCheck size={15} /> Atención del hospital
-        </span>
+        <Link href="/whatsapp" className={styles.backLink}>
+          Agregar mi número
+        </Link>
       </header>
       <div className={`${styles.layout} ${selected ? styles.selected : ''}`}>
         <aside className={styles.sidebar} aria-label="Conversaciones de WhatsApp">
@@ -355,6 +421,7 @@ export default function KapsoInbox() {
             </div>
             <span className={styles.count}>{conversations.length}</span>
           </div>
+          <div className="px-4 pb-3">{selector}</div>
           <label className={styles.search}>
             <Search size={17} />
             <input

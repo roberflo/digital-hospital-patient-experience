@@ -34,6 +34,7 @@ builder.Services.AddHttpClient<HospitalClient>(c => { c.Timeout = TimeSpan.FromS
 builder.Services.AddHttpClient<AgentRuntime>(c => c.Timeout = TimeSpan.FromSeconds(90));
 builder.Services.AddHttpClient<GoogleCalendarClient>(c => c.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddScoped<ConversationService>();
+builder.Services.AddScoped<WhatsAppOnboarding>();
 builder.Services.AddHostedService<AgentWorker>();
 builder.Services.AddHostedService<CalendarWorker>();
 builder.Services.AddProblemDetails();

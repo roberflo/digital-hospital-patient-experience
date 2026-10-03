@@ -72,16 +72,8 @@ public static class WhatsAppEndpoints
             var row = new Channel { TenantId = t.Id, Name = Rules.Required(b.Name), PhoneNumberId = b.PhoneNumberId, DoctorId = b.DoctorId, Coexistence = coexistence, Enabled = false, KapsoCustomerId = customer }; db.Add(row); CrmEndpoints.Audit(db, t, u, "channel.created", row.Id); await db.SaveChangesAsync(); return Results.Ok(row);
         });
         api.MapPatch("/channels/{id:guid}", async (Guid id, ChannelState b, CrmDb db, CurrentUser u, TenantScope t) => { u.RequireAdmin(); var row = await db.Channels.SingleOrDefaultAsync(x => x.Id == id); if (row is null) return Results.NotFound(); row.Enabled = b.Enabled; CrmEndpoints.Audit(db, t, u, "channel.enabled", id); await db.SaveChangesAsync(); return Results.Ok(row); });
-        api.MapPost("/channels/onboarding", async (CrmDb db, CurrentUser u, TenantScope t, KapsoClient k, IConfiguration c, ConversationService conversations) =>
-        {
-            u.RequireAdmin(); using var lease = await conversations.Lock(t.Id);
-            var tenant = await db.Tenants.SingleAsync(x => x.Id == t.Id);
-            var customer = tenant.KapsoCustomerId ?? c[$"Kapso:Tenants:{t.Id}:CustomerId"];
-            if (string.IsNullOrEmpty(customer)) customer = await k.EnsureCustomer(t.Id, tenant.Name);
-            tenant.KapsoCustomerId = customer;
-            CrmEndpoints.Audit(db, t, u, "channel.onboarding", t.Id); await db.SaveChangesAsync();
-            return await k.Platform(HttpMethod.Post, $"customers/{Uri.EscapeDataString(customer)}/setup_links", new { setup_link = new { } });
-        });
+        api.MapPost("/channels/onboarding", async (WhatsAppOnboarding onboarding, CancellationToken ct) => await onboarding.Start(ct));
+        api.MapPost("/channels/sync", async (WhatsAppOnboarding onboarding, CancellationToken ct) => await onboarding.Sync(ct));
         app.MapPost("/webhooks/kapso", Receive);
     }
     static async Task<IResult> Receive(HttpContext ctx, CrmDb db, TenantScope scope, IConfiguration config)

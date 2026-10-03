@@ -17,7 +17,6 @@ export async function POST(req: Request) {
     const events = decodeEvents(
       JSON.parse(raw.toString('utf8')),
       req.headers.get('x-webhook-event'),
-      process.env.KAPSO_PHONE_NUMBER_ID ?? '',
     );
     const key = req.headers.get('x-idempotency-key');
     if (key && key.length > 200) return new Response(null, { status: 400 });

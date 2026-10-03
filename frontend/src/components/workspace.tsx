@@ -2106,33 +2106,18 @@ function SettingsView({ me }: { me: Me }) {
             <div className="card-toolbar">
               <h2>Números de WhatsApp</h2>
               <div className="button-group">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={async () => {
-                    try {
-                      const r = await api<Record<string, unknown>>(
-                        '/channels/onboarding',
-                        'POST',
-                        {},
-                      );
-                      const d = (r.data ?? r) as Record<string, unknown>;
-                      const link = (d.url ?? d.setup_url) as string;
-                      if (link && new URL(link).protocol === 'https:')
-                        window.open(link, '_blank', 'noopener,noreferrer');
-                      else toast.error('No se obtuvo un enlace válido de conexión.');
-                    } catch (e) {
-                      toast.error((e as Error).message);
-                    }
-                  }}
-                >
-                  <ExternalLink />
-                  Conectar con Kapso
+                <Button asChild size="sm">
+                  <a href="/whatsapp">
+                    <Plus />
+                    Agregar mi número
+                  </a>
                 </Button>
-                <Button size="sm" onClick={() => setChannel(true)}>
-                  <Plus />
-                  Registrar número
-                </Button>
+                {me.role === 'platform_admin' && (
+                  <Button variant="outline" size="sm" onClick={() => setChannel(true)}>
+                    <Plus />
+                    Registro avanzado
+                  </Button>
+                )}
               </div>
             </div>
             <div className="table-scroll">

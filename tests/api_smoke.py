@@ -38,6 +38,9 @@ def webhook(payload,event='whatsapp.message.received',key=None,signature=None):
 check(call('/health/ready')[0]==200,'PostgreSQL readiness')
 check(call('/api/contacts')[0]==401,'Unauthenticated requests rejected')
 a=login('admin');b=login('other');agent=login('agent');doctor=login('doctor')
+for endpoint in ['/api/channels/onboarding','/api/channels/sync']:
+    check(call(endpoint,'POST',{},agent)[0]==403,'Agent cannot manage WhatsApp connection: '+endpoint)
+    check(call(endpoint,'POST',{},doctor)[0]==403,'Doctor cannot manage WhatsApp connection: '+endpoint)
 check(call('/api/settings',token=agent)[0]==403,'Agent cannot administer tenant')
 check(call('/api/settings',token=doctor)[0]==403,'Doctor cannot administer tenant')
 check(call('/api/me',token=a)[1]['tenant']['id']!=call('/api/me',token=b)[1]['tenant']['id'],'Distinct tenants authenticated')

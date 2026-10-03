@@ -26,13 +26,13 @@ def session(user):
 
 for endpoint in ['/api/conversations', '/api/kapso/stream']:
     try:
-        session('admin').open(base + endpoint, timeout=10)
+        session('admin').open(base + endpoint + '?phoneNumberId=' + env['KAPSO_PHONE_NUMBER_ID'], timeout=10)
         raise AssertionError('Another hospital was granted access')
     except urllib.error.HTTPError as error:
         assert error.code == 403
 
 client = session('hospital')
-result = json.load(client.open(base + '/api/conversations', timeout=15))
+result = json.load(client.open(base + '/api/conversations?phoneNumberId=' + env['KAPSO_PHONE_NUMBER_ID'], timeout=15))
 assert isinstance(result['data'], list)
 public = env['KAPSO_WEBHOOK_URL']
 assert public.startswith('https://') and public.endswith('/webhooks/kapso')
@@ -43,7 +43,7 @@ for path in ['/', '/api/conversations', '/_inbox_events']:
     except urllib.error.HTTPError as error:
         assert error.code == 404
 
-with client.open(base + '/api/kapso/stream', timeout=15) as stream:
+with client.open(base + '/api/kapso/stream?phoneNumberId=' + env['KAPSO_PHONE_NUMBER_ID'], timeout=15) as stream:
     assert stream.headers['content-type'] == 'text/event-stream'
     assert stream.readline().startswith(b'retry:')
     marker = str(uuid.uuid4())

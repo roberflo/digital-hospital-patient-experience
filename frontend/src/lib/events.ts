@@ -50,7 +50,7 @@ export const eventNames = new Set([
   'whatsapp.conversation.created',
   'whatsapp.conversation.ended',
 ]);
-export function decodeEvents(value: unknown, header: string | null, number: string): InboxEvent[] {
+export function decodeEvents(value: unknown, header: string | null, number?: string): InboxEvent[] {
   if (!value || typeof value !== 'object') throw new Error('Invalid payload');
   const body = value as Record<string, unknown>;
   const event = header || String(body.type || '');
@@ -61,10 +61,17 @@ export function decodeEvents(value: unknown, header: string | null, number: stri
     if (!item || typeof item !== 'object') throw new Error('Invalid item');
     const payload = item as InboxEvent['payload'];
     const phone = payload.phone_number_id ?? payload.conversation?.phone_number_id;
-    if (phone !== number) return [];
+    if (typeof phone !== 'string' || !/^\d+$/.test(phone) || (number && phone !== number))
+      return [];
+    if (
+      payload.phone_number_id &&
+      payload.conversation?.phone_number_id &&
+      payload.phone_number_id !== payload.conversation.phone_number_id
+    )
+      return [];
     const conversationId =
       payload.conversation?.id ?? payload.message?.kapso?.whatsapp_conversation_id;
-    return [{ event, phoneNumberId: number, conversationId, payload }];
+    return [{ event, phoneNumberId: phone, conversationId, payload }];
   });
 }
 export async function readBody(req: Request, limit = 2 * 1024 * 1024) {

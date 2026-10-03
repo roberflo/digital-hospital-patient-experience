@@ -23,8 +23,8 @@ las variables exclusivamente al servidor:
 El número debe pertenecer al hospital del usuario en `/api/channels`. Se reutiliza
 la validación de sesión, renovación de tokens y comprobación de membresía del BFF.
 No basta con tener una sesión de cualquier hospital. La API verifica también que
-cada conversación solicitada pertenece a ese número. Actualmente esta vista usa
-un número configurado por despliegue; la bandeja CRM conserva sus múltiples canales.
+cada conversación solicitada pertenece a ese número. La bandeja permite elegir entre los números del hospital; cada API y stream SSE
+valida el número seleccionado contra los canales autorizados.
 
 ## Webhook
 
@@ -99,3 +99,28 @@ Los tests del proveedor usan mocks y nunca envían WhatsApps reales.
 La prueba opt-in `python3 tests/kapso_live.py` comprueba el aislamiento entre
 hospitales y el recorrido público firmado hasta SSE; requiere la clínica sintética
 local y el túnel autorizado. No envía WhatsApps ni crea mensajes de pacientes.
+
+## Conectar números sin IDs ni claves
+
+Abrir `/whatsapp` desde **Agregar mi número** en la bandeja o en Configuración.
+Sólo administradores de negocio/plataforma pueden iniciar y verificar conexiones.
+El backend crea o recupera un customer Kapso exclusivo del tenant y genera un
+setup link en español para números existentes, con Coexistence o dedicado y
+facturación Meta `customer_managed`. No compra ni aprovisiona otro número.
+El usuario completa personalmente los pasos de Meta en la página segura de Kapso.
+
+Al volver, Recepción consulta los números CONNECTED del customer autenticado,
+comprueba también su propiedad en cada resultado y los agrega de forma idempotente.
+No confía en IDs ni estados incluidos en el redirect. Crea el webhook firmado de
+cada número para `KAPSO_WEBHOOK_URL` usando el secreto del servidor; si falla,
+muestra una advertencia y permite reintentar con **Verificar conexión**.
+Los nuevos canales no activan el agente automático. La bandeja manual permite
+seleccionarlos respetando permisos y ventana de 24h.
+
+`FRONTEND_URL` debe contener la URL HTTPS pública de Recepción para retornar
+automáticamente desde Kapso a `/whatsapp`. En localhost el enlace no configura
+redirect y el usuario vuelve a la pestaña; se consulta al recuperar el foco y cada
+15 segundos durante hasta 20 comprobaciones. También se puede verificar a mano.
+No se expone una ruta pública nueva en el túnel: se reutiliza `/webhooks/kapso`.
+La sincronización necesita que la aplicación esté abierta o que el administrador
+pulse Verificar conexión; no requiere un webhook de ciclo de vida del proyecto.

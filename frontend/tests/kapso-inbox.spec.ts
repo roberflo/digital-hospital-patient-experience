@@ -22,6 +22,13 @@ const inbound = {
   kapso: { direction: 'inbound' },
 };
 async function login(page: Page) {
+  await page.route('**/api/crm/channels', (route) =>
+    route.fulfill({
+      json: [
+        { id: 'fixture-channel', name: 'WhatsApp de prueba', phoneNumberId: base.phone_number_id },
+      ],
+    }),
+  );
   await page.goto('/login');
   await page.getByLabel('Contraseña', { exact: true }).fill('demo-recepcion');
   await page.getByRole('button', { name: 'Entrar al espacio' }).click();
@@ -76,7 +83,7 @@ test('history supports nullable phones, older pages, search, filters and mobile 
     status: 'ended',
     kapso: {},
   };
-  await page.route('**/api/conversations', (route) =>
+  await page.route('**/api/conversations?*', (route) =>
     route.fulfill({ json: { data: [base, nullable], manualSendEnabled: true } }),
   );
   await page.route('**/api/conversations/*/messages*', (route) => {
@@ -130,7 +137,7 @@ test('optimistic send reconciles SSE and ACK without duplicate or regressed chec
 }, info) => {
   await realtime(page);
   await login(page);
-  await page.route('**/api/conversations', (route) =>
+  await page.route('**/api/conversations?*', (route) =>
     route.fulfill({ json: { data: [base], manualSendEnabled: true } }),
   );
   await page.route('**/api/conversations/*/messages*', (route) =>
@@ -142,7 +149,7 @@ test('optimistic send reconciles SSE and ACK without duplicate or regressed chec
     text: { body: 'Estamos atendiendo\nhasta las cinco' },
     kapso: { direction: 'outbound', status: 'sent' },
   };
-  await page.route('**/api/messages', async (route) => {
+  await page.route('**/api/messages?*', async (route) => {
     expect(route.request().postDataJSON()).toEqual({
       conversationId: id,
       to: base.phone_number,
@@ -178,7 +185,7 @@ test('closed 24h window blocks composer even when manual send is configured', as
   await realtime(page);
   await login(page);
   const expired = { ...base, kapso: { ...base.kapso, last_inbound_at: '2020-01-01T00:00:00Z' } };
-  await page.route('**/api/conversations', (route) =>
+  await page.route('**/api/conversations?*', (route) =>
     route.fulfill({ json: { data: [expired], manualSendEnabled: true } }),
   );
   await page.route('**/api/conversations/*/messages*', (route) =>
@@ -193,7 +200,7 @@ test('closed 24h window blocks composer even when manual send is configured', as
 test('incoming SSE events add one unread badge and deduplicate retries', async ({ page }) => {
   await realtime(page);
   await login(page);
-  await page.route('**/api/conversations', (route) =>
+  await page.route('**/api/conversations?*', (route) =>
     route.fulfill({ json: { data: [base], manualSendEnabled: true } }),
   );
   await page.route('**/api/conversations/*/messages*', (route) =>
@@ -241,4 +248,51 @@ test('list pagination retains its cursor across fallback polling', async ({ page
   await page.clock.fastForward(16000);
   await page.getByRole('button', { name: 'Cargar más conversaciones' }).click();
   await expect.poll(() => cursors.includes('third')).toBe(true);
+});
+
+test('switching hospital number clears the open chat and scopes provider requests', async ({
+  page,
+}) => {
+  await realtime(page);
+  await login(page);
+  await page.route('**/api/crm/channels', (route) =>
+    route.fulfill({
+      json: [
+        { id: 'one', name: 'Recepción general', phoneNumberId: base.phone_number_id },
+        { id: 'two', name: 'Doctor de prueba', phoneNumberId: '1234567890' },
+      ],
+    }),
+  );
+  await page.route('**/api/conversations?*', (route) => {
+    const number = new URL(route.request().url()).searchParams.get('phoneNumberId');
+    return route.fulfill({
+      json: {
+        data:
+          number === base.phone_number_id
+            ? [base]
+            : [
+                {
+                  ...base,
+                  id: second,
+                  phone_number_id: number,
+                  kapso: { contact_name: 'Paciente del doctor' },
+                },
+              ],
+        manualSendEnabled: true,
+      },
+    });
+  });
+  await page.route('**/api/conversations/*/messages*', (route) =>
+    route.fulfill({ json: { conversation: base, data: [inbound] } }),
+  );
+  await page.goto('/inbox');
+  await page.getByRole('button', { name: 'Abrir conversación con Paciente de prueba' }).click();
+  await expect(page.getByRole('heading', { name: 'Paciente de prueba' })).toBeVisible();
+  if (test.info().project.name === 'mobile')
+    await page.getByRole('button', { name: 'Volver a conversaciones' }).click();
+  await page.getByLabel('Número de WhatsApp', { exact: true }).selectOption('1234567890');
+  await expect(
+    page.getByRole('button', { name: 'Abrir conversación con Paciente del doctor' }),
+  ).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Paciente de prueba' })).toHaveCount(0);
 });
