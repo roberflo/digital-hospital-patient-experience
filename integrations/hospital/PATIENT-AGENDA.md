@@ -1,6 +1,6 @@
 # Consulta de citas por paciente
 
-Cambio aplicado en el checkout Hospital y preservado en `patient-agenda.patch`. La publicación se prepara desde una copia aislada de origin/main para preservar el índice compartido.
+Cambio aplicado en el checkout Hospital y preservado en `patient-agenda.patch`. Publicado en Hospital `main`, commit `ad441e265c9ec268c9659bca5bf4630bb39a4c48`, desde una copia aislada de origin/main que preservó el índice compartido. Recepción integra el cambio en `6fcfa44610c23a9d2b07b195ce38f5faf2a9be05`.
 
 - `GET /v1/agenda/patients/{patientId}?from=YYYY-MM-DD&to=YYYY-MM-DD`
 - Hasta 31 días, incluye canceladas. Proyección: appointmentId, clinicianId, clinicianName, scheduledStart (offset hospital), durationMinutes, status.
