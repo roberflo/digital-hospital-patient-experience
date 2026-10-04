@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import useSWR, { useSWRConfig } from 'swr';
 import { AlertTriangle, CheckCircle2, Circle, Loader2, RefreshCw, Wrench } from 'lucide-react';
 import { toast } from 'sonner';
@@ -14,6 +14,7 @@ import {
   type StepId,
   type StepState,
 } from '@/lib/first-steps';
+import { refreshHospitalIdentity } from '@/lib/hospital-identity';
 import { Button } from './ui/button';
 import { CopyAccessLink, type Workload } from './team-workspace';
 import { useWhatsAppConnect, WhatsAppLinkFlow } from './whatsapp-link-flow';
@@ -68,7 +69,8 @@ export function FirstSteps({ me, onNavigate }: { me: Me; onNavigate: (view: stri
   const check = useSWR<{ connected: boolean }>(
     connection.data?.configured ? ['/hospital/connection/check', me.tenant.id] : null,
     post<{ connected: boolean }>,
-    once,
+    // The check syncs name and zone from Hospital: repaint every read that shows them, once.
+    { ...once, onSuccess: refreshHospitalIdentity },
   );
   const installation = useSWR<Installation>(admin ? '/platform/installation' : null, fetcher);
   const channels = useSWR<StepChannel[]>(admin ? '/channels' : null, fetcher);
@@ -86,12 +88,6 @@ export function FirstSteps({ me, onNavigate }: { me: Me; onNavigate: (view: stri
     Promise.all([channels.mutate(), reception.mutate()]),
   );
   const [busy, setBusy] = useState(false);
-  const checked = check.data;
-  const refreshConnection = connection.mutate;
-  useEffect(() => {
-    // The check syncs name and zone from Hospital; show what it left, not what was there before.
-    if (checked) void refreshConnection();
-  }, [checked, refreshConnection]);
 
   const steps = firstSteps({
     me,

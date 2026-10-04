@@ -5,6 +5,7 @@ import { signIn } from 'next-auth/react';
 import { HeartPulse, Search, CheckCircle2, RefreshCw, ArrowUpRight } from 'lucide-react';
 import { toast } from 'sonner';
 import { api, fetcher, type Contact, type Me } from '@/lib/api';
+import { refreshHospitalIdentity } from '@/lib/hospital-identity';
 import { Button } from './ui/button';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from './ui/dialog';
 
@@ -28,7 +29,12 @@ export function HospitalConnection() {
   } = useSWR<{ connected: boolean }>(
     data?.configured ? ['/hospital/connection/check', data.hospital.id] : null,
     ([path]: [string, string]) => api(path, 'POST', {}),
-    { revalidateOnFocus: false, shouldRetryOnError: false, dedupingInterval: 30000 },
+    {
+      revalidateOnFocus: false,
+      shouldRetryOnError: false,
+      dedupingInterval: 30000,
+      onSuccess: refreshHospitalIdentity,
+    },
   );
   const connected = !!health?.connected && !healthError;
   return (
