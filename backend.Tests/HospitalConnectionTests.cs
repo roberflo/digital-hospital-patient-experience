@@ -50,6 +50,16 @@ public class HospitalConnectionTests
     [InlineData("https://hospital-api.example.com?redirect=elsewhere")]
     public void UntrustedDestinationsAreRejectedBeforeSendingCredentials(string url)
         => Assert.Throws<ArgumentException>(()=>HospitalConnectionRules.Validate(new(url,"https://hospital.example.com","recepcion","synthetic-secret"),Config()));
+    static IConfiguration WithPublic(string? url) => new ConfigurationBuilder().AddConfiguration(Config()).AddInMemoryCollection(new Dictionary<string,string?>{["HOSPITAL_PUBLIC_URL"]=url}).Build();
+    [Fact] public void PublicUrlMustMatchTheInstallationsWhenDefined()
+    {
+        var config=WithPublic("https://hospital.example.com");
+        Assert.Throws<ArgumentException>(()=>HospitalConnectionRules.Validate(new("http://hospital-api:8080","https://look-alike.example.net","recepcion","synthetic-secret"),config));
+        Assert.Throws<ArgumentException>(()=>HospitalConnectionRules.Validate(new("http://hospital-api:8080","https://hospital.example.com:8443","recepcion","synthetic-secret"),config));
+        Assert.Equal("https://hospital.example.com",HospitalConnectionRules.Validate(new("http://hospital-api:8080","https://hospital.example.com/","recepcion","synthetic-secret"),config)["PublicUrl"]);
+    }
+    [Fact] public void AnyHttpsPublicUrlIsAcceptedWhenTheInstallationDefinesNone()
+        => Assert.Equal("https://other.example.org",HospitalConnectionRules.Validate(new("http://hospital-api:8080","https://other.example.org","recepcion","synthetic-secret"),WithPublic(null))["PublicUrl"]);
     [Fact] public void PublicHospitalRequiresHttpsInProduction()
         => Assert.Throws<ArgumentException>(()=>HospitalConnectionRules.Validate(new("https://hospital-api.example.com","http://hospital.example.com","recepcion","synthetic-secret"),Config()));
     [Fact] public async Task PatientSearchHasNarrowProjectionAndEscapedTerm()

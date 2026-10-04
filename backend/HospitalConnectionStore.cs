@@ -49,6 +49,8 @@ public static class HospitalConnectionRules
         var allowed=(config["HOSPITAL_ALLOWED_API_ORIGINS"]??"").Split(',',StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries);
         if(!allowed.Any(x=>Uri.TryCreate(x,UriKind.Absolute,out var uri)&&uri.GetLeftPart(UriPartial.Authority)==api.GetLeftPart(UriPartial.Authority)))
             throw new ArgumentException("Esta API no está habilitada para la conexión. Añádela a HOSPITAL_ALLOWED_API_ORIGINS en Easypanel.");
+        if(config["HOSPITAL_PUBLIC_URL"] is {Length:>0} fixedPublic && (!Uri.TryCreate(fixedPublic,UriKind.Absolute,out var fixedUri) || fixedUri.GetLeftPart(UriPartial.Authority)!=web.GetLeftPart(UriPartial.Authority)))
+            throw new ArgumentException("La dirección pública de Hospital debe coincidir con la configurada para esta instalación (HOSPITAL_PUBLIC_URL).");
         var development=config["ASPNETCORE_ENVIRONMENT"]=="Development";
         if(!development && web.Scheme!="https") throw new ArgumentException("La dirección pública de Hospital debe usar HTTPS.");
         var issuer=config["KEYCLOAK_INTERNAL_ISSUER"]??config["Auth:Authority"];

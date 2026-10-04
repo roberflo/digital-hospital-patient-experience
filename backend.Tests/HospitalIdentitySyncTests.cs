@@ -92,6 +92,40 @@ public sealed class HospitalIdentitySyncTests : IAsyncLifetime
         CrmEndpoints.ApplySettings(free, input, false);
         Assert.Equal("Manual", free.Name); Assert.Equal("America/Mexico_City", free.TimeZone);
     }
+    HospitalClient SlowClient()
+    {
+        var token = "x." + Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { tenant_id = scope.Id, exp = DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds() }))).TrimEnd('=').Replace('+', '-').Replace('/', '_') + ".x";
+        var cfg = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { [$"Hospital:Tenants:{scope.Id}:BaseUrl"] = "https://hospital.example.com", [$"Hospital:Tenants:{scope.Id}:AccessToken"] = token }).Build();
+        return new HospitalClient(new HttpClient(new Hang()), cfg);
+    }
+    [Fact] public async Task SlowHospitalIsSwallowedAtTheDeadlineAndLeavesTenantUnchanged()
+    {
+        Assert.False(await HospitalIdentitySync.Run(db, scope, new CurrentUser(), SlowClient(), NullLogger.Instance, default, TimeSpan.FromMilliseconds(100)));
+        Assert.Equal("Hospital · configura tu nombre", (await Row(scope.Id)).Name);
+    }
+    [Fact] public async Task HttpClientTimeoutIsSwallowed()
+        => Assert.False(await Sync(Client(_ => throw new TaskCanceledException("timeout"), out _)));
+    [Fact] public async Task CallerCancellationStillPropagates()
+    {
+        using var cts = new CancellationTokenSource(); cts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => HospitalIdentitySync.Run(db, scope, new CurrentUser(), SlowClient(), NullLogger.Instance, cts.Token, TimeSpan.FromSeconds(3)));
+    }
+    [Fact] public async Task SettingsFreezeNameOnlyWhenHospitalAnswersWithOne()
+    {
+        var row = new Tenant { Id = scope.Id, Name = "Hospital · configura tu nombre", TimeZone = "America/El_Salvador" };
+        Assert.False(await CrmEndpoints.HospitalOwnsIdentity(row, SlowClient(), TimeSpan.FromMilliseconds(100), default));
+        Assert.False(await CrmEndpoints.HospitalOwnsIdentity(row, Client(_ => throw new HttpRequestException("down"), out _), TimeSpan.FromSeconds(3), default));
+        Assert.False(await CrmEndpoints.HospitalOwnsIdentity(row, Client(_ => Clinic(null, "America/Mexico_City"), out _), TimeSpan.FromSeconds(3), default));
+        Assert.Equal("Hospital · configura tu nombre", row.Name);
+        CrmEndpoints.ApplySettings(row, new SettingsInput("Manual", "g", "America/Mexico_City", false, null), false);
+        Assert.Equal("Manual", row.Name);
+        Assert.True(await CrmEndpoints.HospitalOwnsIdentity(row, Client(_ => Clinic("Hospital Sintético", "America/Mexico_City"), out _), TimeSpan.FromSeconds(3), default));
+        Assert.Equal("Hospital Sintético", row.Name);
+    }
+    sealed class Hang : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) { await Task.Delay(Timeout.Infinite, ct); return new(HttpStatusCode.OK); }
+    }
     sealed class Handler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) => Task.FromResult(respond(request));

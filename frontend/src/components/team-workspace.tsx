@@ -211,8 +211,8 @@ export function TeamWorkspace({
           </div>
         )}
         <p className="team-help">
-          Supervisores y administradores pueden repartir conversaciones individualmente o en lote.
-          Cada recepcionista puede tomar las que no tienen responsable y transferir las suyas. Los
+          Los administradores pueden repartir conversaciones individualmente o en lote. Cada
+          recepcionista puede tomar las que no tienen responsable y transferir las suyas. Los
           cambios quedan en el historial del cliente.
         </p>
       </section>

@@ -5,11 +5,14 @@ public static class HospitalIdentitySync
 {
     /// <summary>Best effort: copies Hospital's display name and time zone onto the tenant row. Writes
     /// (and audits) only when something changed; never throws because Hospital could not answer.</summary>
-    public static async Task<bool> Run(CrmDb db, TenantScope t, CurrentUser u, HospitalClient h, ILogger log, CancellationToken ct = default)
+    public static async Task<bool> Run(CrmDb db, TenantScope t, CurrentUser u, HospitalClient h, ILogger log, CancellationToken ct = default, TimeSpan? timeout = null)
     {
         try
         {
-            var clinic = await h.GetClinicAsync(t.Id, ct);
+            // The deadline bounds only the Hospital call; our own DB work keeps the caller's token.
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            if (timeout is { } limit) deadline.CancelAfter(limit);
+            var clinic = await h.GetClinicAsync(t.Id, deadline.Token);
             var tenant = await db.Tenants.SingleOrDefaultAsync(x => x.Id == t.Id, ct);
             if (tenant is null) return false;
             var changed = false;
@@ -20,7 +23,8 @@ public static class HospitalIdentitySync
             await db.SaveChangesAsync(ct);
             return true;
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        // HttpClient.Timeout and our deadline surface as OperationCanceledException: only the caller's own cancellation propagates.
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
             log.LogWarning("Hospital identity sync skipped for tenant {Tenant}: {Type}", t.Id, ex.GetType().Name);
             return false;

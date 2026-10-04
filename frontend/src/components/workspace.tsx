@@ -399,9 +399,16 @@ export default function Workspace() {
             <button
               aria-label="Cerrar sesión"
               onClick={async () => {
-                const end = await fetch('/api/session/end').then((r) => r.json());
-                await signOut({ redirect: false });
-                window.location.href = end.url;
+                // Any failure still ends the local session and lands on /login.
+                let url = '/login';
+                try {
+                  const end = await fetch('/api/session/end').then((r) => r.json());
+                  if (typeof end?.url === 'string') url = end.url;
+                } catch {}
+                try {
+                  await signOut({ redirect: false });
+                } catch {}
+                window.location.href = url;
               }}
             >
               <LogOut size={17} />
@@ -2086,7 +2093,7 @@ function SettingsView({ me }: { me: Me }) {
                 <h2>Tu hospital y su guía de atención</h2>
               </div>
               <form
-                key={data.name + data.agentEnabled}
+                key={data.name + data.timeZone + data.agentEnabled}
                 className="settings-form"
                 onSubmit={async (e) => {
                   e.preventDefault();

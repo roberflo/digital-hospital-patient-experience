@@ -23,7 +23,7 @@ public static class TeamEndpoints
         api.MapPost("/conversations/assign", Assign);
     }
 
-    // Attendants can hand off their own or unassigned work. Supervisors can redistribute any work.
+    // Attendants can hand off their own or unassigned work. Administrators can redistribute any work.
     public static void RequireEditable(Conversation conversation, CurrentUser user)
     {
         if (!user.Admin && conversation.AssignedTo is {} owner && owner != user.Subject)

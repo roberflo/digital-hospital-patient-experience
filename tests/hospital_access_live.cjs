@@ -40,6 +40,9 @@ const settle = async page => { await page.waitForLoadState('networkidle').catch(
   await clinic.waitForURL(u => !u.pathname.includes('/login')); await settle(clinic);
   await clinic.locator('[data-testid=account-trigger]').first().click();
   const door = clinic.locator('[data-testid=account-recepcion]');
+  await clinic.locator('[data-testid=account-panel]').waitFor();
+  // The door is optional in Hospital (RECEPCION_URL unset, or a web build without it): say so, loudly.
+  if (!(await door.count())) { console.log('SKIP Hospital has no «Recepción» door in this build/configuration — reverse direction not checked'); await browser.close(); return; }
   const href = await door.getAttribute('href');
   if (!/^http:\/\/localhost:3215\/login\?as=[0-9a-f-]{36}$/.test(href || '')) throw Error('Hospital door: unexpected link');
   await front.goto(href);

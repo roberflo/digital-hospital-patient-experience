@@ -19,6 +19,8 @@ public static class Identity
         var roles = new List<string>();
         var realm = user.FindFirst("realm_access")?.Value;
         if (realm is not null) { try { using var j = JsonDocument.Parse(realm); if (j.RootElement.ValueKind == JsonValueKind.Object && j.RootElement.TryGetProperty("roles", out var a) && a.ValueKind == JsonValueKind.Array) roles.AddRange(a.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!)); } catch (JsonException) { return null; } }
+        // Hospital's per-tenant service accounts hold Recepción + reception-agent: a machine is never a teammate.
+        if (roles.Contains("reception-agent") || user.FindFirst("preferred_username")?.Value.StartsWith("service-account-", StringComparison.Ordinal) == true) return null;
         if (roles.Contains("Administrador")) return "admin";
         if (roles.Any(r => r is "Médicos" or "Odontólogos" or "Nutricionistas")) return "doctor";
         if (roles.Any(r => r is "Recepción" or "Admisión")) return "agent";

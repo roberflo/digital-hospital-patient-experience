@@ -10,6 +10,9 @@ export async function GET(req: NextRequest) {
   if (!token?.idToken || !issuer) return NextResponse.json({ url: '/login' });
   const url = new URL(`${issuer}/protocol/openid-connect/logout`);
   url.searchParams.set('id_token_hint', token.idToken);
-  url.searchParams.set('post_logout_redirect_uri', `${process.env.NEXTAUTH_URL}/login`);
+  url.searchParams.set(
+    'post_logout_redirect_uri',
+    `${process.env.NEXTAUTH_URL || req.nextUrl.origin}/login`,
+  );
   return NextResponse.json({ url: url.toString() });
 }

@@ -17,6 +17,7 @@ jobs:
       # here needs no identity provider; tests/api_smoke.py and the browser suite run locally
       # against the Hospital stack (README, «Verificación») until CI can bring that realm up.
       - run: python3 scripts/init-dev.py
+      - run: docker compose build recepcion-api web
       - run: docker compose up -d db
       - run: scripts/test-backend.sh
       - run: npm ci --prefix frontend

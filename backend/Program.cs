@@ -62,7 +62,7 @@ app.Use(async (ctx, next) =>
         if (ctx.User.Identity?.IsAuthenticated != true) { ctx.Response.StatusCode = 401; return; }
         if (!await Identity.Bind(ctx, ctx.RequestServices.GetRequiredService<CrmDb>(), ctx.RequestServices.GetRequiredService<TenantScope>(), ctx.RequestServices.GetRequiredService<CurrentUser>(), config)) { ctx.Response.StatusCode = 403; return; }
         // First sign-in of a hospital: take its real name and zone from Hospital, best effort.
-        if (ctx.Items.ContainsKey("tenant-created")) { var sp = ctx.RequestServices; await HospitalIdentitySync.Run(sp.GetRequiredService<CrmDb>(), sp.GetRequiredService<TenantScope>(), sp.GetRequiredService<CurrentUser>(), sp.GetRequiredService<HospitalClient>(), sp.GetRequiredService<ILogger<HospitalClient>>(), ctx.RequestAborted); }
+        if (ctx.Items.ContainsKey("tenant-created")) { var sp = ctx.RequestServices; await HospitalIdentitySync.Run(sp.GetRequiredService<CrmDb>(), sp.GetRequiredService<TenantScope>(), sp.GetRequiredService<CurrentUser>(), sp.GetRequiredService<HospitalClient>(), sp.GetRequiredService<ILogger<HospitalClient>>(), ctx.RequestAborted, TimeSpan.FromSeconds(3)); }
     }
     await next();
 });

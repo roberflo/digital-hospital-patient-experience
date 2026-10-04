@@ -79,15 +79,31 @@ public static class CrmEndpoints
             u.RequireAdmin(); var tenant = await db.Tenants.SingleAsync(x => x.Id == t.Id);
             return new { tenant.Name, tenant.Guide, tenant.TimeZone, tenant.AgentEnabled, tenant.GoogleCalendarId, googleConnected = tenant.GoogleRefreshToken != null, hospitalConfigured = h.IsConfigured(t.Id), kapsoConfigured = !string.IsNullOrEmpty(c["KAPSO_API_KEY"]), aiConfigured = !string.IsNullOrEmpty(c["NVIDIA_API_KEY"]), sendEnabled = c["SEND_ENABLED"] == "true", manualSendEnabled = c["SEND_ENABLED"] == "true" || c["KAPSO_MANUAL_SEND_ENABLED"] == "true", aiModel = c["AI_MODEL"] ?? "nvidia/nemotron-3-super-120b-a12b" };
         });
-        api.MapPut("/settings", async (SettingsInput b, CrmDb db, TenantScope t, CurrentUser u, HospitalClient h) =>
+        api.MapPut("/settings", async (SettingsInput b, CrmDb db, TenantScope t, CurrentUser u, HospitalClient h, CancellationToken ct) =>
         {
             u.RequireAdmin(); if (b.Guide.Length > 30000) throw new ArgumentException("Guía demasiado extensa");
             try { TimeZoneInfo.FindSystemTimeZoneById(b.TimeZone); } catch (TimeZoneNotFoundException) { throw new ArgumentException("Zona horaria inválida"); }
-            var row = await db.Tenants.SingleAsync(x => x.Id == t.Id); ApplySettings(row, b, h.IsConfigured(t.Id));
+            var row = await db.Tenants.SingleAsync(x => x.Id == t.Id);
+            // Hospital owns name and zone only if it answers with a valid name right now; otherwise the admin's edit stands.
+            var owned = await HospitalOwnsIdentity(row, h, TimeSpan.FromSeconds(3), ct);
+            ApplySettings(row, b, owned);
             Audit(db, t, u, "settings.updated", t.Id); await db.SaveChangesAsync(); return Results.Ok();
         });
         api.MapGet("/audit", async (CrmDb db, CurrentUser u) => { u.RequireAdmin(); return await db.Audits.OrderByDescending(x => x.CreatedAt).Take(200).ToListAsync(); });
         api.MapGet("/jobs", async (CrmDb db, CurrentUser u) => { u.RequireAdmin(); return await db.Jobs.OrderByDescending(x => x.CreatedAt).Take(100).ToListAsync(); });
+    }
+    /// <summary>True when Hospital answers within the deadline with a valid name; its name (and zone, if valid) are then copied onto the row.</summary>
+    public static async Task<bool> HospitalOwnsIdentity(Tenant row, HospitalClient h, TimeSpan timeout, CancellationToken ct)
+    {
+        try
+        {
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct); deadline.CancelAfter(timeout);
+            var clinic = await h.GetClinicAsync(row.Id, deadline.Token);
+            if (clinic.DisplayName is null) return false;
+            row.Name = clinic.DisplayName; if (clinic.TimeZone is not null) row.TimeZone = clinic.TimeZone;
+            return true;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested) { return false; }
     }
     // A connected hospital's name and zone belong to Hospital; a manual edit would be overwritten at the next sync.
     public static void ApplySettings(Tenant row, SettingsInput b, bool hospitalConnected)

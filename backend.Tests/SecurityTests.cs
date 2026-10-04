@@ -22,6 +22,13 @@ public sealed class SecurityTests {
     [Theory][InlineData("Administrador","admin")][InlineData("Médicos","doctor")][InlineData("Odontólogos","doctor")][InlineData("Nutricionistas","doctor")][InlineData("Recepción","agent")][InlineData("Admisión","agent")]
     [InlineData("Enfermería",null)][InlineData("reception-agent",null)][InlineData("platform_admin",null)][InlineData("supervisor",null)][InlineData("Supervisor",null)][InlineData("admin",null)][InlineData("agent",null)][InlineData("doctor",null)]
     public void OnlyHospitalRolesMap(string hospitalRole,string? expected){var p=new ClaimsPrincipal(new ClaimsIdentity([new Claim("realm_access","{\"roles\":[\""+hospitalRole+"\"]}"),new Claim("role","admin")],"test"));Assert.Equal(expected,Identity.MapRole(p));}
+    [Theory][InlineData("Recepción","reception-agent",null,null)][InlineData("Administrador","reception-agent",null,null)][InlineData("Recepción",null,"service-account-x",null)][InlineData("Recepción",null,"ana","agent")]
+    public void ServiceAccountsNeverMapToARole(string role,string? extraRole,string? username,string? expected)
+    {
+        var roles=string.Join(",",new[]{role,extraRole}.Where(x=>x is not null).Select(x=>"\""+x+"\""));
+        var claims=new List<Claim>{new("realm_access","{\"roles\":["+roles+"]}")}; if(username is not null)claims.Add(new("preferred_username",username));
+        Assert.Equal(expected,Identity.MapRole(new ClaimsPrincipal(new ClaimsIdentity(claims,"test"))));
+    }
     [Fact]public void ClinicalRoleMapsButDoesNotBecomeAdmin(){var p=new ClaimsPrincipal(new ClaimsIdentity([new Claim("realm_access","{\"roles\":[\"Médicos\"]}")],"test"));Assert.Equal("doctor",Identity.MapRole(p));Assert.False(new CurrentUser{Role="doctor"}.Admin);}
     [Fact]public void CalendarIdsAreStableAndTenantBound(){var a=Guid.NewGuid();var b=Guid.NewGuid();var appointment=Guid.NewGuid();Assert.Equal(GoogleCalendarClient.EventId(a,appointment),GoogleCalendarClient.EventId(a,appointment));Assert.NotEqual(GoogleCalendarClient.EventId(a,appointment),GoogleCalendarClient.EventId(b,appointment));Assert.Matches("^[0-9a-f]{64}$",GoogleCalendarClient.EventId(a,appointment));}
 }
