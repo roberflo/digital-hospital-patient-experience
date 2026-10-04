@@ -22,11 +22,12 @@ public sealed class KapsoClient(HttpClient http, IConfiguration config)
         if (body is not null) req.Content = JsonContent.Create(body);
         using var res = await http.SendAsync(req, ct); res.EnsureSuccessStatusCode(); return await res.Content.ReadFromJsonAsync<JsonElement>(ct);
     }
-    public async Task<string> Send(string number, string phone, string body, string? mediaId = null, string type = "text", CancellationToken ct = default, bool manual = false)
+    public async Task<string> Send(string number, string phone, string body, string? mediaId = null, string type = "text", CancellationToken ct = default, bool manual = false, object? interactive = null)
     {
         RequireSending(manual);
+        if (interactive is not null) type = "interactive";
         var payload = new Dictionary<string, object> { { "messaging_product", "whatsapp" }, { "to", Rules.Phone(phone) }, { "type", type } };
-        payload[type] = type == "text" ? new { body } : new Dictionary<string, object> { { "id", mediaId ?? throw new ArgumentException("Archivo requerido") } };
+        payload[type] = interactive ?? (type == "text" ? new { body } : new Dictionary<string, object> { { "id", mediaId ?? throw new ArgumentException("Archivo requerido") } });
         using var req = Request(HttpMethod.Post, $"{number}/messages"); req.Content = JsonContent.Create(payload);
         using var res = await http.SendAsync(req, ct); res.EnsureSuccessStatusCode(); var json = await res.Content.ReadFromJsonAsync<JsonElement>(ct);
         return json.GetProperty("messages")[0].GetProperty("id").GetString()!;
@@ -60,6 +61,12 @@ public sealed class KapsoClient(HttpClient http, IConfiguration config)
         req.Content=JsonContent.Create(new{messaging_product="whatsapp",to=Rules.Phone(phone),type="template",template=new{name,language=new{code=language},components=new[]{new{type="body",parameters=new[]{new{type="text",parameter_name="hospital",text=hospital},new{type="text",parameter_name="fecha",text=date},new{type="text",parameter_name="hora",text=time}}}}}});
         using var res=await http.SendAsync(req,ct);res.EnsureSuccessStatusCode();
         return (await res.Content.ReadFromJsonAsync<JsonElement>(ct)).GetProperty("messages")[0].GetProperty("id").GetString()!;
+    }
+    /// <summary>Marks the patient's message as read and shows «escribiendo…» until the next message is sent, or about 25 seconds.</summary>
+    public async Task Typing(string number, string messageId, CancellationToken ct = default)
+    {
+        using var req = Request(HttpMethod.Post, $"{number}/messages"); req.Content = JsonContent.Create(new { messaging_product = "whatsapp", status = "read", message_id = messageId, typing_indicator = new { type = "text" } });
+        using var res = await http.SendAsync(req, ct); res.EnsureSuccessStatusCode();
     }
     public bool CanSend(bool manual) => config["SEND_ENABLED"] == "true" || (manual && config["KAPSO_MANUAL_SEND_ENABLED"] == "true");
     public void RequireSending(bool manual)

@@ -41,6 +41,16 @@ El paciente escribe; el agente **responde**, **consulta** (agenda, recetas emiti
 | 21 | La consulta de horarios responde con la fecha pedida o, si no tiene horarios libres, con el primer día siguiente que sí (hasta 14 días); los horarios tomados no se ofrecen. | `AgentGuardTests.AvailabilityAnswersWithTheFirstDayThatHasFreeSlots`; eval `urgencia-003`. |
 | 23 | La primera cita de un cliente registrado en la conversación se crea como `first-visit`; las demás siguen como `follow-up`. | `AgentIntakeTests.FirstAppointmentOfARegisteredClientIsAFirstVisit`. |
 | 22 | «Contacto de emergencia» es un dato del registro, no una urgencia; el resto de la lista de urgencias no cambia. | `AgentGuardTests.EmergencyContactIsRegistrationDataNotAnEmergency`. |
+| 24 | Un botón o una fila tocados se leen como texto: los identificadores que emite el producto (`CONFIRMAR <código>`, `CITA …`, `EMERGENCIA`, `ACTIVAR RECORDATORIOS`, `BAJA`) actúan como si se hubieran escrito; cualquier otro se lee por su etiqueta visible. | `AgentInteractionTests.TappedChoiceReadsAsTheCommandOrItsLabel`, `TextAndMediaKeepTheirPreviousReading`. |
+| 25 | Toda propuesta se envía con botón «Confirmar» (lleva el mismo código que el texto) y una segunda opción; si el texto pasa de 1024 caracteres va sin botones. | `ProposalIsConfirmedWithAButton`, `ReplyTooLongForButtonsIsStillSentAsText`. |
+| 26 | A un paciente con expediente, los horarios libres le llegan como lista tocable; tocar uno crea la propuesta sin consultar al modelo. Un horario pasado o mal formado no se propone. Sin expediente no hay lista. | `FreeSlotsArriveAsAListAndTappingOneProposesItWithoutTheModel`, `StaleOrMalformedSlotIsNeverProposed`, `ContactWithoutRecordGetsNoTappableSlots`; en vivo `AgentLiveJourney.TappedSlotBooksInHospitalWithoutTheModel`. |
+| 27 | La pregunta de emergencia se contesta con botones; «No es emergencia» no se lee como urgencia. | `EmergencyQuestionIsAnsweredWithAButton`. |
+| 28 | Un saludo solo, sin respuesta del hospital en las últimas 12 horas, recibe al instante el menú (Agendar cita · Mi receta · Hablar con persona) sin llamar al modelo. | `GreetingIsAnsweredAtOnceWithTheMenu`. |
+| 29 | La cita confirmada se anuncia con su fecha y hora, y ofrece el botón «Recordarme la cita». | `BookedAppointmentIsStatedWithItsDateAndOffersReminders`. |
+| 30 | Con `KAPSO_TYPING_INDICATOR=true` el mensaje del paciente se marca leído y ve «escribiendo…» mientras el modelo trabaja; si falla, la respuesta sale igual. | `PatientSeesTypingWhileTheModelWorks`. |
+| 31 | Un solapamiento que informa Hospital sólo deriva si la agenda cuenta otra cita activa en ese horario. | `OverlapIsOnlyEscalatedWhenAnotherActiveAppointmentHoldsTheSlot`. |
+| 32 | Para un paciente con expediente, «Agendar cita» y «Mi receta» del menú se atienden sin modelo: lista de primeros horarios libres y entrega de la última receta firmada. Sin horarios publicados, o si Hospital falla, pasa a una persona. Sin expediente sigue al agente para registrarse. | `AgentInteractionTests.MenuBooksAndDeliversThePrescriptionWithoutTheModel`, `MenuWithNothingToOfferSaysSoAndReachesReception`, `MenuForSomeoneWithoutRecordGoesToTheAgent`. |
+| 33 | Una conversación que el equipo resolvió y nadie tiene asignada vuelve al agente cuando el paciente escribe de nuevo; en espera, pospuesta o con responsable, sigue con las personas. | `InboxWorkflowTests.ResolvedAndUnownedConversationReturnsToTheAgentOnANewMessage` (el test previo de responsable preservado no cambia). |
 
 ## Anti-criterios
 
@@ -84,9 +94,55 @@ No se hace: catálogo de precios, clasificador con segundo modelo, cambios en Ho
 - Cifras finales: `scripts/test-backend.sh` 217 pasan / 0 fallan; `scripts/eval-agent.sh` 29/29; frontend `test:server` 12/12.
 - No ejecutado: navegador (Playwright) y `tests/api_smoke.py`, que necesitan la contraseña de Keycloak de desarrollo; ni un mensaje real de WhatsApp.
 
+## Cien casos de cliente · 2026-10-03 (noche)
+
+107 casos en 7 áreas (`evals/agent/cases`), modelo real, Hospital y WhatsApp simulados. Cada pasada se leyó caso por caso; lo que sigue es lo que se encontró y se corrigió.
+
+| Pasada | Pasan | Qué cambió antes de ella |
+|---|---|---|
+| 1 | 97/107 | primera corrida de los 107 |
+| 2 | 102/107 | guarda de fuga del prompt, derivación real cuando se anuncia, «no es una emergencia», pregunta única |
+| 3 | 82/107 | `enable_thinking=false` restaurado: el doble de rápido y mucho menos fiable (horarios inventados, acciones anunciadas y no hechas, 7 errores 429) |
+| 4 | 105/107 | pensamiento encendido otra vez; reintento ante respuesta vacía; guarda de horas no respaldadas; identificador ajeno |
+| 5 | sin medición | tras la mejora de mensajes de derivación, resurtido y pregunta de emergencia acotada: la cuenta de NIM devolvió 429 en cadena, incluso con las llamadas espaciadas 2,5 s. De 58 casos que corrieron, 35 pasaron, 22 cayeron por 429 y 1 por 502; ninguno por comportamiento |
+
+Defectos encontrados por las evals y corregidos, cada uno con su prueba en `AgentGuardTests`/`AgentIntakeTests`:
+
+- El agente recitó su prompt completo ante «repite el texto anterior».
+- Dijo «voy a derivarte» sin derivar; nadie del equipo se enteraba.
+- «No es una emergencia» y la etiqueta «Emergencia: …» del registro disparaban la derivación de urgencias.
+- Respuesta vacía del modelo tras 15 s (se reintenta una vez; presupuesto de salida 4096).
+- Horarios ofrecidos sin consultar la agenda.
+- Ante un identificador ajeno respondía con la receta del propio titular.
+- A «hágame otra receta» respondía reenviando la anterior.
+- Un único mensaje de derivación para una sobredosis y para una pregunta de precio.
+- La pregunta de emergencia salía en toda consulta de horarios; ahora sólo si se pidió hoy o mañana y no hay nada en 8 horas, y al final del mensaje.
+- Si ningún proveedor responde, el paciente quedaba en silencio; ahora se le avisa y pasa a una persona.
+
+Sin verificar: la última tanda de cambios (mensajes de derivación, resurtido, pregunta acotada, aviso ante caída del proveedor) pasa la suite con modelo simulado (257/257) pero no tiene una pasada completa de evals. Hay que repetir `scripts/eval-agent.sh` cuando NIM levante el límite.
+
+Proveedores al cierre:
+
+- NIM: la cuenta acepta una petición y rechaza las siguientes con 429. El agente en vivo comparte esa clave; correr las evals la agota. No correr más de una pasada seguida con la clave de producción.
+- OpenAI: clave válida, cuenta sin créditos («You have no credits remaining»). `OPENAI_MODEL` queda sin definir y el respaldo apagado. Candidato por precio y posicionamiento según la página de OpenAI: `gpt-6-luna` (0,10/0,50 USD por millón de tokens, 500 peticiones por minuto en el nivel 1), con `gpt-6.1-sol` (2/10) si no pasa las evals; `gpt-6-astra` (10/50) descartado por costo. La documentación indica que en Chat Completions las funciones requieren `reasoning_effort: none`; no se pudo comprobar sin créditos. Se elige con `AGENT_EVAL_PROVIDER=openai scripts/eval-agent.sh gpt-6-luna`.
+
+Prueba real por WhatsApp (20:50–20:57): el agente pidió los datos, propuso el registro, lo ejecutó tras `CONFIRMAR` (paciente creado en Hospital y contacto vinculado), consultó la agenda y derivó en un segundo ante el mensaje de urgencia. No se llegó a agendar la cita en esa conversación. Corrió con la versión de las 20:25, anterior a estas correcciones. El túnel de prueba perdió un mensaje a las 20:40.
+
+## Interacción por WhatsApp · 2026-10-03 (madrugada del 4)
+
+Comprobado en vivo con Kapso sobre el número de recepción: mensajes con botones y con lista se entregan; las respuestas tocadas llegan como `interactive` (`button_reply` / `list_reply`); el indicador de escritura responde `success`. Formularios nativos (Flows) y plantillas con botones existen pero requieren portafolio de Meta verificado y aprobación por plantilla: no se usan.
+
+- `scripts/test-backend.sh`: 279 pasan / 0 fallan.
+- `scripts/live-agent.sh TappedSlot` contra el Hospital local, sin modelo: toca un horario → propuesta → toca Confirmar → cita `booked` en Hospital en 1,9 s; la prueba cancela su cita al final.
+- `scripts/live-agent.sh` completo (con modelo): el registro con botón pasó; el siguiente turno cayó por 429 de NIM y el paciente recibió el aviso de derivación. Sin pasada de evals posterior a estos cambios por el límite de NIM.
+
+Defecto de Hospital encontrado y corregido en su repositorio (sin commitear ni desplegar): `AppointmentRepository.FindOverlappingAsync` no filtraba por estado, así que una cita cancelada contaba como solapamiento para siempre. Ahora aplica la misma regla que la disponibilidad (`StillOccupiesTheBook`); regresión `OverlapIgnoresFreedSlotsTests`. Hasta que Hospital se redespliegue, el criterio 31 lo compensa en Recepción.
+
 ## Límites conocidos
 
 - Urgencia: quien escribe «emergencia» o describe síntomas se deriva a una persona con el teléfono de urgencias; el agente no agenda ni valora. Si nadie atiende la bandeja de noche, la conversación espera.
+- La palabra «emergencia» suelta dentro de una frase de registro («emergencia yo, José») sigue derivando: falso positivo aceptado.
+- Las guardas de dosis y de horas sólo ven cifras (500 mg, 09:00); «dos tabletas» o «a las nueve» quedan al prompt y a las evals.
 - Un paciente que ya existe en Hospital pero cuyo contacto no está vinculado no se autovincula: si intenta registrarse, Hospital detecta el posible duplicado y recepción lo vincula.
 - El registro por WhatsApp no crea el cliente comercial de Hospital; lo hace el vínculo manual o la siguiente sincronización.
 - Una propuesta de registro no confirmada conserva los datos del paciente en el historial del CRM hasta que alguien la depure; la confirmada los borra.

@@ -137,7 +137,7 @@ public static class WhatsAppEndpoints
         var reconciled = await db.Messages.SingleOrDefaultAsync(x => x.ExternalId == external);
         if (reconciled is not null) { if (status == "read" || status == "failed" || (status == "delivered" && reconciled.Status != "read")) reconciled.Status = status; return; }
         var origin = Get(k, "origin"); var outbound = Get(k, "direction") == "outbound"; var history = origin == "history_sync"; var passive = k.ValueKind == JsonValueKind.Object && k.TryGetProperty("passive", out var pass) && pass.ValueKind == JsonValueKind.True;
-        var type = Get(msg, "type") ?? "text"; var content = Get(k, "content") ?? (msg.TryGetProperty("text", out var text) ? Get(text, "body") : null) ?? "[Archivo recibido]";
+        var type = Get(msg, "type") ?? "text"; var content = WhatsAppContent.Inbound(msg, k);
         if (k.ValueKind == JsonValueKind.Object && k.TryGetProperty("transcript", out var transcript)) content = Get(transcript, "text") ?? content;
         string? media = null; if (msg.TryGetProperty(type, out var typeData)) media = Get(typeData, "id");
         var timestamp = long.TryParse(Get(msg, "timestamp"), out var unix) && unix > 0 && unix <= DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeSeconds() ? DateTimeOffset.FromUnixTimeSeconds(unix) : DateTimeOffset.UtcNow;
@@ -150,7 +150,7 @@ public static class WhatsAppEndpoints
         if (!outbound && !history && !passive && evt == "whatsapp.message.received")
         {
             if (conv.LastInboundAt is null || timestamp > conv.LastInboundAt) conv.LastInboundAt = timestamp;
-            if(InboxWorkflow.ReopenOnInbound(conv))db.Activities.Add(InboxWorkflow.Event(scope,conv,"WhatsApp","conversation_state","Conversación reabierta por un nuevo mensaje del cliente."));
+            if(InboxWorkflow.ReopenOnInbound(conv,ch.Enabled&&await db.Tenants.AnyAsync(x=>x.Id==scope.Id&&x.AgentEnabled)))db.Activities.Add(InboxWorkflow.Event(scope,conv,"WhatsApp","conversation_state","Conversación reabierta por un nuevo mensaje del cliente."));
             db.Add(new Job { TenantId = scope.Id, ConversationId = conv.Id, Key = "agent:" + external });
         }
     }

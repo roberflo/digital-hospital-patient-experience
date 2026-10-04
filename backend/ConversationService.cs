@@ -5,7 +5,7 @@ namespace Recepcion;
 
 public sealed class ConversationService(CrmDb db, TenantScope scope, KapsoClient kapso)
 {
-    public async Task<Message> Send(Guid id, string body, string sender, string requestKey, string? mediaId = null, string type = "text", CancellationToken ct = default, string? actingSubject = null, CurrentUser? actor = null)
+    public async Task<Message> Send(Guid id, string body, string sender, string requestKey, string? mediaId = null, string type = "text", CancellationToken ct = default, string? actingSubject = null, CurrentUser? actor = null, Choices? choices = null)
     {
         if (string.IsNullOrWhiteSpace(requestKey) || requestKey.Length > 100) throw new ArgumentException("Idempotency-Key requerido");
         using var lease = await Lock(id, ct);
@@ -25,7 +25,8 @@ public sealed class ConversationService(CrmDb db, TenantScope scope, KapsoClient
         await db.SaveChangesAsync(ct);
         try
         {
-            message.ExternalId = await kapso.Send(channel.PhoneNumberId, contact.Phone, body, mediaId, type, ct, manual: sender == "human"); message.Status = "sent";
+            // The stored message is the text either way; buttons are how it is shown, and are dropped when the text is too long to carry them.
+            message.ExternalId = await kapso.Send(channel.PhoneNumberId, contact.Phone, body, mediaId, type, ct, manual: sender == "human", interactive: choices is not null && type == "text" && body.Length <= Choices.MaxBody ? choices.ToWhatsApp(body) : null); message.Status = "sent";
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or ArgumentException)
         {

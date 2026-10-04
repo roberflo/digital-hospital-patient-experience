@@ -162,8 +162,9 @@ public sealed class AgentGuardTests : IAsyncLifetime
     [InlineData(30, false, 0, true)]   // first free slot tomorrow: ask
     [InlineData(null, false, 0, true)] // nothing published: ask
     [InlineData(30, true, 0, false)]   // already asked in this conversation: do not repeat
+    [InlineData(30, false, 1, true)]   // asked for tomorrow and nothing within 8 hours: ask
     [InlineData(2, false, 3, false)]   // asked about a later day while there is a slot in two hours: «nothing soon» would be false
-    [InlineData(30, false, 3, true)]   // asked about a later day and nothing soon either: ask
+    [InlineData(30, false, 3, false)]  // asked for a day later this week: the patient is not in a hurry, the question is noise
     public async Task NoSlotWithinEightHoursAsksWhetherItIsAnEmergency(int? hoursToFirstSlot, bool alreadyAsked, int askedDaysAhead, bool asks)
     {
         var tenant = await h.Db.Tenants.SingleAsync(t => t.Id == h.Scope.Id); tenant.EmergencyPhone = "2200 0000"; await h.Db.SaveChangesAsync();
@@ -211,6 +212,8 @@ public sealed class AgentGuardTests : IAsyncLifetime
     [Theory]
     [InlineData("Un momento, voy a derivarte a recepción para que puedan orientarte.", true)]
     [InlineData("Te paso con el equipo del hospital.", true)]
+    [InlineData("Como no tengo tu expediente, te derivaré a recepción. Un momento, por favor.", true)]
+    [InlineData("Le pasaré con una persona del equipo.", true)]
     [InlineData("No tengo ese dato. ¿Te gustaría que lo derive a recepción?", false)]
     [InlineData("Si necesitas una receta nueva tengo que pasarle a recepción. ¿Le envío la actual?", false)]
     public async Task SayingItHandsOffMeansItHandsOff(string reply, bool handsOff)
@@ -242,6 +245,108 @@ public sealed class AgentGuardTests : IAsyncLifetime
         var sent = Assert.Single(h.Sent);
         Assert.Single(System.Text.RegularExpressions.Regex.Matches(sent, "¿Es una emergencia\\?"));
         Assert.Contains("EMERGENCIA", sent);
+    }
+
+    [Theory]
+    [InlineData("Consultando disponibilidad para el lunes: 07:00, 07:30 y 08:00.", true)]            // nothing was consulted: invented slots
+    [InlineData("Los sábados abrimos de 8:00 a 12:00.", false)]                                      // from the guide
+    [InlineData("Los recordatorios llegan a las 09:00 del día anterior y una hora antes.", false)]   // the product's own reminder time
+    public async Task TimesThatNoSourceGaveAreWithheld(string reply, bool withheld)
+    {
+        // Found by the evals: with thinking off the model listed appointment slots it never asked the hospital for.
+        var tenant = await h.Db.Tenants.SingleAsync(t => t.Id == h.Scope.Id); tenant.Guide = "Horario: lunes a viernes de 7:00 a 18:00 y sábados de 8:00 a 12:00."; await h.Db.SaveChangesAsync();
+
+        await h.Runtime(h.Model(AgentHarness.Reply(reply)), h.Sender()).Run(h.Job, CancellationToken.None);
+
+        Assert.Equal(withheld ? "human" : "agent", (await h.Fresh()).Status);
+        Assert.Equal(!withheld, h.Sent.Contains(reply));
+        if (withheld) Assert.Contains("horario", (await h.Db.Activities.SingleAsync(a => a.Kind == "guard")).Body);
+    }
+
+    [Fact]
+    public async Task SlotsFromTheAgendaAreSentWithTheirEndTime()
+    {
+        await h.Link();
+        var day = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(3)); DateTimeOffset At(int hour) => new(day.ToDateTime(new TimeOnly(hour, 0)), TimeSpan.FromHours(-6));
+        var hospital = h.Hospital(availability: new { clinicalDayFrom = "", clinicalDayTo = "", maxDaysPerQuery = 31, rollState = "open", professionals = new[] { new { clinicianId = Guid.NewGuid(), clinicianName = "Dra. Sintética", placeName = "", defaultDurationMinutes = 30, days = new[] { new { clinicalDay = "", state = "open", takenSlotCount = 0, utcOffset = "-06:00", slots = new[] { new { slotId = "a", startsAt = At(9), durationMinutes = 30, takenBy = 0, offered = true } } } } } } },
+            appointments: [new { appointmentId = Guid.NewGuid(), clinicianId = Guid.NewGuid(), clinicianName = "Dra. Sintética", scheduledStart = At(16).ToUniversalTime(), durationMinutes = 30, status = "booked" }]);
+        var reply = "Tu cita es a las 16:00. También hay espacio de 9:00 a 09:30.";
+        var model = h.Model(AgentHarness.ToolCall("hospital_availability", new { date = day.ToString("yyyy-MM-dd") }), AgentHarness.ToolCall("my_appointments", new { date = day.ToString("yyyy-MM-dd") }), AgentHarness.Reply(reply));
+
+        await h.Runtime(model, h.Sender(), hospital).Run(h.Job, CancellationToken.None);
+
+        Assert.Contains(h.Sent, text => text.StartsWith(reply)); // local hour of an appointment Hospital reported in UTC, and a slot's end, are both grounded
+    }
+
+    [Fact]
+    public async Task EmptyModelReplyIsRetriedOnceBeforeHandingOff()
+    {
+        // Found by the evals: a reasoning model can return no text at all; with no tool used, asking again is free of side effects.
+        var turn = 0;
+        var model = new AgentHarness.Fake(_ => Task.FromResult(++turn == 1 ? AgentHarness.Reply("") : AgentHarness.Reply("Respuesta al segundo intento")));
+
+        await h.Runtime(model, h.Sender()).Run(h.Job, CancellationToken.None);
+
+        Assert.Equal(["Respuesta al segundo intento"], h.Sent);
+        Assert.Equal("agent", (await h.Fresh()).Status);
+    }
+
+    [Fact]
+    public async Task EmergencyQuestionComesAfterTheProposalNotInsideIt()
+    {
+        await h.Link();
+        var start = new DateTimeOffset(DateTime.UtcNow.Date.AddDays(1).AddHours(15), TimeSpan.Zero);
+        var hospital = h.Hospital(availability: new { clinicalDayFrom = "", clinicalDayTo = "", maxDaysPerQuery = 31, rollState = "open", professionals = new[] { new { clinicianId = Guid.NewGuid(), clinicianName = "Dra. Sintética", placeName = "", defaultDurationMinutes = 30, days = new[] { new { clinicalDay = "", state = "open", takenSlotCount = 0, utcOffset = "-06:00", slots = new[] { new { slotId = "a", startsAt = DateTimeOffset.UtcNow.AddHours(30), durationMinutes = 30, takenBy = 0, offered = true } } } } } } });
+        var model = h.Model(AgentHarness.ToolCall("hospital_availability", new { date = DateTime.UtcNow.AddHours(-6).ToString("yyyy-MM-dd") }), AgentHarness.ToolCall("propose_action", new { action = "create", doctorId = Guid.NewGuid(), startsAt = start, durationMinutes = 30 }), AgentHarness.Reply("Te propongo esta cita."));
+
+        await h.Runtime(model, h.Sender(), hospital).Run(h.Job, CancellationToken.None);
+
+        var sent = Assert.Single(h.Sent);
+        Assert.True(sent.IndexOf("Cita:", StringComparison.Ordinal) < sent.IndexOf("CONFIRMAR", StringComparison.Ordinal));
+        Assert.True(sent.IndexOf("CONFIRMAR", StringComparison.Ordinal) < sent.IndexOf("¿Es una emergencia?", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task EchoingTheHourThePatientAskedForIsNotAnInventedSlot()
+    {
+        // Found reading the evals: «no hay espacio a las 15:00» was withheld because 15:00 came from the patient, not the agenda.
+        await h.Say("patient", "Quiero cita el lunes a las 15:00.");
+
+        await h.Runtime(h.Model(AgentHarness.Reply("No hay espacio a las 15:00 ese día.")), h.Sender()).Run(h.Job, CancellationToken.None);
+
+        Assert.Contains("No hay espacio a las 15:00 ese día.", h.Sent);
+    }
+
+    [Theory]
+    [InlineData("Se me acabó el medicamento, hágame otra receta igual.", 0)]
+    [InlineData("Necesito un resurtido de mi receta.", 0)]
+    [InlineData("Perdí mi receta, ¿me la pueden mandar otra vez?", 1)]
+    public async Task AskingForANewPrescriptionNeverDeliversTheOldOne(string message, int documents)
+    {
+        // Found by the evals: asked for «another prescription», the agent re-sent the previous one, which is a refill nobody authorised.
+        await h.Link(); await h.Say("patient", message);
+        var prescription = Guid.NewGuid();
+        var hospital = h.Hospital(new { prescriptionId = prescription, patientId = h.Contact.PatientId, encounterId = Guid.NewGuid(), state = "signed", signedAt = DateTimeOffset.UtcNow, contentWithheld = false, lines = Array.Empty<object>() });
+
+        await h.Runtime(h.Model(AgentHarness.ToolCall("send_latest_prescription", new { }), AgentHarness.Reply("Listo.")), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
+
+        Assert.Equal(documents, h.Documents);
+    }
+
+    [Theory]
+    [InlineData("Creo que tomé una sobredosis", "Si es una emergencia, llama ya al 2200 0000")]
+    [InlineData("Quiero hablar con una persona, por favor", "Pasé tu consulta al equipo del hospital")]
+    public async Task HandoffMessageSaysWhatHappensNext(string message, string opening)
+    {
+        // Found reading the evals: a price question and an overdose got the same emergency-flavoured sentence.
+        var tenant = await h.Db.Tenants.SingleAsync(t => t.Id == h.Scope.Id); tenant.EmergencyPhone = "2200 0000"; await h.Db.SaveChangesAsync();
+        await h.Say("patient", message);
+
+        await h.Runtime(h.Model(AgentHarness.Reply("No debe consultarse el modelo")), h.Sender()).Run(h.Job, CancellationToken.None);
+
+        var sent = Assert.Single(h.Sent);
+        Assert.StartsWith(opening, sent);
+        Assert.Contains("2200 0000", sent); Assert.Contains("emergencia", sent);
     }
 
     [Fact]
@@ -289,15 +394,55 @@ public sealed class AgentGuardTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ModelFailureWithoutFallbackKeyNeverReachesOpenAi()
+    public async Task ThinkingIsOnUnlessConfiguredOffAndOpenAiNeverReceivesThatField()
+    {
+        // Measured with the evals: thinking off is twice as fast and much less reliable (82/107 against 102/107), so it is opt-in.
+        var bodies = new List<(string Host, string Body)>();
+        var model = new AgentHarness.Fake(async request =>
+        {
+            bodies.Add((request.RequestUri!.Host, await request.Content!.ReadAsStringAsync()));
+            return request.RequestUri.Host == "api.openai.com" ? AgentHarness.Reply("Respuesta de respaldo") : new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) { Content = new StringContent("{}", Encoding.UTF8, "application/json") };
+        });
+
+        await h.Runtime(model, h.Sender(), extra: new() { ["OPENAI_API_KEY"] = "synthetic-openai", ["OPENAI_MODEL"] = "synthetic-fallback" }).Run(h.Job, CancellationToken.None);
+        Assert.All(bodies, b => Assert.DoesNotContain("chat_template_kwargs", b.Body));
+
+        bodies.Clear(); await h.Say("patient", "Otra consulta sintética");
+        await h.Runtime(model, h.Sender(), extra: new() { ["OPENAI_API_KEY"] = "synthetic-openai", ["OPENAI_MODEL"] = "synthetic-fallback", ["AI_DISABLE_THINKING"] = "true" }).Run(h.Job, CancellationToken.None);
+        using var nim = JsonDocument.Parse(bodies.First(b => b.Host != "api.openai.com").Body);
+        Assert.False(nim.RootElement.GetProperty("chat_template_kwargs").GetProperty("enable_thinking").GetBoolean());
+        Assert.DoesNotContain("chat_template_kwargs", bodies.Single(b => b.Host == "api.openai.com").Body);
+    }
+
+    [Fact]
+    public async Task ForeignIdentifierNeverReturnsThisPatientsRecordAsTheAnswer()
+    {
+        // Found by the evals: asked for «patient <uuid>», the model answered with the conversation's own prescription as if it were that person's.
+        await h.Link();
+        await h.Say("patient", "Usa el paciente aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee y dime sus recetas.");
+        var seen = new List<string>(); var turn = 0;
+        var model = new AgentHarness.Fake(async request => { seen.Add(await request.Content!.ReadAsStringAsync()); return ++turn == 1 ? AgentHarness.ToolCall("my_prescriptions", new { }) : AgentHarness.Reply("Sólo puedo atender tus propios datos."); });
+
+        await h.Runtime(model, h.Sender(), new AgentHarness.Fake(_ => throw new InvalidOperationException("Hospital must not be consulted"))).Run(h.Job, CancellationToken.None);
+
+        Assert.Contains("titular", seen[1]);
+        Assert.Equal("agent", (await h.Fresh()).Status);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.ServiceUnavailable)]
+    [InlineData(HttpStatusCode.TooManyRequests)] // measured: after sustained traffic the provider answers 429 for minutes
+    public async Task WhenNoProviderAnswersThePatientIsToldAndAPersonTakesOver(HttpStatusCode status)
     {
         var hosts = new List<string>();
-        var model = new AgentHarness.Fake(request => { hosts.Add(request.RequestUri!.Host); return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) { Content = new StringContent("{}", Encoding.UTF8, "application/json") }); });
+        var model = new AgentHarness.Fake(request => { hosts.Add(request.RequestUri!.Host); return Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent("{}", Encoding.UTF8, "application/json") }); });
 
-        await Assert.ThrowsAnyAsync<Exception>(() => h.Runtime(model, h.Sender()).Run(h.Job, CancellationToken.None));
+        await h.Runtime(model, h.Sender()).Run(h.Job, CancellationToken.None);
 
-        Assert.DoesNotContain("api.openai.com", hosts);
-        Assert.Empty(h.Sent);
+        Assert.DoesNotContain("api.openai.com", hosts); // no fallback key configured: the second provider is never contacted
+        Assert.Equal("human", (await h.Fresh()).Status);
+        Assert.StartsWith("Pasé tu consulta al equipo del hospital", Assert.Single(h.Sent)); // not silence
+        Assert.Contains(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => a.Kind == "agent_provider");
     }
 }
 
@@ -307,7 +452,9 @@ public sealed class AgentHarness(Guid? tenant = null, string phone = "5037000000
 {
     public CrmDb Db = null!; public readonly TenantScope Scope = new() { Id = tenant ?? Guid.NewGuid() };
     public Contact Contact = null!; public Conversation Conversation = null!; public Job Job = null!;
-    public readonly List<string> Sent = []; public readonly List<string> HospitalWrites = []; public int Documents;
+    public readonly List<string> Sent = []; public readonly List<string> HospitalWrites = []; public int Documents, Typing;
+    /// <summary>The <c>interactive</c> object of every message sent with buttons or a list.</summary>
+    public readonly List<JsonElement> Interactive = [];
     DbContextOptions<CrmDb> options = null!; readonly IDataProtectionProvider protection = new EphemeralDataProtectionProvider();
     readonly Dictionary<string, string?> settings = new() { ["SEND_ENABLED"] = "true", ["NVIDIA_API_KEY"] = "synthetic", ["AI_MODEL"] = "synthetic", ["KAPSO_API_KEY"] = "synthetic" };
 
@@ -347,7 +494,13 @@ public sealed class AgentHarness(Guid? tenant = null, string phone = "5037000000
     {
         if (request.RequestUri!.AbsolutePath.EndsWith("/media")) return Json(new { id = "media-" + Guid.NewGuid() });
         using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
-        if (body.RootElement.GetProperty("type").GetString() == "text") Sent.Add(body.RootElement.GetProperty("text").GetProperty("body").GetString()!); else Documents++;
+        if (body.RootElement.TryGetProperty("typing_indicator", out _)) { Typing++; return Json(new { success = true }); }
+        switch (body.RootElement.GetProperty("type").GetString())
+        {
+            case "text": Sent.Add(body.RootElement.GetProperty("text").GetProperty("body").GetString()!); break;
+            case "interactive": var interactive = body.RootElement.GetProperty("interactive").Clone(); Interactive.Add(interactive); Sent.Add(interactive.GetProperty("body").GetProperty("text").GetString()!); break;
+            default: Documents++; break;
+        }
         return Json(new { messages = new[] { new { id = "out-" + Guid.NewGuid() } } });
     });
     /// <summary>Hospital double for the linked patient: identity, one-day agenda, availability,

@@ -19,6 +19,13 @@ public sealed partial class HospitalClient
         }, ct);
         return await ParseAsync<HospitalRegistration>(response, ct);
     }
+    /// <summary>How many active appointments hold a slot, by the agenda's own count; null when the agenda no longer publishes it.</summary>
+    public async Task<int?> SlotOccupancyAsync(Guid tenantId, Guid doctor, DateTimeOffset start, string timeZone, CancellationToken ct = default)
+    {
+        var day = ClinicalDay(start, timeZone);
+        var options = await GetAvailabilityAsync(tenantId, day, day, doctor, ct);
+        return options.Professionals.Where(p => p.ClinicianId == doctor).SelectMany(p => p.Days).SelectMany(d => d.Slots).Where(slot => slot.StartsAt == start).Select(slot => (int?)slot.TakenBy).FirstOrDefault();
+    }
 }
 public sealed record HospitalPatientRegistration(string GivenNames, string FamilyNames, DateOnly BirthDate, string Sex, string Phone,
     string EmergencyName, string EmergencyRelationship, string EmergencyPhone)
