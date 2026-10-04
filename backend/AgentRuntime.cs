@@ -142,7 +142,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             Información del hospital (horarios, ubicación, precios, pagos, seguros, preparación de estudios): responde solo con lo que conste en la guía
             o en resultados de herramientas. Si el dato no consta, di que no lo tienes y ofrece pasar la consulta a recepción; nunca lo estimes.
             Escribe texto plano para WhatsApp, sin Markdown. Nunca muestres identificadores internos (IDs de recetas, citas, doctores o pacientes): nombra fecha, hora y doctor.
-            Cliente sin expediente que quiere una cita: regístralo, y pídele los datos en esa misma respuesta. Pide nombres, apellidos, fecha de nacimiento, sexo registral (femenino o masculino)
+            Cliente sin expediente que quiere una cita: regístralo, y pídele los datos en esa misma respuesta. Pide nombres, apellidos, fecha de nacimiento, el sexo que aparece en su documento de identidad (femenino o masculino)
             y un contacto de emergencia (nombre, parentesco y teléfono). Usa start_registration pasándole los datos que el paciente ya dijo en la conversación, sin suponer ninguno: el sistema pide los que falten uno por uno
             (no los pidas tú en una lista) y, cuando están todos, le muestra la propuesta; el paciente confirma con el botón o diciendo que sí,
             y después ya puede agendar. Reúne los datos de TODOS los mensajes de la conversación antes de pedir alguno otra vez. No completes ni supongas ningún dato. No registres a menores de 18 años ni a otra persona distinta de quien escribe: deriva.
@@ -631,7 +631,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         contact.PatientId = patient; contact.Name = $"{Field("givenNames")} {Field("familyNames")}"; // who the person said they are, confirmed by them
         db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "patient_registered", Actor = "Agente", ActorRole = "agent_ai", Body = $"Paciente registrado en Hospital por WhatsApp, con confirmación del paciente. Referencia Hospital: {patient}." }); await db.SaveChangesAsync(ct);
         // The patient came to book: the free hours go out with the confirmation, without being asked for.
-        await OfferSlots(true, null, ct, $"Listo{(FirstName(contact.Name) is { } welcome ? ", " + welcome : "")}, ya tienes tu expediente.\n");
+        await OfferSlots(true, null, ct, $"Listo{(FirstName(contact.Name) is { } welcome ? ", " + welcome : "")}, ya te registré.\n");
     }
     static void RequirePatient(Contact c) { if (c.PatientId is null) throw new ArgumentException("Recepción debe vincular el expediente del paciente"); }
     async Task Handoff(Conversation conv, string reason, CancellationToken ct, bool urgent = false)

@@ -128,6 +128,16 @@ public sealed class AgentMemoryTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ThePromptAsksForTheSexOnTheIdentityDocument()
+    {
+        await Run(Model(() => AgentHarness.Reply("Ese dato no lo tengo.")));
+
+        var system = Said(seen[0], "system");
+        Assert.DoesNotContain("registral", system);
+        Assert.Contains("documento de identidad", system);
+    }
+
+    [Fact]
     public async Task PreferredDoctorAndTimeOfDayComeFirstInTheList()
     {
         Guid usual = Guid.NewGuid(), other = Guid.NewGuid();

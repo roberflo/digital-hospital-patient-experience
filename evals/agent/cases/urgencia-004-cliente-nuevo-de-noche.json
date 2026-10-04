@@ -20,7 +20,7 @@
       "propose_action"
     ],
     "match": [
-      "Paso \\d de 7"
+      "son 7 datos cortos|Ya tengo parte de tus datos; me faltan? "
     ],
     "noMatch": [
       "CONFIRMAR [0-9A-F]{6}"

@@ -66,8 +66,33 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
     [Fact]
     public void SexIsAnsweredWithButtons()
     {
-        var (_, _, choices) = new Intake(3, "Ana", "López").Answer("12/03/1990", Today);
+        var (_, prompt, choices) = new Intake(3, "Ana", "López").Answer("12/03/1990", Today);
+        Assert.Equal("¿Qué sexo aparece en tu documento de identidad?\nEs un dato que pide el hospital para registrarte.", prompt);
+        Assert.DoesNotContain("registral", prompt);
         Assert.Equal(["Femenino", "Masculino"], Assert.IsType<Choices>(choices).Options.Select(o => o.Title));
+        Assert.Equal(["f", "m"], choices!.Options.Select(o => o.Id));
+    }
+
+    [Fact]
+    public void OnlyTheLastQuestionSaysItIsTheLast()
+    {
+        var (state, prompt, _) = Intake.Start(); var prompts = new List<string> { prompt };
+        foreach (var answer in Answers[..6]) { (state, prompt, _) = state.Answer(answer, Today); prompts.Add(prompt); }
+
+        Assert.StartsWith("Último dato:\n", prompts[6]);
+        Assert.All(prompts[..6], question => Assert.DoesNotContain("Último dato", question));
+    }
+
+    [Fact]
+    public async Task ALabelledEmergencyContactInTheFormIsNotAnEmergency()
+    {
+        // The guard lets «emergencia» through only because the question before it says «contacto de emergencia» (AgentRuntime, `registering`).
+        var noModel = new AgentHarness.Fake(_ => throw new InvalidOperationException("The model must not be consulted"));
+        foreach (var text in (string[])["AGENDAR", .. Answers[..4], "Emergencia: Carlos Sintético"]) { await h.Say("patient", text); await h.Runtime(noModel, h.Sender()).Run(h.Job, CancellationToken.None); }
+
+        Assert.Equal("agent", (await h.Fresh()).Status);
+        Assert.DoesNotContain(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => a.Kind.StartsWith("handoff"));
+        Assert.Contains("contacto de emergencia", h.Sent[^1]);
     }
 
     [Fact]
@@ -85,7 +110,8 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
         var noModel = new AgentHarness.Fake(_ => throw new InvalidOperationException("The model must not be consulted"));
         async Task<string> Say(string text) { await h.Say("patient", text); await h.Runtime(noModel, h.Sender(), hospital).Run(h.Job, CancellationToken.None); return h.Sent[^1]; }
 
-        Assert.Contains("Paso 1 de 7", await Say("AGENDAR"));
+        var first = await Say("AGENDAR");
+        Assert.Contains("son 7 datos cortos", first); Assert.Contains("¿Cuál es tu nombre?", first);
         string reply = ""; foreach (var answer in Answers) reply = await Say(answer);
 
         Assert.Empty(posts); // nothing reaches Hospital before the patient confirms
@@ -94,7 +120,7 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
         var registered = await Say(confirm);
 
         Assert.Equal(h.Contact.Phone, Assert.Single(posts).GetProperty("phone").GetString());
-        Assert.Contains("ya tienes tu expediente", registered);
+        Assert.Contains("ya te registré", registered);
         Assert.Equal("list", h.Interactive[^1].GetProperty("type").GetString()); // the free hours come with the confirmation, unasked
         Assert.Equal("agent", (await h.Fresh()).Status);
         Assert.DoesNotContain(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id && a.Kind.StartsWith("intake")).ToListAsync(), a => a.Body.Contains("Sintética")); // the finished form keeps no personal data
@@ -144,7 +170,7 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
 
         Assert.Equal(4, state.Step);
         Assert.Equal(("Rosa Sintética", "Prueba", "1985-01-08"), (state.GivenNames, state.FamilyNames, state.BirthDate));
-        Assert.Contains("Paso 4 de 7", prompt); Assert.NotNull(choices);
+        Assert.Contains("me faltan 4", prompt); Assert.Contains("documento de identidad", prompt); Assert.NotNull(choices);
     }
 
     [Fact]
@@ -153,7 +179,103 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
         var (state, prompt, _) = Intake.Start(Today, "Rosa Sintética", "Prueba", "el año pasado", "female");
 
         Assert.Equal(3, state.Step); Assert.Null(state.Sex); // nothing after the answer that failed is taken either
+        Assert.Null(state.BirthDate);
         Assert.Contains("fecha de nacimiento", prompt);
+    }
+
+    [Theory]
+    [InlineData("tengo 16 años")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void WithoutAReadableBirthDateNothingAfterItIsKept(string? birthDate)
+    {
+        // Until the birth date says this is an adult, nothing about the person beyond the name is held: a minor's data stays out of the form.
+        var (state, prompt, _) = Intake.Start(Today, "Diego Sintético", "Prueba", birthDate, "masculino", "Marta Sintética", "madre", "7000 0002");
+
+        Assert.Equal(3, state.Step);
+        Assert.Equal(("Diego Sintético", "Prueba"), (state.GivenNames, state.FamilyNames));
+        Assert.Null(state.BirthDate); Assert.Null(state.Sex); Assert.Null(state.EmergencyName); Assert.Null(state.EmergencyRelationship); Assert.Null(state.EmergencyPhone);
+        Assert.Contains("me faltan 5", prompt); Assert.Contains("¿Cuál es tu fecha de nacimiento?", prompt);
+    }
+
+    [Fact]
+    public async Task WithoutAReadableBirthDateTheStoredFormHoldsNothingAfterIt()
+    {
+        var said = new { givenNames = "Diego Sintético", familyNames = "Prueba", birthDate = "tengo 16 años", sex = "masculino", emergencyContactName = "Marta Sintética", emergencyContactRelationship = "madre", emergencyContactPhone = "7000 0002" };
+
+        await h.Runtime(h.Model(AgentHarness.ToolCall("start_registration", said), AgentHarness.Reply("Ok")), h.Sender()).Run(h.Job, CancellationToken.None);
+
+        Assert.Contains("¿Cuál es tu fecha de nacimiento?", h.Sent[^1]);
+        Assert.Single(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id && a.Kind == "intake").ToListAsync());
+        Assert.All(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => { Assert.DoesNotContain("Marta", a.Body); Assert.DoesNotContain("70000002", a.Body); Assert.DoesNotContain("7000 0002", a.Body); });
+    }
+
+    [Fact]
+    public void TheFirstQuestionDoesNotPromiseToAskForFamilyNamesItAlreadyHas()
+    {
+        var (state, prompt, _) = Intake.Start(Today, null, "Prueba");
+
+        Assert.Equal(1, state.Step); Assert.Equal("Prueba", state.FamilyNames);
+        Assert.Contains("¿Cuál es tu nombre?\nSolo nombres, sin apellidos.", prompt);
+        Assert.DoesNotContain("te los pido enseguida", prompt);
+        Assert.Contains("te los pido enseguida", Intake.Start().Prompt);
+    }
+
+    [Theory]
+    [InlineData(0, "1234")]
+    [InlineData(3, "no sé")]
+    [InlineData(4, "1234")]
+    [InlineData(5, "1234")]
+    [InlineData(6, "12")]
+    public void AKnownValueThatDoesNotFitIsNeverKeptWhicheverDatumItIs(int index, string unfit)
+    {
+        string?[] known = ["Rosa Sintética", "Prueba", "8 de enero de 1985", "femenino", "Carlos Sintético", "hermano", "7000 0001"]; known[index] = unfit;
+
+        var state = Intake.Start(Today, known).State;
+
+        string?[] kept = [state.GivenNames, state.FamilyNames, state.BirthDate, state.Sex, state.EmergencyName, state.EmergencyRelationship, state.EmergencyPhone];
+        Assert.Null(kept[index]);
+        Assert.Equal(index + 1, state.Step); Assert.False(state.Complete);
+        Assert.Equal(6, kept.Count(x => x is not null)); // and everything that did fit is kept
+    }
+
+    [Fact]
+    public void TheFormTakesWhatItKnowsWhereverItIs()
+    {
+        var (state, prompt, choices) = Intake.Start(Today, "Rosa Sintética", "Prueba", "8 de enero de 1985", null, "Carlos Sintético", "hermano", "7000 0001");
+
+        Assert.Equal(4, state.Step);
+        Assert.StartsWith("Ya tengo parte de tus datos; me falta uno.\n\n¿Qué sexo aparece", prompt); Assert.NotNull(choices);
+        Assert.Equal(("Carlos Sintético", "hermano", "70000001"), (state.EmergencyName, state.EmergencyRelationship, state.EmergencyPhone));
+    }
+
+    [Fact]
+    public void AfterAnAcceptedAnswerTheNextMissingDatumIsAsked()
+    {
+        var (state, prompt, _) = new Intake(4, "Rosa Sintética", "Prueba", "1985-01-08", null, "Carlos Sintético", "hermano", "70000001").Answer("Femenino", Today);
+
+        Assert.True(state.Complete, $"the form went on to step {state.Step}");
+        Assert.Equal("", prompt);
+        Assert.Equal(("female", "Carlos Sintético", "hermano", "70000001"), (state.Sex, state.EmergencyName, state.EmergencyRelationship, state.EmergencyPhone));
+    }
+
+    [Fact]
+    public void AKnownMinorBirthDateEndsTheFormWhateverElseIsMissing() => Assert.True(Intake.Start(Today, null, null, "01/01/2010").State.Minor);
+
+    [Fact]
+    public async Task WhenOnlyTheSexIsMissingThePatientTapsOnceAndGetsTheCard()
+    {
+        var said = new { givenNames = "Rosa Sintética", familyNames = "Prueba", birthDate = "8 de enero de 1985", emergencyContactName = "Carlos Sintético", emergencyContactRelationship = "hermano", emergencyContactPhone = "7000 0001" };
+        await h.Runtime(h.Model(AgentHarness.ToolCall("start_registration", said), AgentHarness.Reply("Ok")), h.Sender()).Run(h.Job, CancellationToken.None);
+
+        Assert.Contains("documento de identidad", Assert.Single(h.Sent));
+        Assert.Equal(["f", "m"], AgentHarness.Options(h.Interactive[^1]).Select(o => o.Id));
+
+        await h.Say("patient", "Femenino");
+        await h.Runtime(new AgentHarness.Fake(_ => throw new InvalidOperationException("The model must not be consulted")), h.Sender()).Run(h.Job, CancellationToken.None);
+
+        Assert.Equal(2, h.Sent.Count); // one question, one tap, the card
+        Assert.Contains("Sexo: femenino\nContacto de emergencia: Carlos Sintético (hermano), 70000001", h.Sent[^1]); Assert.EndsWith("¿Están correctos?", h.Sent[^1]);
     }
 
     [Fact]
@@ -203,7 +325,7 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
 
         await h.Runtime(h.Model(AgentHarness.ToolCall("start_registration", new { givenNames = "Rosa Sintética" }), silent), h.Sender()).Run(h.Job, CancellationToken.None);
 
-        Assert.Contains("Paso 2 de 7", Assert.Single(h.Sent));
+        Assert.Contains("¿Y tus apellidos?", Assert.Single(h.Sent)); Assert.Contains("me faltan 6", h.Sent[0]);
         Assert.DoesNotContain(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => a.Kind == "handoff_offer");
     }
 

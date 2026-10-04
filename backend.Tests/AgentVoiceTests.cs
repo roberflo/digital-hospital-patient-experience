@@ -118,7 +118,7 @@ public sealed class AgentVoiceTests : IAsyncLifetime
 
         var sent = Assert.Single(h.Sent);
         ReadsLikeAChat(sent);
-        Assert.Contains("Paso 1 de 7", sent);
+        Assert.Contains("son 7 datos cortos", sent); Assert.Contains("¿Cuál es tu nombre?", sent);
         Assert.DoesNotContain("parentesco", sent); // one question at a time
         Assert.Single(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id && a.Kind == "intake").ToListAsync());
     }
@@ -130,9 +130,26 @@ public sealed class AgentVoiceTests : IAsyncLifetime
         foreach (var answer in new[] { "Ana Sintética", "López Prueba", "12/03/1990", "Femenino", "Carlos Sintético", "Hermano", "7000 0001" }) { await h.Say("patient", answer); await h.Runtime(NoModel, h.Sender()).Run(h.Job, CancellationToken.None); }
 
         Assert.All(h.Sent, ReadsLikeAChat);
+        Assert.All(h.Sent, message => { Assert.DoesNotContain("registral", message); Assert.DoesNotContain("Paso ", message); });
+        Assert.Contains("¿Y tus apellidos?", h.Sent[1]); Assert.Contains("fecha de nacimiento", h.Sent[2]); Assert.Contains("¿Quién es tu contacto de emergencia?", h.Sent[4]);
+        Assert.Contains("parentesco tiene contigo", h.Sent[5]); Assert.Contains("teléfono de tu contacto de emergencia", h.Sent[6]);
         var card = h.Sent[^1];
         Assert.Contains("*Ana Sintética López Prueba*", card); Assert.Contains("\nNacimiento: 12 de marzo de 1990", card); Assert.Contains("\nContacto de emergencia: Carlos Sintético (Hermano), 70000001", card);
         Assert.EndsWith("¿Están correctos?", card); Assert.DoesNotContain("CONFIRMAR", card);
+    }
+
+    [Theory]
+    [InlineData(false, "Ya tengo parte de tus datos; me faltan 6.\n\n¿Y tus apellidos?")]
+    [InlineData(true, "Ya tengo parte de tus datos; me falta uno.\n\n¿Qué sexo aparece en tu documento de identidad?")]
+    public async Task AFormThatStartsWithKnownDataReadsLikeAChat(bool onlyTheSexIsMissing, string start)
+    {
+        object said = onlyTheSexIsMissing ? new { givenNames = "Rosa Sintética", familyNames = "Prueba", birthDate = "8 de enero de 1985", emergencyContactName = "Carlos Sintético", emergencyContactRelationship = "hermano", emergencyContactPhone = "7000 0001" } : new { givenNames = "Rosa Sintética" };
+
+        await h.Runtime(h.Model(AgentHarness.ToolCall("start_registration", said), AgentHarness.Reply("Ok")), h.Sender()).Run(h.Job, CancellationToken.None);
+
+        var sent = Assert.Single(h.Sent);
+        Assert.StartsWith(start, sent);
+        ReadsLikeAChat(sent);
     }
 
     [Theory]
