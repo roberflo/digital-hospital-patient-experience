@@ -69,7 +69,7 @@ app.Use(async (ctx, next) =>
 app.MapGet("/health/live", () => Results.Ok(new { status = "ok" }));
 app.MapGet("/health/ready", async (CrmDb db) => await db.Database.CanConnectAsync() ? Results.Ok(new { status = "ready" }) : Results.StatusCode(503));
 app.UseRateLimiter();
-app.MapHospitalConnection();app.MapCommercial();app.MapReminderEndpoints();app.MapActivityFeed();app.MapClinical();app.MapTeam();app.MapProductivity();app.MapChannelDiagnostics();app.MapInbox();app.MapCrm(); app.MapWhatsApp(); app.MapHospital(); app.MapGoogle(); app.MapAssistant();
+app.MapHospitalConnection();app.MapCommercial();app.MapReminderEndpoints();app.MapActivityFeed();app.MapClinical();app.MapTeam();app.MapProductivity();app.MapChannelDiagnostics();app.MapInstallation();app.MapInbox();app.MapCrm(); app.MapWhatsApp(); app.MapHospital(); app.MapGoogle(); app.MapAssistant();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<CrmDb>();

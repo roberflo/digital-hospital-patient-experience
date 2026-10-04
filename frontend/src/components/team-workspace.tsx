@@ -90,6 +90,28 @@ export function AssignmentControl({
   );
 }
 
+// Teammates join by signing in with their Hospital account: the only thing to hand over is this link.
+export function CopyAccessLink(
+  props: Pick<React.ComponentProps<typeof Button>, 'size' | 'variant'>,
+) {
+  return (
+    <Button
+      {...props}
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(location.origin + '/login');
+          toast.success('Enlace de acceso copiado');
+        } catch {
+          toast.error('No se pudo copiar el enlace');
+        }
+      }}
+    >
+      <Copy />
+      Copiar enlace de acceso
+    </Button>
+  );
+}
+
 export function TeamWorkspace({
   me,
   search,
@@ -233,19 +255,7 @@ export function TeamWorkspace({
             La creación y los cambios de rol aún no están disponibles desde Recepción. No necesitas
             crear otra contraseña aquí.
           </p>
-          <Button
-            onClick={async () => {
-              try {
-                await navigator.clipboard.writeText(location.origin + '/login');
-                toast.success('Enlace de acceso copiado');
-              } catch {
-                toast.error('No se pudo copiar el enlace');
-              }
-            }}
-          >
-            <Copy />
-            Copiar enlace de acceso
-          </Button>
+          <CopyAccessLink />
         </DialogContent>
       </Dialog>
     </>
