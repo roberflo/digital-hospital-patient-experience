@@ -15,6 +15,7 @@ import {
   X,
 } from 'lucide-react';
 import { fetcher, type Me } from '@/lib/api';
+import { AgentMetrics } from './agent-metrics';
 import { Button } from './ui/button';
 
 type Event = {
@@ -75,6 +76,7 @@ const titles: Record<string, string> = {
   delivery: 'Detectó un problema de entrega',
   agent_tool: 'Realizó una acción automática',
   handoff_offer: 'Ofreció pasar con una persona',
+  waiting_notice: 'Avisó al paciente que sigue en espera',
   guard: 'Retuvo una respuesta automática',
   agent_provider: 'El proveedor de IA no respondió',
   patient_registered: 'Registró al paciente en Hospital',
@@ -337,6 +339,7 @@ export function ActivityWorkspace({
         </p>
       ) : (
         <>
+          <AgentMetrics />
           <div className="care-results-bar">
             <div>
               <h2>

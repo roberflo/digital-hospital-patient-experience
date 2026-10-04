@@ -10,6 +10,7 @@ public static class CrmEndpoints
         var api = app.MapGroup("/api").RequireAuthorization();
         api.MapGet("/me", async (CrmDb db, TenantScope t, CurrentUser u) => new { u.Subject, u.Name, u.Role, tenant = await db.Tenants.Where(x => x.Id == t.Id).Select(x => new { x.Id, x.Name, x.TimeZone, x.AgentEnabled }).SingleAsync() });
         api.MapGet("/overview", async (CrmDb db) => new { contacts = await db.Contacts.CountAsync(), conversations = await db.Conversations.CountAsync(x => x.State != "resolved"), human = await db.Conversations.CountAsync(x => x.Status == "human" && x.State == "open"), agent = await db.Conversations.CountAsync(x => x.Status == "agent" && x.State == "open"), opportunities = await db.Opportunities.CountAsync(x => x.Stage != "won" && x.Stage != "lost"), pending = await db.Jobs.CountAsync(x => x.Status == "pending"), failed = await db.Jobs.CountAsync(x => x.Status == "failed" || x.Status == "uncertain") });
+        api.MapGet("/agent-metrics", (CrmDb db, int? days, CancellationToken ct) => AgentMetrics.Read(db, days, ct));
         api.MapGet("/contacts", async (CrmDb db, string? q, int? page) =>
         {
             var offset = (Math.Clamp(page ?? 1, 1, 10000) - 1) * 100;

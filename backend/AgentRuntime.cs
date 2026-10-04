@@ -34,14 +34,25 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         var tenant = await db.Tenants.SingleAsync(x => x.Id == scope.Id, ct); zone = TimeZoneInfo.FindSystemTimeZoneById(tenant.TimeZone);
         conv = await db.Conversations.SingleAsync(x => x.Id == job.ConversationId, ct);
         channel = await db.Channels.SingleAsync(x => x.Id == conv.ChannelId, ct);
-        if (!kapso.CanSend(false) || !tenant.AgentEnabled || !channel.Enabled || conv.Status != "agent" || conv.State != "open") return;
+        if (!kapso.CanSend(false) || !tenant.AgentEnabled || !channel.Enabled || conv.State != "open") return;
+        // Handed over by the agent and not yet answered by anyone: the patient is not left in silence (criterios 62–64).
+        var waitingSince = conv.Status == "human" ? await HandedOverUnanswered(ct) : null;
+        if (conv.Status != "agent" && waitingSince is null) return;
         revision = conv.Revision; contact = await db.Contacts.SingleAsync(x => x.Id == conv.ContactId, ct);
         hospital.CallAs($"Recepcion-AgenteWhatsApp/1.0 (conversacion {conv.Id}; trabajo {job.Id})");
         var history = await db.Messages.Where(x => x.ConversationId == conv.Id).OrderByDescending(x => x.CreatedAt).Take(AgentMemory.Window).ToListAsync(ct); history.Reverse();
         session = AgentMemory.Session(history);
         var latest = history.LastOrDefault(x => x.Sender == "patient"); if (latest is null || job.Key != "agent:" + latest.ExternalId) return;
         var registering = history.Count > 1 && history[^2].Sender != "patient" && history[^2].Body.Contains("contacto de emergencia", StringComparison.OrdinalIgnoreCase);
-        if (AgentGuard.Inbound(latest.Body, latest.Type, registering) is { } reason)
+        if (waitingSince is { } since)
+        {
+            // An emergency always gets the number. A tap of a registered patient is still served below, with no model.
+            // Anything else is for the person who will answer: the patient is told so once it has been a while.
+            var tap = latest.Body.Trim();
+            if (AgentGuard.Inbound(latest.Body, latest.Type, registering) is { } danger && AgentGuard.NamesEmergency(latest.Body, registering)) { await Handoff(conv, danger, ct, true); return; }
+            if (contact.PatientId is null || !(tap is "AGENDAR" or "MISCITAS" or "RECETA" || tap.StartsWith("CONFIRMAR ", StringComparison.OrdinalIgnoreCase) || AgentGuard.SlotChoice(tap) is not null || AgentGuard.AppointmentChoice(tap) is not null)) { await StillWaiting(since, tenant.EmergencyPhone, ct); return; }
+        }
+        else if (AgentGuard.Inbound(latest.Body, latest.Type, registering) is { } reason)
         {
             // An emergency, or a patient who asks for a person, goes at once. A file the agent cannot open is the patient's call.
             if (latest.Type != "text" && latest.Body == "[Archivo recibido]") await OfferPerson(reason, "Gracias por el archivo. Yo no puedo abrirlo, pero el equipo sí.", ct);
@@ -248,6 +259,29 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
     static string? FirstName(string name) => name.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() is { } first && first != "Paciente" && System.Text.RegularExpressions.Regex.IsMatch(first, @"^\p{Lu}\p{Ll}{1,19}$") ? first : null;
     static readonly Choices Menu = new([new("AGENDAR", "Agendar cita", "Ver horarios libres"), new("MISCITAS", "Mis citas", "Consultar, cambiar o cancelar"), new("RECETA", "Mi receta", "Recibir mi última receta"), new("PERSONA", "Hablar con persona", "Pasar con recepción")], "Ver opciones");
 
+    /// <summary>When the agent handed this conversation to the team, if no person has answered or acted on it since. A conversation
+    /// the team took by itself, or one that stopped on an error, is theirs alone.</summary>
+    async Task<DateTimeOffset?> HandedOverUnanswered(CancellationToken ct)
+    {
+        var last = await db.Activities.Where(x => x.ConversationId == conv.Id && (x.Kind == "handoff" || x.Kind == "error" || x.Kind == "delivery" || x.ActorSubject != null)).OrderByDescending(x => x.CreatedAt).FirstOrDefaultAsync(ct);
+        if (last is not { Kind: "handoff", ActorRole: "agent_ai" }) return null;
+        return await db.Messages.AnyAsync(x => x.ConversationId == conv.Id && x.Sender == "human" && x.CreatedAt > last.CreatedAt, ct) ? null : last.CreatedAt;
+    }
+    /// <summary>The patient wrote again and nobody has answered yet. Said after ten minutes and at most every two hours; the team sees the conversation rise.</summary>
+    async Task StillWaiting(DateTimeOffset since, string? emergencyPhone, CancellationToken ct)
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (since > now.AddMinutes(-10) || await db.Activities.AnyAsync(x => x.ConversationId == conv.Id && x.Kind == "waiting_notice" && x.CreatedAt > since && x.CreatedAt > now.AddHours(-2), ct)) return;
+        using (await conversations.Lock(conv.Id, ct))
+        {
+            await db.Entry(conv).ReloadAsync(ct); if (conv.Priority is "low" or "normal") { conv.Priority = "high"; conv.Revision++; }
+            db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "waiting_notice", Actor = "Agente", ActorRole = "agent_ai", Body = "El paciente volvió a escribir y nadie le ha respondido desde la derivación. Se le avisó y la conversación subió de prioridad." });
+            await db.SaveChangesAsync(ct);
+        }
+        var text = "Tu consulta sigue con el equipo del hospital.\nTodavía no han podido responderte; lo harán por aquí en horario de atención."
+            + (emergencyPhone is { Length: > 0 } ? $"\n\nSi es una emergencia, llama al *{emergencyPhone}*." : "") + (contact.PatientId is null ? "" : "\n\nMientras tanto, con esto sí te ayudo yo:");
+        await conversations.Send(conv.Id, text, "agent", "agent:" + job.Id, ct: ct, choices: contact.PatientId is null ? null : new([new("AGENDAR", "Agendar cita"), new("MISCITAS", "Mis citas"), new("RECETA", "Mi receta")]));
+    }
     /// <summary>The patient decides. The agent says what it could not do and offers a person with a button; the reason is kept for the team,
     /// never shown in the chat.</summary>
     async Task OfferPerson(string reason, string message, CancellationToken ct)
@@ -379,7 +413,8 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         if (free.Count == 0) return Result(new { requestedDate = date, available = false, note = "Sin horarios publicados en los 14 días desde esa fecha." });
         var first = free.Min(x => DateOnly.FromDateTime(x.Local.DateTime)); firstDay = first;
         // A registered patient can tap one of these and get the proposal straight away.
-        if (contact.PatientId is not null) slots.AddRange(free.Where(x => DateOnly.FromDateTime(x.Local.DateTime) == first).OrderBy(x => x.Slot.StartsAt).Take(10).Select(x =>
+        var preferences = contact.PatientId is null ? [] : await db.ContactMemories.Where(x => x.ContactId == contact.Id).ToDictionaryAsync(x => x.Key, x => x.Value, ct);
+        if (contact.PatientId is not null) slots.AddRange(free.Where(x => DateOnly.FromDateTime(x.Local.DateTime) == first).OrderBy(x => AgentMemory.Distance(preferences, x.Doctor.ClinicianName, x.Local)).ThenBy(x => x.Slot.StartsAt).Take(10).Select(x =>
             new Choice($"CITA {x.Local:yyyy-MM-ddTHH:mm:sszzz} {x.Doctor.ClinicianId:D} {x.Slot.DurationMinutes} {x.Doctor.ClinicianName}", $"{Weekdays[(int)x.Local.DayOfWeek][..3]} {x.Local.Day} {Months[x.Local.Month - 1][..3]} {x.Local:HH:mm}", x.Doctor.PlaceName.Length > 0 ? $"{x.Doctor.ClinicianName} · {x.Doctor.PlaceName}" : x.Doctor.ClinicianName)));
         return Result(new
         {
