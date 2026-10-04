@@ -79,6 +79,12 @@ El paciente escribe; el agente **responde**, **consulta** (agenda, recetas emiti
 | 59 | La memoria es un dato, no una instrucción ni un permiso: va delimitada después de las reglas, y lo que diga no cambia el alcance ni lo que las herramientas pueden hacer. | `TheStablePartOfThePromptComesFirst` (posición) · evals `seguridad-111-memoria-con-instrucciones`, `seguridad-112-memoria-no-guarda-salud`. |
 | 60 | Las reglas y la guía van primero e idénticas para todos los pacientes del hospital; la fecha, el estado del contacto y la memoria van al final. El proveedor puede así cobrar el prefijo como caché. | `TheStablePartOfThePromptComesFirst`. |
 | 61 | Las lecturas de memoria usan índice: mensajes por conversación y fecha, actividad por conversación y por contacto y fecha. | `MemoryReadsHaveTheirIndexes`. |
+| 62 | Nadie queda sin respuesta tras una derivación del agente: mientras ninguna persona haya respondido ni actuado, los toques de un paciente con expediente (Agendar, Mis citas, Mi receta, elegir hora, Confirmar, cambiar, cancelar) se siguen atendiendo sin modelo, y la conversación sigue en la bandeja de personas. | `AgentWaitingTests.ATapIsStillServedWhileThePatientWaitsForAPerson`. |
+| 63 | Si el paciente escribe texto libre pasados 10 minutos de la derivación sin respuesta de una persona, recibe un aviso (su consulta sigue con el equipo, el teléfono de urgencias y lo que el agente sí puede hacer), la conversación sube a prioridad alta y queda rastro. Un aviso como mucho cada 2 horas; antes de los 10 minutos el texto se deja para la persona. El modelo no se consulta. | `FreeTextAfterTenMinutesGetsOneNoticeAndRaisesThePriority`, `FreeTextRightAfterTheHandoffIsLeftForThePerson`. |
+| 64 | En cuanto una persona responde o actúa, o si la conversación la dejó con personas alguien del equipo (no el agente), el agente calla. Una urgencia escrita durante la espera recibe siempre el mensaje con el teléfono de urgencias. | `OnceAPersonAnswersTheAgentStaysSilent`, `AConversationThePeopleTookIsNeverAnswered`, `AnEmergencyWhileWaitingStillGetsThePhone`. |
+| 65 | La lista de horarios pone primero los del doctor y la franja (mañana, tarde, noche) que el paciente dejó como preferencia; el resto sigue debajo por hora. Sin preferencias el orden es el de siempre. | `AgentMemoryTests.PreferredDoctorAndTimeOfDayComeFirstInTheList`. |
+| 66 | La atención del agente se mide: `GET /api/agent-metrics?days=N` (1–90, 7 por omisión) cuenta, del rastro de este hospital en ese periodo, las conversaciones que el agente atendió, las que resolvió sin persona y las que derivó, y cuántas citas gestionó, pacientes registró, recetas entregó, ofertas de persona hizo, respuestas retuvo, fallos de proveedor hubo y avisos de espera envió. Sólo cuenta; no lee textos. | `AgentMetricsTests.CountsWhatTheAgentDidInThePeriodForThisHospital`. |
+| 67 | La pantalla de Actividad muestra esas cifras de los últimos 7 días sobre el historial. | Revisión visual en `?view=activity`; `pnpm typecheck` y `pnpm lint`. |
 
 ## Anti-criterios
 
@@ -220,6 +226,12 @@ Verificación (2026-10-04): suite `395 pasan, 0 fallan`. Con `gpt-6-luna` y 111 
 Lo que esas pasadas corrigieron: el modelo llamó a `remember` cuando le pidieron guardar un diagnóstico, así que qué puede guardarse lo decide el código (`AgentMemory.Accepts`: una hora o día para el horario, un nombre corto para trato y doctor, nunca palabras de salud) y la eval mide lo que quedó guardado, no la llamada; y «mi hija Sofía» llegaba al formulario sin parentesco y se volvía a preguntar (`ARelationshipSaidInFrontOfTheContactsNameIsNotAskedAgain`).
 
 No medido: cuántos tokens cobra el proveedor como caché con el prefijo estable. No hecho: una pantalla en el CRM para ver o corregir las preferencias guardadas (hoy se ven en el historial como «Preferencia del paciente guardada» y el paciente las borra pidiéndolo).
+
+## Espera, preferencias y medición · 2026-10-04
+
+Criterios 62–67. Suite: `403 pasan, 0 fallan`; `pnpm typecheck`, eslint y prettier en verde sobre los archivos tocados. Ninguno de estos caminos consulta al modelo, así que no hay eval nueva.
+
+No verificado: la revisión visual del tablero en `?view=activity` (la sesión del navegador había expirado). Tampoco hay aviso si el paciente no vuelve a escribir: el aviso de espera responde a un mensaje suyo, no a un reloj.
 
 ## Límites conocidos
 

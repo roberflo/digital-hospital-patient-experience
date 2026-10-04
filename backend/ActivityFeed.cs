@@ -18,7 +18,7 @@ public static class ActivityFeed
     };
     public static string Category(string kind) => kind switch
     {
-        "response" => "response", "handoff" or "assignment" or "handoff_offer" => "handoff", "note" => "note",
+        "response" => "response", "handoff" or "assignment" or "handoff_offer" or "waiting_notice" => "handoff", "note" => "note",
         "appointment" or "appointment_reminder" => "appointment", "clinical_review" or "prescription_delivered" => "clinical", "error" or "delivery" or "guard" or "agent_provider" => "review",
         "agent_tool" => "ai_action", _ when kind.StartsWith("proposal", StringComparison.Ordinal) => "appointment", _ => "crm"
     };

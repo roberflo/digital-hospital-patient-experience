@@ -48,6 +48,14 @@ public static partial class AgentMemory
             .Select(x => (object)new { date = TimeZoneInfo.ConvertTime(x.Message.CreatedAt, zone).ToString("yyyy-MM-dd"), from = x.Message.Sender == "patient" ? "paciente" : "hospital", text = Line(x.Message.Body, 300) }).ToList();
     }
 
+    /// <summary>How far a free hour is from what the patient prefers: 0 when it is their doctor at their time of day.
+    /// The list is sorted by it, so nothing is hidden: what they usually want just comes first.</summary>
+    public static int Distance(IReadOnlyDictionary<string, string> preferences, string doctor, DateTimeOffset local) =>
+        (preferences.TryGetValue("doctor_preferido", out var who) && !Fold(who).Split(' ', StringSplitOptions.RemoveEmptyEntries).Where(w => w.Length >= 4 && !w.StartsWith("doctor")).Any(Fold(doctor).Contains) ? 2 : 0)
+        + (preferences.TryGetValue("horario_preferido", out var when) && Band(Fold(when)) is { } band && (local.Hour < band.From || local.Hour >= band.To) ? 1 : 0);
+    // ponytail: morning, afternoon, night. «Después de las 3» or «los martes» are not read; add them if patients state them that way.
+    static (int From, int To)? Band(string folded) => folded.Contains("tarde") ? (12, 18) : folded.Contains("noche") ? (18, 24) : folded.Contains("temprano") ? (0, 10) : folded.Contains("manana") ? (0, 12) : null;
+
     static string Line(string text, int max) { var one = Regex.Replace(text, @"\s+", " ").Trim(); return one.Length > max ? one[..max] + "…" : one; }
     static string Fold(string text) => new string(text.Normalize(NormalizationForm.FormD).Where(c => CharUnicodeInfo.GetUnicodeCategory(c) != UnicodeCategory.NonSpacingMark).Select(c => char.IsLetterOrDigit(c) ? char.ToLowerInvariant(c) : ' ').ToArray());
     [GeneratedRegex(@"diab|hipertens|presi[oó]n|embaraz|al[eé]rgi|medic|pastilla|metformin|insulin|\bmg\b|dolor|enferm|diagn|c[aá]ncer|asma|tratamiento|recet|s[ií]ntoma|cirug|operaci|terapia|\bvih\b|depresi|ansiedad", RegexOptions.IgnoreCase)] private static partial Regex Health();
