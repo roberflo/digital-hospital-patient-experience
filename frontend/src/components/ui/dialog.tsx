@@ -5,8 +5,17 @@ import { X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 export const Dialog = D.Root;
 export const DialogTrigger = D.Trigger;
-export const DialogTitle = D.Title;
-export const DialogDescription = D.Description;
+// Callers that pass no className get the product's dialog heading, so every
+// dialog opens with the same title, description and spacing.
+export function DialogTitle({ className, ...props }: React.ComponentProps<typeof D.Title>) {
+  return <D.Title className={className ?? 'dialog-title'} {...props} />;
+}
+export function DialogDescription({
+  className,
+  ...props
+}: React.ComponentProps<typeof D.Description>) {
+  return <D.Description className={className ?? 'dialog-description'} {...props} />;
+}
 export function DialogContent({
   children,
   className,

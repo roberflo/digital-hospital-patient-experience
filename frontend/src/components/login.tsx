@@ -76,7 +76,7 @@ export default function Login({
             Continuar con mi cuenta del hospital
             <ArrowRight />
           </Button>
-          <p className="hint">
+          <p className="hint mt-3">
             Si ya tienes una sesión abierta en Hospital, podrás continuar con ella. Reconoceremos tu
             hospital y conservaremos tus permisos.
           </p>

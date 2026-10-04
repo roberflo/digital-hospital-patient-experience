@@ -109,11 +109,13 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
     }
 
     public async Task CancelAppointmentAsync(Guid tenantId, Guid patientId, string senderPhone,
-        Guid appointmentId, CancellationToken ct = default)
+        Guid appointmentId, CancellationToken ct = default, string reason = "patient-requested")
     {
+        // The default is the agent's case: the patient asked over WhatsApp. Staff state theirs.
+        var cancellation = AppointmentCancellation.From(reason);
         await VerifyAppointmentAsync(tenantId, patientId, senderPhone, appointmentId, ct);
         using var response = await SendAsync(tenantId, HttpMethod.Post,
-            $"v1/agenda/{appointmentId:D}/cancel", new { reason = "patient-requested", cancelledByPatient = true }, ct);
+            $"v1/agenda/{appointmentId:D}/cancel", new { reason = cancellation.Reason, cancelledByPatient = cancellation.CancelledByPatient }, ct);
     }
 
     public async Task<HospitalPrescriptionPage> ListIssuedPrescriptionsAsync(Guid tenantId,
@@ -347,4 +349,17 @@ public sealed record HospitalPrescription(Guid PrescriptionId, Guid PatientId, G
     DateTimeOffset SignedAt, IReadOnlyList<JsonElement> Lines, bool ContentWithheld)
 {
     public override string ToString() => $"HospitalPrescription {PrescriptionId} [{State}]";
+}
+
+/// <summary>What Recepción tells Hospital when an appointment is cancelled.</summary>
+public sealed record AppointmentCancellation(string Reason, bool CancelledByPatient)
+{
+    /// <summary>Hospital's closed reason vocabulary. Only a patient's own request is
+    /// attributed to the patient; every other reason is the hospital's cancellation.</summary>
+    public static AppointmentCancellation From(string? reason) => reason switch
+    {
+        "patient-requested" => new(reason, true),
+        "clinician-unavailable" or "clinic-closed" or "duplicate" or "other" => new(reason, false),
+        _ => throw new ArgumentException("Indica el motivo de la cancelación."),
+    };
 }

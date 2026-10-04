@@ -26,6 +26,8 @@ public static class HospitalEndpoints
             var contact = await db.Contacts.SingleOrDefaultAsync(x => x.Id == input.ContactId); if (contact?.PatientId is null) return Results.BadRequest(new { title = "Vincula el contacto al expediente del hospital" });
             if(input.Action is not("create" or "reschedule" or "cancel"))throw new ArgumentException("Acción inválida");
             if(input.Action!="create"&&input.AppointmentId is null)throw new ArgumentException("Cita requerida");
+            // Refused before the idempotency receipt is written: a cancellation with no stated reason must not spend the key.
+            if(input.Action=="cancel")AppointmentCancellation.From(input.CancelReason);
             if(input.Action!="cancel"){
                 var zone=await db.Tenants.Where(x=>x.Id==t.Id).Select(x=>x.TimeZone).SingleAsync();
                 if(!await h.IsSlotAvailableAsync(t.Id,input.DoctorId,input.StartsAt,input.DurationMinutes,zone))return Results.Conflict(new{title="El horario ya no está disponible"});
@@ -36,7 +38,8 @@ public static class HospitalEndpoints
             void Record(string text){db.Activities.Add(new Activity{TenantId=t.Id,ContactId=contact.Id,Kind="appointment",Actor=u.Name,ActorRole=u.Role,ActorSubject=u.Subject,Body=text});}
             if (input.Action == "cancel")
             {
-                await h.CancelAppointmentAsync(t.Id, contact.PatientId.Value, contact.Phone, input.AppointmentId ?? throw new ArgumentException("Cita requerida")); Record("Cita cancelada en Hospital.");await db.SaveChangesAsync();return Results.Ok(new { status = "cancelled" });
+                var cancellation = AppointmentCancellation.From(input.CancelReason);
+                await h.CancelAppointmentAsync(t.Id, contact.PatientId.Value, contact.Phone, input.AppointmentId ?? throw new ArgumentException("Cita requerida"), reason: cancellation.Reason); Record(cancellation.CancelledByPatient ? "Cita cancelada en Hospital a petición del paciente." : "Cita cancelada en Hospital por el hospital.");await db.SaveChangesAsync();return Results.Ok(new { status = "cancelled" });
             }
             if (input.Action == "reschedule")
             {
@@ -47,4 +50,4 @@ public static class HospitalEndpoints
         });
     }
 }
-public record AppointmentInput(Guid ContactId, string Action, Guid? AppointmentId, Guid DoctorId, DateTimeOffset StartsAt, int DurationMinutes);
+public record AppointmentInput(Guid ContactId, string Action, Guid? AppointmentId, Guid DoctorId, DateTimeOffset StartsAt, int DurationMinutes, string? CancelReason = null);

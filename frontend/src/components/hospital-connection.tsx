@@ -339,7 +339,12 @@ export function PatientLink({
           </p>
         )}
         {connection?.hospitalUrl && (
-          <a href={connection.hospitalUrl} target="_blank" rel="noreferrer">
+          <a
+            href={connection.hospitalUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="mt-4 inline-block text-sm font-semibold text-primary"
+          >
             Abrir Hospital →
           </a>
         )}

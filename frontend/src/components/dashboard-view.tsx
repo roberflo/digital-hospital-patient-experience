@@ -24,29 +24,50 @@ export function DashboardView({
       label: 'Conversaciones abiertas',
       value: stats?.conversations,
       detail: 'Tu bandeja de atención',
+      view: 'inbox',
     },
     {
       icon: UserRound,
       label: 'Esperando a tu equipo',
       value: stats?.human,
       detail: 'Atención personal',
+      view: 'inbox',
+      urgent: true,
     },
-    { icon: Sparkles, label: 'Con el agente', value: stats?.agent, detail: 'Atención automática' },
-    { icon: Users, label: 'Contactos', value: stats?.contacts, detail: 'Relaciones que importan' },
+    {
+      icon: Sparkles,
+      label: 'Con el agente',
+      value: stats?.agent,
+      detail: 'Atención automática',
+      view: 'agent',
+    },
+    {
+      icon: Users,
+      label: 'Contactos',
+      value: stats?.contacts,
+      detail: 'Relaciones que importan',
+      view: 'contacts',
+    },
   ];
 
   return (
     <>
       <div className="metrics">
-        {metrics.map(({ icon: Icon, label, value, detail }) => (
-          <div className="metric" key={label}>
+        {/* Each figure leads where it is acted on; the one waiting on people stands out. */}
+        {metrics.map(({ icon: Icon, label, value, detail, view, urgent }) => (
+          <button
+            type="button"
+            className={'metric' + (urgent && value ? ' metric-urgent' : '')}
+            key={label}
+            onClick={() => onNavigate(view)}
+          >
             <div>
               <span>{label}</span>
               <Icon size={17} />
             </div>
             <strong>{value ?? '—'}</strong>
             <small>{detail}</small>
-          </div>
+          </button>
         ))}
       </div>
       <section className="content-card">

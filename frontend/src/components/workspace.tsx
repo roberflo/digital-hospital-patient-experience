@@ -1594,6 +1594,7 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
   const [modify, setModify] = useState<AgendaRow | null>(null);
   const [doctor, setDoctor] = useState('');
   const [cancel, setCancel] = useState<AgendaRow | null>(null);
+  const [cancelReason, setCancelReason] = useState('');
   const appointmentBusy = useRef(false);
   const appointmentRequest = useRef<{ body: string; key: string } | null>(null);
   async function saveAppointment(input: unknown) {
@@ -1737,7 +1738,10 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
                 variant="ghost"
                 size="sm"
                 disabled={r.status !== 'booked' && r.status !== 'not-recorded'}
-                onClick={() => setCancel(r)}
+                onClick={() => {
+                  setCancelReason('');
+                  setCancel(r);
+                }}
               >
                 Cancelar
               </Button>
@@ -1872,41 +1876,64 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
           <DialogDescription className="dialog-description">
             Se cancelará la cita de {cancel?.displayName} en la agenda del hospital.
           </DialogDescription>
-          <Button
-            variant="destructive"
-            disabled={savingAppointment}
-            onClick={async () => {
-              if (appointmentBusy.current) return;
-              const c = contacts?.find((x) => x.patientId === cancel?.patientId);
-              if (!c) {
-                toast.error('Vincula este paciente a un contacto antes de cancelar.');
-                return;
-              }
-              appointmentBusy.current = true;
-              setSavingAppointment(true);
-              try {
-                await saveAppointment({
-                  action: 'cancel',
-                  appointmentId: cancel?.appointmentId,
-                  contactId: c.id,
-                  doctorId: '00000000-0000-0000-0000-000000000000',
-                  startsAt: cancel?.scheduledStart,
-                  durationMinutes: cancel?.durationMinutes,
-                });
-                appointmentRequest.current = null;
-                toast.success('Cita cancelada');
-                setCancel(null);
-                mutate();
-              } catch (e) {
-                toast.error((e as Error).message);
-              } finally {
-                appointmentBusy.current = false;
-                setSavingAppointment(false);
-              }
-            }}
-          >
-            Confirmar cancelación
-          </Button>
+          {/* Hospital records who cancelled; staff say so instead of it being assumed. */}
+          <label>
+            Motivo de la cancelación
+            <select
+              aria-label="Motivo de la cancelación"
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+            >
+              <option value="">Selecciona un motivo</option>
+              <option value="patient-requested">El paciente lo pidió</option>
+              <option value="clinician-unavailable">El doctor no está disponible</option>
+              <option value="clinic-closed">El hospital no atiende ese día</option>
+              <option value="duplicate">La cita estaba duplicada</option>
+              <option value="other">Otro motivo del hospital</option>
+            </select>
+          </label>
+          {/* A destructive confirm offers its way out as a button, not only the X. */}
+          <div className="dialog-actions">
+            <Button variant="outline" disabled={savingAppointment} onClick={() => setCancel(null)}>
+              Conservar cita
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={savingAppointment || !cancelReason}
+              onClick={async () => {
+                if (appointmentBusy.current) return;
+                const c = contacts?.find((x) => x.patientId === cancel?.patientId);
+                if (!c) {
+                  toast.error('Vincula este paciente a un contacto antes de cancelar.');
+                  return;
+                }
+                appointmentBusy.current = true;
+                setSavingAppointment(true);
+                try {
+                  await saveAppointment({
+                    action: 'cancel',
+                    appointmentId: cancel?.appointmentId,
+                    contactId: c.id,
+                    doctorId: '00000000-0000-0000-0000-000000000000',
+                    startsAt: cancel?.scheduledStart,
+                    durationMinutes: cancel?.durationMinutes,
+                    cancelReason,
+                  });
+                  appointmentRequest.current = null;
+                  toast.success('Cita cancelada');
+                  setCancel(null);
+                  mutate();
+                } catch (e) {
+                  toast.error((e as Error).message);
+                } finally {
+                  appointmentBusy.current = false;
+                  setSavingAppointment(false);
+                }
+              }}
+            >
+              Confirmar cancelación
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
     </section>
