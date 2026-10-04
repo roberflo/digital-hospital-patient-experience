@@ -29,7 +29,7 @@
     ],
     "match": [
       "CONFIRMAR [0-9A-F]{6}",
-      "Registro: Mario Sintético Rivas Prueba, nacimiento 5 de noviembre de 1982, sexo masculino"
+      "Mario Sintético Rivas Prueba\\*\\nNacimiento: 5 de noviembre de 1982\\nSexo: masculino"
     ],
     "noMatch": [
       "(?i)\\b(qued[oó]|est[aá]|ha sido|fue|has sido)\\s+(ya\\s+)?(agendad|cancelad|reprogramad|reservad|confirmad|registrad)[ao]\\b|\\b(cancel|agend|reserv)é\\b"

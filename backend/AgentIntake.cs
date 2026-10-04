@@ -11,39 +11,39 @@ public sealed partial record Intake(int Step, string? GivenNames = null, string?
     public bool Minor => Step < 0;
     static readonly string[] Months = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
 
-    public static (Intake State, string Prompt, Choices? Choices) Start() => Ask(new Intake(1), "Para agendar necesito registrarte; son siete preguntas cortas. ");
+    public static (Intake State, string Prompt, Choices? Choices) Start() => Ask(new Intake(1), "Para agendar necesito registrarte. Son 7 preguntas cortas.\n\n");
 
     public (Intake State, string Prompt, Choices? Choices) Answer(string text, DateOnly today)
     {
         var value = text.Trim();
         switch (Step)
         {
-            case 1: return Name().IsMatch(value) ? Ask(this with { Step = 2, GivenNames = value }) : Ask(this, "No pude leer tus nombres. ");
-            case 2: return Name().IsMatch(value) ? Ask(this with { Step = 3, FamilyNames = value }) : Ask(this, "No pude leer tus apellidos. ");
+            case 1: return Name().IsMatch(value) ? Ask(this with { Step = 2, GivenNames = value }) : Ask(this, "No pude leer tus nombres.\n\n");
+            case 2: return Name().IsMatch(value) ? Ask(this with { Step = 3, FamilyNames = value }) : Ask(this, "No pude leer tus apellidos.\n\n");
             case 3:
-                if (Date(value) is not { } born || born > today || born < today.AddYears(-120)) return Ask(this, "No pude leer esa fecha. ");
+                if (Date(value) is not { } born || born > today || born < today.AddYears(-120)) return Ask(this, "No pude leer esa fecha.\n\n");
                 return born > today.AddYears(-18) ? (this with { Step = -1 }, "", null) : Ask(this with { Step = 4, BirthDate = born.ToString("yyyy-MM-dd") });
             case 4:
                 var sex = value.ToLowerInvariant() switch { "femenino" or "f" or "mujer" => "female", "masculino" or "m" or "hombre" => "male", _ => null };
-                return sex is null ? Ask(this, "Necesito una de las dos opciones. ") : Ask(this with { Step = 5, Sex = sex });
-            case 5: return Name().IsMatch(value) ? Ask(this with { Step = 6, EmergencyName = value }) : Ask(this, "No pude leer ese nombre. ");
-            case 6: return Name().IsMatch(value) && value.Length <= 60 ? Ask(this with { Step = 7, EmergencyRelationship = value }) : Ask(this, "No pude leer el parentesco. ");
+                return sex is null ? Ask(this, "Necesito una de las dos opciones.\n\n") : Ask(this with { Step = 5, Sex = sex });
+            case 5: return Name().IsMatch(value) ? Ask(this with { Step = 6, EmergencyName = value }) : Ask(this, "No pude leer ese nombre.\n\n");
+            case 6: return Name().IsMatch(value) && value.Length <= 60 ? Ask(this with { Step = 7, EmergencyRelationship = value }) : Ask(this, "No pude leer el parentesco.\n\n");
             case 7:
                 try { return (this with { Step = 8, EmergencyPhone = Rules.Phone(value) }, "", null); }
-                catch (ArgumentException) { return Ask(this, "Ese teléfono no parece completo. "); }
+                catch (ArgumentException) { return Ask(this, "Ese teléfono no parece completo.\n\n"); }
             default: return (this, "", null);
         }
     }
 
     static (Intake State, string Prompt, Choices? Choices) Ask(Intake state, string lead = "") => state.Step switch
     {
-        1 => (state, lead + "Paso 1 de 7: ¿cuáles son tus nombres, sin apellidos?", null),
-        2 => (state, lead + "Paso 2 de 7: ¿y tus apellidos?", null),
-        3 => (state, lead + "Paso 3 de 7: ¿cuál es tu fecha de nacimiento? Por ejemplo, 12/03/1990.", null),
-        4 => (state, lead + "Paso 4 de 7: ¿cuál es tu sexo registral?", new Choices([new("f", "Femenino"), new("m", "Masculino")])),
-        5 => (state, lead + "Paso 5 de 7: ¿quién es tu contacto de emergencia? Escribe su nombre completo.", null),
-        6 => (state, lead + "Paso 6 de 7: ¿qué parentesco tiene contigo tu contacto de emergencia? Por ejemplo: madre, hermano, pareja.", null),
-        7 => (state, lead + "Paso 7 de 7: ¿cuál es el teléfono de tu contacto de emergencia?", null),
+        1 => (state, lead + "*Paso 1 de 7*\n¿Cuáles son tus nombres, sin apellidos?", null),
+        2 => (state, lead + "*Paso 2 de 7*\n¿Y tus apellidos?", null),
+        3 => (state, lead + "*Paso 3 de 7*\n¿Cuál es tu fecha de nacimiento?\nPor ejemplo: 12/03/1990", null),
+        4 => (state, lead + "*Paso 4 de 7*\n¿Cuál es tu sexo registral?", new Choices([new("f", "Femenino"), new("m", "Masculino")])),
+        5 => (state, lead + "*Paso 5 de 7*\n¿Quién es tu contacto de emergencia?\nEscribe su nombre completo.", null),
+        6 => (state, lead + "*Paso 6 de 7*\n¿Qué parentesco tiene contigo tu contacto de emergencia?\nPor ejemplo: madre, hermano, pareja.", null),
+        7 => (state, lead + "*Paso 7 de 7*\n¿Cuál es el teléfono de tu contacto de emergencia?", null),
         _ => (state, "", null),
     };
 

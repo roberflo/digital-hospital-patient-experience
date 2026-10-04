@@ -49,7 +49,9 @@ public sealed class AgentEvals(ITestOutputHelper output)
 
         var handoff = (await h.Fresh()).Status == "human";
         var tools = (await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id && a.Kind == "agent_tool").OrderBy(a => a.CreatedAt).Select(a => a.Body).ToListAsync()).Select(body => Regex.Match(body, @"Herramienta: (\w+)\.").Groups[1].Value).ToList();
-        var reply = string.Join("\n", h.Sent);
+        // What the patient receives: the texts, and the buttons or rows under them (a Confirmar button carries the code the text no longer spells out).
+        var taps = h.Interactive.SelectMany(i => i.GetProperty("action").TryGetProperty("buttons", out var buttons) ? buttons.EnumerateArray().Select(b => b.GetProperty("reply")) : i.GetProperty("action").GetProperty("sections").EnumerateArray().SelectMany(section => section.GetProperty("rows").EnumerateArray())).Select(t => $"[{t.GetProperty("title").GetString()} → {Regex.Replace(t.GetProperty("id").GetString()!, "[0-9a-fA-F]{8}-[0-9a-fA-F-]{27}", "<id>")}]"); // an id inside a button is not shown to the patient
+        var reply = string.Join("\n", h.Sent.Concat(taps));
         var why = handoff ? (await h.Fresh()).Summary + " " + string.Join(" ", await h.Db.Activities.Where(x => x.ConversationId == h.Conversation.Id && x.Kind == "guard").Select(x => x.Body).ToListAsync()) : "-";
         output.WriteLine($"{id} [{model}] handoff={handoff} tools=[{string.Join(",", tools)}] documents={h.Documents} writes={h.HospitalWrites.Count} error={error ?? "-"} why={why}\n{reply}");
 

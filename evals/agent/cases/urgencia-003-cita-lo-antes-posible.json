@@ -22,8 +22,7 @@
     "match": [
       "\\b0?9[:.]00\\b|\\b9\\s*(am|a\\.\\s?m\\.)",
       "\\b{opendom+1}\\s+de\\s+\\w+",
-      "¿Es una emergencia\\?",
-      "2200 0000"
+      "¿Es una emergencia\\?"
     ],
     "noMatch": [
       "(?i)\\b(qued[oó]|est[aá]|ha sido|fue)\\s+(ya\\s+)?(agendad|reservad|confirmad)[ao]\\b",

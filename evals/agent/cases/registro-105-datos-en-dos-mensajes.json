@@ -37,7 +37,7 @@
     ],
     "match": [
       "CONFIRMAR [0-9A-F]{6}",
-      "Registro: Irene Sintética Mora Prueba, nacimiento 9 de septiembre de 1979, sexo femenino"
+      "Irene Sintética Mora Prueba\\*\\nNacimiento: 9 de septiembre de 1979\\nSexo: femenino"
     ]
   }
 }

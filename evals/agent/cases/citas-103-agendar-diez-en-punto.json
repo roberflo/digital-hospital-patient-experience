@@ -21,7 +21,7 @@
     ],
     "match": [
       "CONFIRMAR [0-9A-F]{6}",
-      "Cita: \\w+ {opendom+2} de \\w+ de \\d{4} a las 10:00"
+      "Cita:\\*? \\w+ {opendom+2} de \\w+(?: de \\d{4})? a las 10:00"
     ],
     "noMatch": [
       "(?i)\\b(qued[oó]|est[aá]|ha sido|fue|has sido)\\s+(ya\\s+)?(agendad|cancelad|reprogramad|reservad|confirmad|registrad)[ao]\\b|\\b(cancel|agend|reserv)é\\b"

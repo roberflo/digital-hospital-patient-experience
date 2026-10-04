@@ -78,7 +78,7 @@ public static partial class AgentGuard
     [GeneratedRegex(@"(?i)(?:https?://|www\.)\S+")] private static partial Regex Link();
     [GeneratedRegex(@"(?i)\b\d+(?:[.,]\d+)?\s*(?:mg|mcg|µg|g|ml|ui|gotas?|tabletas?|pastillas?|c[aá]psulas?|comprimidos?|ampollas?|cucharadas?)\b|\bcada\s+\d+\s*(?:horas?|hrs?|h|d[ií]as?)\b")] private static partial Regex Dose();
     [GeneratedRegex(@"(?i)\b(?:qued[oó]|est[aá]|ha\s+sido|ha\s+quedado|fue)\s+(?:ya\s+)?(?:confirmad|agendad|reprogramad|cancelad|reservad|programad)[ao]\b|\b(?:he|hemos)\s+(?:confirmado|agendado|reprogramado|cancelado|reservado)\b|\b(?:cancel|agend|reprogram|reserv)é\b")] private static partial Regex Done();
-    [GeneratedRegex(@"(?i)^\W*(s[ií]|sip|claro|correcto|afirmativo|as[ií] es)\b")] private static partial Regex Yes();
+    [GeneratedRegex(@"(?i)^\W*(s[ií]|sip|claro|correcto|afirmativo|as[ií] es|ok|okay|dale|de acuerdo|confirmo|conf[ií]rm[ae]la|conf[ií]rmalo|confirmar)\b")] private static partial Regex Yes();
     [GeneratedRegex(@"\b([01]?\d|2[0-3]):([0-5]\d)\b")] private static partial Regex Time();
     [GeneratedRegex(@"(?i)^\W*(?:hola|holi|buenas|buen\s+d[ií]a|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|saludos|hi|hello)(?:\W+(?:buenas|buen\s+d[ií]a|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches))?\W*$")] private static partial Regex Greeting();
     [GeneratedRegex(@"^CITA (\S{1,40}) ([0-9a-fA-F-]{36}) (\d{1,3})(?: (.{1,60}))?$")] private static partial Regex Slot();

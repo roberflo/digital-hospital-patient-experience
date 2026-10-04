@@ -44,7 +44,7 @@ public sealed class AgentInteractionTests : IAsyncLifetime
         var code = (await h.Db.Activities.SingleAsync(a => a.ConversationId == h.Conversation.Id && a.Kind.StartsWith("proposal:"))).Kind[9..];
         var buttons = Buttons(Assert.Single(h.Interactive)).ToList();
         Assert.Equal(("CONFIRMAR " + code, "Confirmar"), buttons[0]);
-        Assert.Contains("CONFIRMAR " + code, Assert.Single(h.Sent)); // typing it still works: the text is always there
+        Assert.DoesNotContain("CONFIRMAR", Assert.Single(h.Sent)); // the button carries it; typing the code or answering «sí» still works (AgentVoiceTests)
     }
 
     [Fact]
@@ -150,7 +150,7 @@ public sealed class AgentInteractionTests : IAsyncLifetime
         await h.Runtime(h.Model(AgentHarness.Reply("No debe consultarse")), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
 
         var sent = Assert.Single(h.Sent);
-        Assert.Contains("a las 09:00", sent); Assert.Contains("confirmó", sent);
+        Assert.Contains("a las 09:00", sent); Assert.Contains("quedó agendada", sent);
         Assert.Contains(Buttons(Assert.Single(h.Interactive)), b => b.Id == "ACTIVAR RECORDATORIOS");
     }
 
@@ -178,7 +178,7 @@ public sealed class AgentInteractionTests : IAsyncLifetime
         await h.Runtime(h.Model(AgentHarness.Reply("No debe consultarse")), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
 
         Assert.Equal(confirmed ? "agent" : "human", (await h.Fresh()).Status);
-        Assert.Equal(confirmed, h.Sent.Any(text => text.Contains("confirmó tu cita")));
+        Assert.Equal(confirmed, h.Sent.Any(text => text.Contains("quedó agendada")));
     }
 
     [Fact]
@@ -263,13 +263,14 @@ public sealed class AgentInteractionTests : IAsyncLifetime
     [Fact]
     public async Task ReplyTooLongForButtonsIsStillSentAsText()
     {
-        await h.Link();
-        var reply = string.Join(" ", Enumerable.Repeat("Puedo cancelar tu cita si lo confirmas.", 40)); // WhatsApp caps an interactive body at 1024 characters
+        // WhatsApp caps an interactive body at 1024 characters. Here the emergency buttons would attach; the text is too long to carry them.
+        var hospital = h.Hospital(availability: new { clinicalDayFrom = "", clinicalDayTo = "", maxDaysPerQuery = 31, rollState = "open", professionals = Array.Empty<object>() });
+        var reply = string.Join("\n", Enumerable.Repeat("Hoy no hay horarios publicados en la agenda del hospital.", 20));
 
-        await h.Runtime(h.Model(AgentHarness.ToolCall("propose_action", new { action = "cancel", appointmentId = Guid.NewGuid() }), AgentHarness.Reply(reply)), h.Sender(), h.Hospital()).Run(h.Job, CancellationToken.None);
+        await h.Runtime(h.Model(AgentHarness.ToolCall("hospital_availability", new { date = DateTime.UtcNow.AddHours(-6).ToString("yyyy-MM-dd") }), AgentHarness.Reply(reply)), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
 
         Assert.Empty(h.Interactive);
-        Assert.Contains("CONFIRMAR", Assert.Single(h.Sent));
+        Assert.StartsWith(reply, Assert.Single(h.Sent));
     }
 
     [Theory]

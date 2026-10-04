@@ -44,7 +44,6 @@ public sealed class AgentLiveJourney(ITestOutputHelper output)
             if ((await h.Fresh()) is { Status: "human" } paused) output.WriteLine("DERIVADA: " + paused.Summary + "\n");
             return reply;
         }
-        static string Code(string reply) => Regex.Match(reply, "CONFIRMAR ([0-9A-F]{6})") is { Success: true } m ? m.Groups[1].Value : throw new Xunit.Sdk.XunitException("No confirmation code in: " + reply);
         // What tapping does: the webhook turns the tapped button or row into the text the conversation stores.
         string Tap(Func<System.Text.Json.JsonElement, System.Text.Json.JsonElement> pick, string kind)
         {
@@ -57,9 +56,8 @@ public sealed class AgentLiveJourney(ITestOutputHelper output)
         var asked = await Turn(null);
         Assert.Matches("(?i)nacimiento", asked);
         var proposal = await Turn($"Me llamo Ana Sintética {family}. Nombres: Ana Sintética. Apellidos: {family}. Nací el 12 de marzo de 1990. Sexo femenino. Mi contacto de emergencia es Carlos Sintético, mi hermano, teléfono 70000001.");
-        Assert.Contains($"Registro: Ana Sintética {family}, nacimiento 12 de marzo de 1990, sexo femenino", proposal);
+        Assert.Contains($"*Ana Sintética {family}*\nNacimiento: 12 de marzo de 1990\nSexo: femenino", proposal);
         Assert.Null(h.Contact.PatientId);
-        Assert.Equal("CONFIRMAR " + Code(proposal), TapConfirm()); // the Confirmar button carries the same code the text shows
         var registered = await Turn(TapConfirm());
         await h.Db.Entry(h.Contact).ReloadAsync();
         var patient = Assert.NotNull(h.Contact.PatientId);
@@ -72,9 +70,9 @@ public sealed class AgentLiveJourney(ITestOutputHelper output)
         // If the agent listed the free hours, the patient taps the first one; if it proposed directly, there is already a Confirmar button.
         if (h.Interactive[^1].GetProperty("type").GetString() == "list") offer = await Turn(Tap(i => i.GetProperty("action").GetProperty("sections")[0].GetProperty("rows")[0], "list_reply"));
         var booked = await Turn(TapConfirm());
-        Assert.Contains("confirmó", booked);
+        Assert.Contains("quedó agendada", booked);
         Assert.Equal("agent", (await h.Fresh()).Status);
-        var summary = Regex.Match(offer, @"Cita: \w+ (\d+) de (\w+) de (\d{4}) a las (\d{2}):(\d{2})\."); Assert.True(summary.Success, "No server summary in: " + offer);
+        var summary = Regex.Match(offer, @"\*Cita:\* \w+ (\d+) de (\w+)(?: de (\d{4}))? a las (\d{2}):(\d{2})"); Assert.True(summary.Success, "No server summary in: " + offer);
         var today = HospitalClient.ClinicalDay(DateTimeOffset.UtcNow, "America/El_Salvador");
         var agenda = await hospital.GetPatientAppointmentRangeAsync(tenant, patient, h.Contact.Phone, today, today.AddDays(20));
         var row = Assert.Single(agenda.GetProperty("rows").EnumerateArray());
@@ -135,7 +133,7 @@ public sealed class AgentLiveJourney(ITestOutputHelper output)
         await h.Runtime(noModel, h.Sender(), hospitalHttp, settings).Run(h.Job, CancellationToken.None);
         output.WriteLine("PACIENTE toca Confirmar\nAGENTE: " + h.Sent[^1] + "\n");
         if ((await h.Fresh()) is { Status: "human" } paused) output.WriteLine("DERIVADA: " + paused.Summary);
-        Assert.Contains("confirmó tu cita", h.Sent[^1]); Assert.Contains($"a las {local:HH:mm}", h.Sent[^1]);
+        Assert.Contains("quedó agendada", h.Sent[^1]); Assert.Contains($"a las {local:HH:mm}", h.Sent[^1]);
 
         var row = Assert.Single((await hospital.GetPatientAppointmentRangeAsync(tenant, patient, h.Contact.Phone, today, today.AddDays(20))).GetProperty("rows").EnumerateArray());
         Assert.Equal("booked", row.GetProperty("status").GetString());
@@ -179,7 +177,7 @@ public sealed class AgentLiveJourney(ITestOutputHelper output)
         Assert.Equal("AGENDAR", Button(0));
         Assert.Contains("Paso 1 de 7", await Turn("AGENDAR"));
         string reply = ""; foreach (var answer in new[] { "Ana Sintética", family, "12/03/1990", "Femenino", "Carlos Sintético", "Hermano", "7000 0001" }) reply = await Turn(answer);
-        Assert.Contains($"Registro: Ana Sintética {family}", reply);
+        Assert.Contains($"*Ana Sintética {family}*", reply);
 
         var registered = await Turn(Button(0));
         await h.Db.Entry(h.Contact).ReloadAsync();
@@ -189,7 +187,7 @@ public sealed class AgentLiveJourney(ITestOutputHelper output)
 
         await Turn(row.GetProperty("id").GetString());
         var booked = await Turn(Button(0));
-        Assert.Contains("confirmó tu cita", booked);
+        Assert.Contains("quedó agendada", booked);
 
         var today = HospitalClient.ClinicalDay(DateTimeOffset.UtcNow, "America/El_Salvador");
         var appointment = Assert.Single((await hospital.GetPatientAppointmentRangeAsync(tenant, patient, h.Contact.Phone, today, today.AddDays(20))).GetProperty("rows").EnumerateArray());
