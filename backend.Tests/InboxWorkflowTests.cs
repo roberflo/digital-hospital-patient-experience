@@ -16,6 +16,18 @@ public class InboxWorkflowTests
         Assert.True(InboxWorkflow.ReopenOnInbound(row));
         Assert.Equal("open",row.State);Assert.Equal("human",row.Status);Assert.Null(row.SnoozedUntil);
     }
+    [Theory]
+    [InlineData("resolved", null, true, "agent")]        // the team closed it and nobody owns it: the agent attends the new message
+    [InlineData("resolved", "doctor-1", true, "human")]  // an owner keeps their conversation
+    [InlineData("resolved", null, false, "human")]       // no agent on this hospital or number
+    [InlineData("pending", null, true, "human")]         // staff are still working on it
+    public void ResolvedAndUnownedConversationReturnsToTheAgentOnANewMessage(string state,string? owner,bool agentAvailable,string status)
+    {
+        var row=new Conversation{Status="human",AssignedTo=owner};
+        InboxWorkflow.SetState(row,state);
+        Assert.True(InboxWorkflow.ReopenOnInbound(row,agentAvailable));
+        Assert.Equal("open",row.State);Assert.Equal(status,row.Status);Assert.Equal(owner,row.AssignedTo);
+    }
     [Fact]
     public void IncomingMessageDoesNotInterruptAnActiveAgent()
     {

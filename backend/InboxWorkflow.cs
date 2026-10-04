@@ -22,10 +22,13 @@ public static class InboxWorkflow
         else if(state!="open"||c.Status=="closed")c.Status="human";
         c.Revision++;c.UpdatedAt=DateTimeOffset.UtcNow;
     }
-    public static bool ReopenOnInbound(Conversation c)
+    public static bool ReopenOnInbound(Conversation c, bool agentAvailable = false)
     {
         if(c.State=="open"&&c.Status!="closed")return false;
-        c.State="open";c.Status="human";c.SnoozedUntil=null;return true;
+        // A conversation the team resolved and nobody owns goes back to the agent when the patient writes again;
+        // one that is waiting, snoozed or owned stays with its people.
+        var back=c.Status=="closed"&&c.AssignedTo is null&&agentAvailable;
+        c.State="open";c.Status=back?"agent":"human";c.SnoozedUntil=null;return true;
     }
     public static Activity Event(TenantScope scope,Conversation c,string actor,string kind,string body)=>
         new(){TenantId=scope.Id,ContactId=c.ContactId,ConversationId=c.Id,Actor=actor,ActorRole=actor=="Sistema"?"system":actor=="WhatsApp"?"external":"unknown",Kind=kind,Body=body};

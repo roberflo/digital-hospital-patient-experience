@@ -30,7 +30,7 @@ public sealed class AgentLiveJourney(ITestOutputHelper output)
         var family = "Prueba " + char.ToUpperInvariant(suffix[0]) + suffix[1..];
         await using var h = new AgentHarness(tenant, "50300" + Random.Shared.Next(100000, 999999));
         await h.Start(AgentEvals.Guide, "Hola, soy paciente nuevo y quiero una cita lo más pronto posible.");
-        (await h.Db.Tenants.SingleAsync(t => t.Id == tenant)).EmergencyPhone = "+503 77372990"; await h.Db.SaveChangesAsync();
+        (await h.Db.Tenants.SingleAsync(t => t.Id == tenant)).EmergencyPhone = "2200 0000"; await h.Db.SaveChangesAsync();
 
         using var modelHttp = new SocketsHttpHandler(); using var hospitalHttp = new SocketsHttpHandler();
         var hospital = new HospitalClient(new HttpClient(hospitalHttp), config);
@@ -45,6 +45,13 @@ public sealed class AgentLiveJourney(ITestOutputHelper output)
             return reply;
         }
         static string Code(string reply) => Regex.Match(reply, "CONFIRMAR ([0-9A-F]{6})") is { Success: true } m ? m.Groups[1].Value : throw new Xunit.Sdk.XunitException("No confirmation code in: " + reply);
+        // What tapping does: the webhook turns the tapped button or row into the text the conversation stores.
+        string Tap(Func<System.Text.Json.JsonElement, System.Text.Json.JsonElement> pick, string kind)
+        {
+            var option = pick(h.Interactive[^1]); var reply = kind == "button_reply" ? option.GetProperty("reply") : option;
+            return WhatsAppContent.Inbound(System.Text.Json.JsonSerializer.SerializeToElement(new { type = "interactive", interactive = new Dictionary<string, object> { ["type"] = kind, [kind] = new { id = reply.GetProperty("id").GetString(), title = reply.GetProperty("title").GetString() } } }), default);
+        }
+        string TapConfirm() => Tap(i => i.GetProperty("action").GetProperty("buttons")[0], "button_reply");
 
         // 1. Registration.
         var asked = await Turn(null);
@@ -52,7 +59,8 @@ public sealed class AgentLiveJourney(ITestOutputHelper output)
         var proposal = await Turn($"Me llamo Ana Sintética {family}. Nombres: Ana Sintética. Apellidos: {family}. Nací el 12 de marzo de 1990. Sexo femenino. Mi contacto de emergencia es Carlos Sintético, mi hermano, teléfono 70000001.");
         Assert.Contains($"Registro: Ana Sintética {family}, nacimiento 12 de marzo de 1990, sexo femenino", proposal);
         Assert.Null(h.Contact.PatientId);
-        var registered = await Turn("CONFIRMAR " + Code(proposal));
+        Assert.Equal("CONFIRMAR " + Code(proposal), TapConfirm()); // the Confirmar button carries the same code the text shows
+        var registered = await Turn(TapConfirm());
         await h.Db.Entry(h.Contact).ReloadAsync();
         var patient = Assert.NotNull(h.Contact.PatientId);
         Assert.Contains("registrado", registered);
@@ -61,7 +69,9 @@ public sealed class AgentLiveJourney(ITestOutputHelper output)
 
         // 2. Booking the first free slot.
         var offer = await Turn("Quiero la primera cita disponible, con cualquier doctor.");
-        var booked = await Turn("CONFIRMAR " + Code(offer));
+        // If the agent listed the free hours, the patient taps the first one; if it proposed directly, there is already a Confirmar button.
+        if (h.Interactive[^1].GetProperty("type").GetString() == "list") offer = await Turn(Tap(i => i.GetProperty("action").GetProperty("sections")[0].GetProperty("rows")[0], "list_reply"));
+        var booked = await Turn(TapConfirm());
         Assert.Contains("confirmó", booked);
         Assert.Equal("agent", (await h.Fresh()).Status);
         var summary = Regex.Match(offer, @"Cita: \w+ (\d+) de (\w+) de (\d{4}) a las (\d{2}):(\d{2})\."); Assert.True(summary.Success, "No server summary in: " + offer);
@@ -77,9 +87,63 @@ public sealed class AgentLiveJourney(ITestOutputHelper output)
         Assert.Matches(@"\b8(:00)?\b", await Turn("¿A qué hora abren los sábados?"));
         Assert.Contains(start.ToString("HH:mm"), await Turn($"¿Qué cita tengo el {start:yyyy-MM-dd}?"));
 
+        // The journey leaves no slot taken behind it: the appointment is cancelled the way a patient would cancel it.
+        await hospital.CancelAppointmentAsync(tenant, patient, h.Contact.Phone, row.GetProperty("appointmentId").GetGuid());
+        var after = await hospital.GetPatientAppointmentRangeAsync(tenant, patient, h.Contact.Phone, today, today.AddDays(20));
+        Assert.StartsWith("cancelled", Assert.Single(after.GetProperty("rows").EnumerateArray()).GetProperty("status").GetString());
+        output.WriteLine("HOSPITAL: cita de prueba cancelada, horario liberado\n");
+
         // 4. An emergency goes to a person, with the hospital's number.
         var urgent = await Turn("Tengo fiebre muy alta y necesito una cita de emergencia.");
-        Assert.Contains("+503 77372990", urgent);
+        Assert.Contains("2200 0000", urgent);
         Assert.Equal("human", (await h.Fresh()).Status);
+    }
+
+    /// <summary>The part of booking that needs no model: a registered patient taps a free hour, taps Confirmar, and the
+    /// appointment exists in the LOCAL Hospital. It keeps working while the AI provider is down or rate-limited.</summary>
+    [Fact, Trait("Category", "Live")]
+    public async Task TappedSlotBooksInHospitalWithoutTheModel()
+    {
+        var env = new ConfigurationBuilder().AddEnvironmentVariables().Build();
+        var tenant = Guid.Parse(env["DEV_HOSPITAL_TENANT_ID"] ?? throw new InvalidOperationException("DEV_HOSPITAL_TENANT_ID is required."));
+        var prefix = $"Hospital:Tenants:{tenant:D}:";
+        var settings = HospitalConnectionStore.Defaults(tenant, env).ToDictionary(x => prefix + x.Key, x => x.Value);
+        foreach (var pair in env.GetSection(prefix.TrimEnd(':')).GetChildren()) settings[prefix + pair.Key] = pair.Value;
+        settings[prefix + "AccessToken"] = "";
+        var config = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
+        var suffix = new string(Enumerable.Range(0, 6).Select(_ => (char)('a' + Random.Shared.Next(26))).ToArray());
+        await using var h = new AgentHarness(tenant, "50300" + Random.Shared.Next(100000, 999999)); await h.Start(AgentEvals.Guide);
+        using var hospitalHttp = new SocketsHttpHandler(); var hospital = new HospitalClient(new HttpClient(hospitalHttp), config);
+        var noModel = new AgentHarness.Fake(_ => throw new InvalidOperationException("The model must not be consulted"));
+
+        var registered = await hospital.RegisterPatientAsync(tenant, new("Ana Sintética", "Toque " + char.ToUpperInvariant(suffix[0]) + suffix[1..], new DateOnly(1990, 3, 12), "female", h.Contact.Phone, "Carlos Sintético", "hermano", "70000001"));
+        var patient = Assert.NotNull(registered.PatientId); h.Contact.PatientId = patient; await h.Db.SaveChangesAsync();
+
+        // The same row the agent's list would carry for the hospital's first free hour.
+        var zone = TimeZoneInfo.FindSystemTimeZoneById("America/El_Salvador"); var today = HospitalClient.ClinicalDay(DateTimeOffset.UtcNow, "America/El_Salvador");
+        var options = await hospital.GetAvailabilityAsync(tenant, today, today.AddDays(13));
+        var first = options.Professionals.SelectMany(p => p.Days.SelectMany(d => d.Slots).Where(slot => slot.Offered && slot.TakenBy == 0 && slot.StartsAt > DateTimeOffset.UtcNow).Select(slot => (Doctor: p, Slot: slot))).OrderBy(x => x.Slot.StartsAt).First();
+        var local = TimeZoneInfo.ConvertTime(first.Slot.StartsAt, zone);
+        await h.Say("patient", $"CITA {local:yyyy-MM-ddTHH:mm:sszzz} {first.Doctor.ClinicianId:D} {first.Slot.DurationMinutes} {first.Doctor.ClinicianName}");
+
+        await h.Runtime(noModel, h.Sender(), hospitalHttp, settings).Run(h.Job, CancellationToken.None);
+        output.WriteLine("PACIENTE toca un horario\nAGENTE: " + h.Sent[^1] + "\n");
+        var confirm = h.Interactive[^1].GetProperty("action").GetProperty("buttons")[0].GetProperty("reply").GetProperty("id").GetString()!;
+        Assert.StartsWith("CONFIRMAR ", confirm);
+
+        await h.Say("patient", confirm);
+        await h.Runtime(noModel, h.Sender(), hospitalHttp, settings).Run(h.Job, CancellationToken.None);
+        output.WriteLine("PACIENTE toca Confirmar\nAGENTE: " + h.Sent[^1] + "\n");
+        if ((await h.Fresh()) is { Status: "human" } paused) output.WriteLine("DERIVADA: " + paused.Summary);
+        Assert.Contains("confirmó tu cita", h.Sent[^1]); Assert.Contains($"a las {local:HH:mm}", h.Sent[^1]);
+
+        var row = Assert.Single((await hospital.GetPatientAppointmentRangeAsync(tenant, patient, h.Contact.Phone, today, today.AddDays(20))).GetProperty("rows").EnumerateArray());
+        Assert.Equal("booked", row.GetProperty("status").GetString());
+        Assert.Equal(first.Slot.StartsAt, row.GetProperty("scheduledStart").GetDateTimeOffset());
+        output.WriteLine($"HOSPITAL: cita {row.GetProperty("status").GetString()} el {local:yyyy-MM-dd HH:mm} con {row.GetProperty("clinicianName").GetString()}");
+
+        await hospital.CancelAppointmentAsync(tenant, patient, h.Contact.Phone, row.GetProperty("appointmentId").GetGuid());
+        Assert.StartsWith("cancelled", Assert.Single((await hospital.GetPatientAppointmentRangeAsync(tenant, patient, h.Contact.Phone, today, today.AddDays(20))).GetProperty("rows").EnumerateArray()).GetProperty("status").GetString());
+        output.WriteLine("HOSPITAL: cita de prueba cancelada, horario liberado");
     }
 }

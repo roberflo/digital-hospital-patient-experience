@@ -43,14 +43,15 @@ public sealed class AgentEvals(ITestOutputHelper output)
         (await h.Db.Tenants.SingleAsync(t => t.Id == h.Scope.Id)).EmergencyPhone = "2200 0000"; await h.Db.SaveChangesAsync();
 
         string? error = null;
-        using var http = new SocketsHttpHandler();
+        using var http = new Paced();
         try { await h.Runtime(http, h.Sender(), Hospital(h, spec.GetProperty("hospital"), today), provider).Run(h.Job, new CancellationTokenSource(TimeSpan.FromMinutes(3)).Token); }
         catch (Exception ex) { error = ex.GetType().Name + ": " + ex.Message; }
 
         var handoff = (await h.Fresh()).Status == "human";
         var tools = (await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id && a.Kind == "agent_tool").OrderBy(a => a.CreatedAt).Select(a => a.Body).ToListAsync()).Select(body => Regex.Match(body, @"Herramienta: (\w+)\.").Groups[1].Value).ToList();
         var reply = string.Join("\n", h.Sent);
-        output.WriteLine($"{id} [{model}] handoff={handoff} tools=[{string.Join(",", tools)}] documents={h.Documents} writes={h.HospitalWrites.Count} error={error ?? "-"}\n{reply}");
+        var why = handoff ? (await h.Fresh()).Summary + " " + string.Join(" ", await h.Db.Activities.Where(x => x.ConversationId == h.Conversation.Id && x.Kind == "guard").Select(x => x.Body).ToListAsync()) : "-";
+        output.WriteLine($"{id} [{model}] handoff={handoff} tools=[{string.Join(",", tools)}] documents={h.Documents} writes={h.HospitalWrites.Count} error={error ?? "-"} why={why}\n{reply}");
 
         // The run as an Agent Framework eval item: the patient's turns, the tools the agent used, what the patient received.
         var conversation = turns.Select(t => new ChatMessage(t.From == "patient" ? ChatRole.User : ChatRole.Assistant, t.Text)).ToList();
@@ -76,6 +77,19 @@ public sealed class AgentEvals(ITestOutputHelper output)
         var failures = results.Items.SelectMany(result => result.Metrics.Values).OfType<BooleanMetric>().Where(metric => metric.Value != true).Select(metric => $"{metric.Name}: {metric.Reason}").ToList();
         Assert.True(failures.Count == 0, $"{id} [{spec.GetProperty("severity").GetString()}] — {spec.GetProperty("danger").GetString()}\n" + string.Join("\n", failures));
         results.AssertAllPassed();
+    }
+    /// <summary>The evals measure behaviour, not quota: model calls are spaced so a full run stays under the provider's
+    /// per-minute limit (a run at full speed ended in 429s, and shares the key with the live agent).</summary>
+    sealed class Paced() : DelegatingHandler(new SocketsHttpHandler())
+    {
+        static readonly SemaphoreSlim Gate = new(1, 1); static DateTimeOffset next = DateTimeOffset.MinValue;
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            await Gate.WaitAsync(ct);
+            try { var wait = next - DateTimeOffset.UtcNow; if (wait > TimeSpan.Zero) await Task.Delay(wait, ct); next = DateTimeOffset.UtcNow.AddSeconds(2.5); }
+            finally { Gate.Release(); }
+            return await base.SendAsync(request, ct);
+        }
     }
     static EvalCheck Check(string name, bool passed, string found) => FunctionEvaluator.Create(name, (EvalItem _) => new EvalCheckResult(passed, passed ? "ok" : found, name));
 
