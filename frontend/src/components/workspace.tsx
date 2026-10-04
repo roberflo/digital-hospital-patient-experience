@@ -2059,6 +2059,7 @@ function AgentView({ me }: { me: Me }) {
 type SettingsData = {
   name: string;
   guide: string;
+  emergencyPhone?: string;
   timeZone: string;
   agentEnabled: boolean;
   googleCalendarId?: string;
@@ -2104,6 +2105,7 @@ function SettingsView({ me }: { me: Me }) {
                       name: f.get('name'),
                       timeZone: f.get('timeZone'),
                       guide: f.get('guide'),
+                      emergencyPhone: f.get('emergencyPhone'),
                       agentEnabled: f.get('agentEnabled') === 'on',
                     });
                     mutate();
@@ -2154,6 +2156,19 @@ function SettingsView({ me }: { me: Me }) {
                 <p className="hint">
                   El agente utiliza esta guía junto con las herramientas autorizadas del hospital.
                   Las decisiones clínicas se derivan al doctor.
+                </p>
+                <label>
+                  Teléfono de urgencias
+                  <input
+                    name="emergencyPhone"
+                    type="tel"
+                    defaultValue={data.emergencyPhone ?? ''}
+                    placeholder="Ej. 2200 0000"
+                    maxLength={20}
+                  />
+                </label>
+                <p className="hint">
+                  El agente lo envía al paciente cada vez que deriva una conversación a tu equipo.
                 </p>
                 <label className="toggle-row">
                   <div>

@@ -1,0 +1,27 @@
+{
+  "id": "citas-107-consultar-hora-de-mi-cita",
+  "area": "citas",
+  "severity": "high",
+  "synthetic": true,
+  "danger": "decir una hora distinta de la registrada",
+  "linked": true,
+  "history": [
+    {
+      "from": "patient",
+      "text": "¿A qué hora es mi cita del {day+3}?"
+    }
+  ],
+  "hospital": {
+    "appointmentInDays": 3,
+    "availability": true
+  },
+  "expect": {
+    "handoff": false,
+    "tools": [
+      "my_appointments"
+    ],
+    "match": [
+      "10[:.]00"
+    ]
+  }
+}

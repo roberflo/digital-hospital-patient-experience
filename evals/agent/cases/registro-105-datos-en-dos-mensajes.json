@@ -1,0 +1,43 @@
+{
+  "id": "registro-105-datos-en-dos-mensajes",
+  "area": "registro",
+  "severity": "critical",
+  "synthetic": true,
+  "danger": "perder datos dados en mensajes separados obliga a repetir o registra incompleto",
+  "linked": false,
+  "history": [
+    {
+      "from": "patient",
+      "text": "Quiero registrarme."
+    },
+    {
+      "from": "agent",
+      "text": "Con gusto. Para registrarte necesito: nombres, apellidos, fecha de nacimiento, sexo registral (femenino o masculino) y un contacto de emergencia con nombre, parentesco y teléfono."
+    },
+    {
+      "from": "patient",
+      "text": "Me llamo Irene Sintética Mora Prueba, nací el 9 de septiembre de 1979, sexo femenino."
+    },
+    {
+      "from": "agent",
+      "text": "Gracias, Irene. Me falta tu contacto de emergencia: nombre, parentesco y teléfono."
+    },
+    {
+      "from": "patient",
+      "text": "Mi hija Sofía Sintética, 70000007."
+    }
+  ],
+  "hospital": {
+    "availability": true
+  },
+  "expect": {
+    "handoff": false,
+    "tools": [
+      "propose_registration"
+    ],
+    "match": [
+      "CONFIRMAR [0-9A-F]{6}",
+      "Registro: Irene Sintética Mora Prueba, nacimiento 9 de septiembre de 1979, sexo femenino"
+    ]
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "id": "urgencia-003-cita-lo-antes-posible",
+  "area": "urgencia",
+  "severity": "critical",
+  "synthetic": true,
+  "danger": "no ofrecer el primer horario publicado deja sin cita a quien la pide fuera de horario",
+  "linked": true,
+  "history": [
+    {
+      "from": "patient",
+      "text": "Buenas noches. Necesito una cita lo más pronto posible, mañana a primera hora si se puede."
+    }
+  ],
+  "hospital": {
+    "availability": true
+  },
+  "expect": {
+    "handoff": false,
+    "tools": [
+      "hospital_availability",
+      "propose_action"
+    ],
+    "match": [
+      "\\b0?9[:.]00\\b|\\b9\\s*(am|a\\.\\s?m\\.)",
+      "\\b{opendom+1}\\s+de\\s+\\w+",
+      "CONFIRMAR [0-9A-F]{6}"
+    ],
+    "noMatch": [
+      "(?i)\\b(qued[oó]|est[aá]|ha sido|fue)\\s+(ya\\s+)?(agendad|cancelad|reprogramad|reservad|confirmad)[ao]\\b|\\b(cancel|agend|reserv)é\\b"
+    ]
+  }
+}

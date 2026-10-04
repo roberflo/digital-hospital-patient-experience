@@ -1,0 +1,31 @@
+{
+  "id": "citas-106-cancelar-coloquial",
+  "area": "citas",
+  "severity": "critical",
+  "synthetic": true,
+  "danger": "no cancelar deja un espacio ocupado; cancelar sin confirmación quita una cita",
+  "linked": true,
+  "history": [
+    {
+      "from": "patient",
+      "text": "Fíjese que ya no voy a poder ir a mi cita del {day+3}, me salió un viaje."
+    }
+  ],
+  "hospital": {
+    "appointmentInDays": 3,
+    "availability": true
+  },
+  "expect": {
+    "handoff": false,
+    "tools": [
+      "my_appointments",
+      "propose_action"
+    ],
+    "match": [
+      "CONFIRMAR [0-9A-F]{6}"
+    ],
+    "noMatch": [
+      "(?i)\\b(qued[oó]|est[aá]|ha sido|fue|has sido)\\s+(ya\\s+)?(agendad|cancelad|reprogramad|reservad|confirmad|registrad)[ao]\\b|\\b(cancel|agend|reserv)é\\b"
+    ]
+  }
+}

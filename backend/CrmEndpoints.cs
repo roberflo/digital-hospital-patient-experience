@@ -77,7 +77,7 @@ public static class CrmEndpoints
         api.MapGet("/settings", async (CrmDb db, TenantScope t, CurrentUser u, HospitalClient h, IConfiguration c) =>
         {
             u.RequireAdmin(); var tenant = await db.Tenants.SingleAsync(x => x.Id == t.Id);
-            return new { tenant.Name, tenant.Guide, tenant.TimeZone, tenant.AgentEnabled, tenant.GoogleCalendarId, googleConnected = tenant.GoogleRefreshToken != null, hospitalConfigured = h.IsConfigured(t.Id), kapsoConfigured = !string.IsNullOrEmpty(c["KAPSO_API_KEY"]), aiConfigured = !string.IsNullOrEmpty(c["NVIDIA_API_KEY"]), sendEnabled = c["SEND_ENABLED"] == "true", manualSendEnabled = c["SEND_ENABLED"] == "true" || c["KAPSO_MANUAL_SEND_ENABLED"] == "true", aiModel = c["AI_MODEL"] ?? "nvidia/nemotron-3-super-120b-a12b" };
+            return new { tenant.Name, tenant.Guide, tenant.EmergencyPhone, tenant.TimeZone, tenant.AgentEnabled, tenant.GoogleCalendarId, googleConnected = tenant.GoogleRefreshToken != null, hospitalConfigured = h.IsConfigured(t.Id), kapsoConfigured = !string.IsNullOrEmpty(c["KAPSO_API_KEY"]), aiConfigured = !string.IsNullOrEmpty(c["NVIDIA_API_KEY"]), sendEnabled = c["SEND_ENABLED"] == "true", manualSendEnabled = c["SEND_ENABLED"] == "true" || c["KAPSO_MANUAL_SEND_ENABLED"] == "true", aiModel = c["AI_MODEL"] ?? "nvidia/nemotron-3-super-120b-a12b" };
         });
         api.MapPut("/settings", async (SettingsInput b, CrmDb db, TenantScope t, CurrentUser u, HospitalClient h, CancellationToken ct) =>
         {
@@ -109,6 +109,9 @@ public static class CrmEndpoints
     public static void ApplySettings(Tenant row, SettingsInput b, bool hospitalConnected)
     {
         var name = Rules.Required(b.Name);
+        // Short codes (911, 132) are valid emergency numbers, so this is not Rules.Phone.
+        var emergency = b.EmergencyPhone?.Trim(); if (emergency is { Length: > 0 } && (emergency.Length is < 3 or > 20 || emergency.Any(c => !char.IsAsciiDigit(c) && c is not ('+' or ' ' or '-')))) throw new ArgumentException("Teléfono de urgencias inválido");
+        row.EmergencyPhone = string.IsNullOrEmpty(emergency) ? null : emergency;
         if (!hospitalConnected) { row.Name = name; row.TimeZone = b.TimeZone; }
         row.Guide = b.Guide; row.AgentEnabled = b.AgentEnabled;
     }
@@ -122,4 +125,4 @@ public record StageInput(string Stage);
 public record ActivityInput(string Body, Guid? ContactId, Guid? ConversationId);
 public record PatientLinkInput(Guid PatientId);
 public record MemberInput(bool Disabled);
-public record SettingsInput(string Name, string Guide, string TimeZone, bool AgentEnabled, string? GoogleCalendarId);
+public record SettingsInput(string Name, string Guide, string TimeZone, bool AgentEnabled, string? GoogleCalendarId, string? EmergencyPhone = null);

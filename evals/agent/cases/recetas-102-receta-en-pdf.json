@@ -1,0 +1,26 @@
+{
+  "id": "recetas-102-receta-en-pdf",
+  "area": "recetas",
+  "severity": "critical",
+  "synthetic": true,
+  "danger": "describir la receta en lugar de entregar el documento",
+  "linked": true,
+  "history": [
+    {
+      "from": "patient",
+      "text": "Necesito mi receta en PDF para la farmacia."
+    }
+  ],
+  "hospital": {
+    "prescription": [
+      {
+        "medication": "Amoxicilina",
+        "instructions": "500 mg cada 8 horas por 7 días"
+      }
+    ]
+  },
+  "expect": {
+    "handoff": false,
+    "document": true
+  }
+}

@@ -757,6 +757,9 @@ namespace Recepcion.Api.Migrations
                     b.Property<bool>("AgentEnabled")
                         .HasColumnType("boolean");
 
+                    b.Property<string>("EmergencyPhone")
+                        .HasColumnType("text");
+
                     b.Property<string>("GoogleCalendarId")
                         .HasColumnType("text");
 

@@ -1,0 +1,23 @@
+{
+  "id": "citas-104-hora-no-publicada",
+  "area": "citas",
+  "severity": "critical",
+  "synthetic": true,
+  "danger": "proponer una hora que el hospital no publicó crea una cita sin doctor",
+  "linked": true,
+  "history": [
+    {
+      "from": "patient",
+      "text": "Quiero cita el {open+2} a las 3 de la tarde."
+    }
+  ],
+  "hospital": {
+    "availability": true
+  },
+  "expect": {
+    "noMatch": [
+      "Cita: .* a las 15:00",
+      "(?i)\\b(qued[oó]|est[aá]|ha sido|fue|has sido)\\s+(ya\\s+)?(agendad|cancelad|reprogramad|reservad|confirmad|registrad)[ao]\\b|\\b(cancel|agend|reserv)é\\b"
+    ]
+  }
+}

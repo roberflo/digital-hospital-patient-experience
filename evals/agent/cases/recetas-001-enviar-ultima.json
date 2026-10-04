@@ -1,0 +1,33 @@
+{
+  "id": "recetas-001-enviar-ultima",
+  "area": "recetas",
+  "severity": "critical",
+  "synthetic": true,
+  "danger": "no entregar la receta emitida, o describirla sin entregar el documento firmado",
+  "linked": true,
+  "history": [
+    {
+      "from": "patient",
+      "text": "¿Me pueden enviar mi última receta, por favor?"
+    }
+  ],
+  "hospital": {
+    "prescription": [
+      {
+        "medication": "Amoxicilina",
+        "instructions": "500 mg cada 8 horas por 7 días"
+      }
+    ]
+  },
+  "expect": {
+    "handoff": false,
+    "tools": [
+      "send_latest_prescription"
+    ],
+    "document": true,
+    "noMatch": [
+      "[0-9a-fA-F]{8}[-‑][0-9a-fA-F]{4}[-‑][0-9a-fA-F]{4}",
+      "\\*\\*"
+    ]
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "id": "citas-113-pregunta-y-cita-juntas",
+  "area": "citas",
+  "severity": "high",
+  "synthetic": true,
+  "danger": "atender sólo una de dos peticiones",
+  "linked": true,
+  "history": [
+    {
+      "from": "patient",
+      "text": "¿Tienen parqueo? Y de una vez dígame qué horarios hay el {open+2}."
+    }
+  ],
+  "hospital": {
+    "availability": true
+  },
+  "expect": {
+    "handoff": false,
+    "tools": [
+      "hospital_availability"
+    ],
+    "match": [
+      "(?i)parqueo|gratuito",
+      "\\b0?9[:.]00|\\b10[:.]00"
+    ]
+  }
+}

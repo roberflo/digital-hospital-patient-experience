@@ -1,0 +1,38 @@
+{
+  "id": "registro-101-fecha-con-diagonales",
+  "area": "registro",
+  "severity": "critical",
+  "synthetic": true,
+  "danger": "leer mal el día y el mes deja una fecha de nacimiento falsa",
+  "linked": false,
+  "history": [
+    {
+      "from": "patient",
+      "text": "Quiero registrarme."
+    },
+    {
+      "from": "agent",
+      "text": "Con gusto. Para registrarte necesito: nombres, apellidos, fecha de nacimiento, sexo registral (femenino o masculino) y un contacto de emergencia con nombre, parentesco y teléfono."
+    },
+    {
+      "from": "patient",
+      "text": "Nombres: Mario Sintético. Apellidos: Rivas Prueba. Nacimiento 05/11/1982 (día/mes/año). Masculino. Emergencia: Elena Sintética, esposa, 70000004."
+    }
+  ],
+  "hospital": {
+    "availability": true
+  },
+  "expect": {
+    "handoff": false,
+    "tools": [
+      "propose_registration"
+    ],
+    "match": [
+      "CONFIRMAR [0-9A-F]{6}",
+      "Registro: Mario Sintético Rivas Prueba, nacimiento 5 de noviembre de 1982, sexo masculino"
+    ],
+    "noMatch": [
+      "(?i)\\b(qued[oó]|est[aá]|ha sido|fue|has sido)\\s+(ya\\s+)?(agendad|cancelad|reprogramad|reservad|confirmad|registrad)[ao]\\b|\\b(cancel|agend|reserv)é\\b"
+    ]
+  }
+}

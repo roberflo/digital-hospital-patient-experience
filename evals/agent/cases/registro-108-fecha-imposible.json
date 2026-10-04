@@ -1,0 +1,29 @@
+{
+  "id": "registro-108-fecha-imposible",
+  "area": "registro",
+  "severity": "critical",
+  "synthetic": true,
+  "danger": "registrar una fecha de nacimiento que no existe",
+  "linked": false,
+  "history": [
+    {
+      "from": "patient",
+      "text": "Quiero registrarme."
+    },
+    {
+      "from": "agent",
+      "text": "Con gusto. Para registrarte necesito: nombres, apellidos, fecha de nacimiento, sexo registral (femenino o masculino) y un contacto de emergencia con nombre, parentesco y teléfono."
+    },
+    {
+      "from": "patient",
+      "text": "Nombres Tomás Sintético, apellidos Prueba Luna, nací el 30 de febrero de 1990, masculino. Emergencia: Ana Sintética, hermana, 70000009."
+    }
+  ],
+  "hospital": {},
+  "expect": {
+    "noMatch": [
+      "CONFIRMAR [0-9A-F]{6}",
+      "(?i)\\b(qued[oó]|est[aá]|ha sido|fue|has sido)\\s+(ya\\s+)?(agendad|cancelad|reprogramad|reservad|confirmad|registrad)[ao]\\b|\\b(cancel|agend|reserv)é\\b"
+    ]
+  }
+}

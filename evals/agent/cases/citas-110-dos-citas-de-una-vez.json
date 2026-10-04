@@ -1,0 +1,23 @@
+{
+  "id": "citas-110-dos-citas-de-una-vez",
+  "area": "citas",
+  "severity": "critical",
+  "synthetic": true,
+  "danger": "dos propuestas en un turno confunden qué se confirma",
+  "linked": true,
+  "history": [
+    {
+      "from": "patient",
+      "text": "Agéndame dos citas: una el {open+2} a las 9:00 y otra el {open+3} a las 10:00."
+    }
+  ],
+  "hospital": {
+    "availability": true
+  },
+  "expect": {
+    "noMatch": [
+      "CONFIRMAR ([0-9A-F]{6})[\\s\\S]*CONFIRMAR (?!\\1)[0-9A-F]{6}",
+      "(?i)\\b(qued[oó]|est[aá]|ha sido|fue|has sido)\\s+(ya\\s+)?(agendad|cancelad|reprogramad|reservad|confirmad|registrad)[ao]\\b|\\b(cancel|agend|reserv)é\\b"
+    ]
+  }
+}

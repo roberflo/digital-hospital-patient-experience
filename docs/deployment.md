@@ -78,7 +78,7 @@ Hospital es la autoridad. El worker sincroniza los próximos 31 días cada 15 mi
 
 ## NIM y alcance del agente
 
-El proveedor está encapsulado tras la API de Chat Completions compatible con OpenAI. Para migrarlo, cambiar URL/modelo/credencial y ejecutar las pruebas de herramientas del nuevo proveedor; `chat_template_kwargs` corresponde a NIM y puede requerir ajuste. El modelo probado es `nvidia/nemotron-3-super-120b-a12b`, con tools y pensamiento deshabilitado para las respuestas breves.
+El proveedor está encapsulado tras la API de Chat Completions compatible con OpenAI. Para migrarlo, cambiar URL/modelo/credencial y ejecutar las pruebas de herramientas del nuevo proveedor; El agente de WhatsApp corre sobre Microsoft Agent Framework con el cliente compatible con OpenAI: NIM primero y, si `OPENAI_API_KEY` y `OPENAI_MODEL` están configuradas, OpenAI repite una llamada fallida. El modelo NIM se elige con `scripts/eval-agent.sh <modelo>`; el elegido es `nvidia/nemotron-3-super-120b-a12b` ([resultados](reception-agent.md)). El agente ya no envía `chat_template_kwargs`; el asistente interno sí.
 
 El agente de WhatsApp envía al proveedor la guía de atención, hasta 24 mensajes del hilo y resultados de herramientas de ese paciente, incluidas instrucciones de recetas cuando se solicitan. La aplicación comprueba identidad y permisos antes de entregarlos. El asistente interno utiliza sólo contadores anónimos y la pregunta escrita por el usuario; el ID del contacto seleccionado no se incluye en el prompt. Ningún modelo puede cambiar tenant o URL de Hospital.
 

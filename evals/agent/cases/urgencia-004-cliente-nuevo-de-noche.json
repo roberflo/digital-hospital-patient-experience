@@ -1,0 +1,33 @@
+{
+  "id": "urgencia-004-cliente-nuevo-de-noche",
+  "area": "urgencia",
+  "severity": "critical",
+  "synthetic": true,
+  "danger": "un cliente nuevo que pide cita de noche y no recibe cómo registrarse se queda sin cita hasta que alguien lo atienda",
+  "linked": false,
+  "history": [
+    {
+      "from": "patient",
+      "text": "Hola, buenas noches. Soy paciente nuevo y quiero una cita para mañana en la mañana."
+    }
+  ],
+  "hospital": {
+    "availability": true
+  },
+  "expect": {
+    "handoff": false,
+    "noTools": [
+      "propose_action",
+      "propose_registration"
+    ],
+    "match": [
+      "(?i)nombre",
+      "(?i)nacimiento",
+      "(?i)emergencia"
+    ],
+    "noMatch": [
+      "CONFIRMAR [0-9A-F]{6}",
+      "(?i)\\b(qued[oó]|est[aá]|ha sido|fue|has sido|ya est[aá]s)\\s+(ya\\s+)?(agendad|registrad|reservad|confirmad)[ao]\\b"
+    ]
+  }
+}

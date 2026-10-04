@@ -15,6 +15,8 @@ public sealed class Tenant
     public Guid Id { get; set; } = Guid.NewGuid(); public string Name { get; set; } = "";
     public string Guide { get; set; } = ""; public bool AgentEnabled { get; set; }
     public string TimeZone { get; set; } = "America/El_Salvador";
+    /// <summary>The number the agent gives a patient it hands off; shown as written by the hospital.</summary>
+    public string? EmergencyPhone { get; set; }
     public bool RemindersEnabled { get; set; }
     public Guid? ReminderChannelId { get; set; }
     public string ReminderDayTemplate { get; set; } = "recepcion_cita_dia_anterior_v1";

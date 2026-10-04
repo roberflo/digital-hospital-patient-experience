@@ -1,0 +1,26 @@
+{
+  "id": "citas-101-espacio-fecha-informal",
+  "area": "citas",
+  "severity": "high",
+  "synthetic": true,
+  "danger": "no entender un mensaje informal deja sin cita a quien escribe como habla",
+  "linked": true,
+  "history": [
+    {
+      "from": "patient",
+      "text": "kiero una cita xfa pa el {open+2}"
+    }
+  ],
+  "hospital": {
+    "availability": true
+  },
+  "expect": {
+    "handoff": false,
+    "tools": [
+      "hospital_availability"
+    ],
+    "match": [
+      "\\b0?9[:.]00|\\b10[:.]00"
+    ]
+  }
+}

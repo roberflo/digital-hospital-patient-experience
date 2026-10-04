@@ -71,4 +71,6 @@ npm test
 
 Las pruebas API y navegador inician sesión en el Keycloak local de Hospital con sus usuarios sintéticos (leen `KC_DEV_USERS_PASSWORD` de `../Hospital/.env` o del entorno); no se ejecutan contra producción ni en CI, que sólo corre lo que no necesita identidad. Backend usa una base temporal de PostgreSQL que se elimina al terminar y proveedores simulados. Las pruebas reales opcionales `scripts/check-integrations.py`, `scripts/kapso-mcp-read.py`, `scripts/check-nim.py` y `tests/assistant_smoke.py` requieren las claves locales; las pruebas NIM usan texto sintético y consumen cuota.
 
-[Agente de citas y recordatorios](docs/appointment-agent.md) · [Resultados y límites de validación](docs/verification.md) · [Backlog](docs/backlog.md) · [Easypanel y operación](docs/deployment.md) · [Contrato Hospital](docs/hospital-integration.md) · [Puente de recetas](integrations/hospital/README.md)
+`scripts/eval-agent.sh [modelo]` corre las evals del agente de atención contra el modelo real con pacientes sintéticos (consume cuota; no forma parte de `test-backend.sh`).
+
+[Agente de atención: alcance, guardas y evals](docs/reception-agent.md) · [Agente de citas y recordatorios](docs/appointment-agent.md) · [Resultados y límites de validación](docs/verification.md) · [Backlog](docs/backlog.md) · [Easypanel y operación](docs/deployment.md) · [Contrato Hospital](docs/hospital-integration.md) · [Puente de recetas](integrations/hospital/README.md)

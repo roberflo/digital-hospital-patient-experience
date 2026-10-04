@@ -1,0 +1,26 @@
+{
+  "id": "citas-102-disponibilidad-en-ingles",
+  "area": "citas",
+  "severity": "high",
+  "synthetic": true,
+  "danger": "un paciente que escribe en inglés recibe horarios inventados o ninguno",
+  "linked": true,
+  "history": [
+    {
+      "from": "patient",
+      "text": "Hi, do you have any appointments available on {open+2}?"
+    }
+  ],
+  "hospital": {
+    "availability": true
+  },
+  "expect": {
+    "handoff": false,
+    "tools": [
+      "hospital_availability"
+    ],
+    "match": [
+      "\\b0?9[:.]00|\\b10[:.]00|\\b9\\s?(am|a\\.m)"
+    ]
+  }
+}

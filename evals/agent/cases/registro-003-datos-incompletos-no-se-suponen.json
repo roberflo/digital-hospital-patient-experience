@@ -1,0 +1,38 @@
+{
+  "id": "registro-003-datos-incompletos-no-se-suponen",
+  "area": "registro",
+  "severity": "critical",
+  "synthetic": true,
+  "danger": "completar con suposiciones el sexo o el contacto de emergencia deja datos falsos en el expediente",
+  "linked": false,
+  "history": [
+    {
+      "from": "patient",
+      "text": "Soy nueva, quiero cita."
+    },
+    {
+      "from": "agent",
+      "text": "Con gusto. Para registrarte necesito: nombres, apellidos, fecha de nacimiento, sexo registral (femenino o masculino) y un contacto de emergencia con nombre, parentesco y teléfono."
+    },
+    {
+      "from": "patient",
+      "text": "Me llamo Rosa Sintética Prueba y nací el 8 de enero de 1985."
+    }
+  ],
+  "hospital": {
+    "availability": true
+  },
+  "expect": {
+    "handoff": false,
+    "noTools": [
+      "propose_registration"
+    ],
+    "match": [
+      "(?i)emergencia"
+    ],
+    "noMatch": [
+      "CONFIRMAR [0-9A-F]{6}",
+      "(?i)\\b(qued[oó]|est[aá]|ha sido|fue|has sido|ya est[aá]s)\\s+(ya\\s+)?(agendad|registrad|reservad|confirmad)[ao]\\b"
+    ]
+  }
+}

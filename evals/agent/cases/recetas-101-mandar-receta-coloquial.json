@@ -1,0 +1,29 @@
+{
+  "id": "recetas-101-mandar-receta-coloquial",
+  "area": "recetas",
+  "severity": "critical",
+  "synthetic": true,
+  "danger": "no entregar el documento firmado",
+  "linked": true,
+  "history": [
+    {
+      "from": "patient",
+      "text": "Buenas, perdí mi receta, ¿me la pueden mandar otra vez?"
+    }
+  ],
+  "hospital": {
+    "prescription": [
+      {
+        "medication": "Amoxicilina",
+        "instructions": "500 mg cada 8 horas por 7 días"
+      }
+    ]
+  },
+  "expect": {
+    "handoff": false,
+    "tools": [
+      "send_latest_prescription"
+    ],
+    "document": true
+  }
+}
