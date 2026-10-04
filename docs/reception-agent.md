@@ -56,6 +56,11 @@ El paciente escribe; el agente **responde**, **consulta** (agenda, recetas emiti
 | 36 | Al confirmar el registro, los primeros horarios libres llegan en el mismo mensaje como lista, sin pedirlos. | Mismo test; en vivo `AgentLiveJourney.NewClientRegistersAndBooksFromTheMenuWithoutTheModel`. |
 | 37 | Si ningún proveedor responde y aún no se ejecutó nada, el paciente recibe el menú y sigue con el agente, tenga o no expediente. Un saludo recibe el menú en cualquier momento. | `AgentGuardTests.WhenNoProviderAnswersThePatientGetsTheMenu`, `AgentInteractionTests.WhenTheModelIsDownARegisteredPatientStillGetsTheMenu`, `GreetingGetsTheMenuEvenInTheMiddleOfAConversation`. |
 | 38 | Un ofrecimiento («¿te paso con recepción?») no cuenta como derivación anunciada. | `AgentGuardTests.SayingItHandsOffMeansItHandsOff`. |
+| 39 | Lo que el servidor escribe se lee como chat: ninguna línea pasa de 130 caracteres, una idea por línea, el dato importante en negrita de WhatsApp (`*…*`). | `AgentVoiceTests.ReadsLikeAChat` aplicado a propuesta, derivaciones, registro y confirmación. |
+| 40 | Una propuesta llega como la tarjeta del servidor y nada más: qué cita (fecha y hora), con quién, y una pregunta («¿La confirmo?», «¿La cambio?», «¿La cancelo?»). Lo que el modelo escribió en ese turno no se envía, así que no puede repetir la tarjeta ni afirmar que ya se hizo. | `AProposalReachesThePatientAsTheServersCardAndNothingElse`, `AgentGuardTests.WhatTheModelSaysAboutAProposalNeverReachesThePatient`. |
+| 41 | Con botón no se pide escribir el código. «Sí», «ok», «dale» o «confirmo» justo después de la única propuesta pendiente la confirman; sin propuesta es un mensaje normal. | `SayingYesToTheProposalJustMadeConfirmsIt`, `YesWithNothingProposedIsAnOrdinaryMessage`. |
+| 42 | Una propuesta no lleva la pregunta de emergencia: dos preguntas en un mensaje harían ambiguo el «sí». | `ProposalDoesNotCarryTheEmergencyQuestion`. |
+| 43 | El agente inicia el registro guiado (`start_registration`) en vez de pedir todos los datos en un bloque; el Markdown del modelo sale como negrita de WhatsApp. | `AgentStartsTheGuidedFormInsteadOfListingEverythingItNeeds`, `ModelMarkdownBecomesWhatsAppBold…`. |
 
 ## Anti-criterios
 
@@ -148,6 +153,10 @@ Defecto de Hospital encontrado y corregido en su repositorio (sin commitear ni d
 `scripts/live-agent.sh FromTheMenu` contra el Hospital local: saludo → menú → «Agendar cita» → siete preguntas → Confirmar → paciente creado en Hospital y lista de horarios → toca un horario → Confirmar → cita `booked` en Hospital. 2,2 s en total, sin una sola llamada al modelo; la prueba cancela su cita. `scripts/test-backend.sh`: 319 pasan / 0 fallan.
 
 En el número real, 2026-10-04 00:12: un paciente con expediente fue derivado porque NIM estaba limitado por una pasada de evals sobre la misma clave. De ahí salen los criterios 32 y 37 y la regla de no correr evals mientras se atiende.
+
+## Redacción · 2026-10-04
+
+Motivo: en el número real las respuestas tenían entre 475 y 902 caracteres en un bloque. El servidor pegaba resumen, instrucción de teclear el código y pregunta de emergencia; el modelo repetía lo que la tarjeta ya decía. `scripts/test-backend.sh`: 332 pasan / 0 fallan. Con el modelo real sólo se leyeron cuatro casos (`AGENT_EVAL_FILTER=citas-00`): tres pasan; el cuarto quedó como medición inválida porque NIM volvió a limitar tras unas ocho llamadas.
 
 ## Límites conocidos
 

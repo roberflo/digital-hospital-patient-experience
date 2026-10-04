@@ -89,7 +89,7 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
         string reply = ""; foreach (var answer in Answers) reply = await Say(answer);
 
         Assert.Empty(posts); // nothing reaches Hospital before the patient confirms
-        Assert.Contains("Registro: Ana Sintética López Prueba, nacimiento 12 de marzo de 1990, sexo femenino", reply);
+        Assert.Contains("*Ana Sintética López Prueba*\nNacimiento: 12 de marzo de 1990\nSexo: femenino", reply);
         var confirm = h.Interactive[^1].GetProperty("action").GetProperty("buttons")[0].GetProperty("reply").GetProperty("id").GetString()!;
         var registered = await Say(confirm);
 

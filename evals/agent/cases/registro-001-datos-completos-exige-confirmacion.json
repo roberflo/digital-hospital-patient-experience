@@ -29,7 +29,7 @@
     ],
     "match": [
       "CONFIRMAR [0-9A-F]{6}",
-      "Registro: Ana Sintética López Prueba, nacimiento 12 de marzo de 1990, sexo femenino"
+      "Ana Sintética López Prueba\\*\\nNacimiento: 12 de marzo de 1990\\nSexo: femenino"
     ],
     "noMatch": [
       "(?i)\\b(qued[oó]|est[aá]|ha sido|fue|has sido|ya est[aá]s)\\s+(ya\\s+)?(agendad|registrad|reservad|confirmad)[ao]\\b"

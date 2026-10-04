@@ -64,22 +64,23 @@ public sealed class AgentGuardTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ProposalNeverReadsAsDoneAndAlwaysCarriesItsCode()
+    public async Task WhatTheModelSaysAboutAProposalNeverReachesThePatient()
     {
         await h.Link();
         var proposal = new { action = "cancel", appointmentId = Guid.NewGuid() };
-        var hospital = h.Hospital();
 
-        // The model claims the write already happened: withheld.
-        await h.Runtime(h.Model(AgentHarness.ToolCall("propose_action", proposal), AgentHarness.Reply("Listo, tu cita ya fue cancelada.")), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
-        Assert.Equal("human", (await h.Fresh()).Status);
+        // The model claims the write already happened. With a proposal on the table the patient receives the server's card and
+        // nothing the model wrote, so the false claim cannot be sent at all (it used to be withheld and handed off).
+        await h.Runtime(h.Model(AgentHarness.ToolCall("propose_action", proposal), AgentHarness.Reply("Listo, tu cita ya fue cancelada.")), h.Sender(), h.Hospital()).Run(h.Job, CancellationToken.None);
+
         Assert.DoesNotContain(h.Sent, text => text.Contains("ya fue cancelada"));
-        Assert.Contains("confirmación", (await h.Db.Activities.SingleAsync(a => a.Kind == "guard")).Body);
+        Assert.EndsWith("¿La cancelo?", Assert.Single(h.Sent));
+        Assert.Equal("agent", (await h.Fresh()).Status);
         Assert.Empty(h.HospitalWrites);
     }
 
     [Fact]
-    public async Task ProposalReplyWithoutCodeGetsTheConfirmationInstruction()
+    public async Task ProposalIsConfirmedByItsButtonWhateverTheModelWrote()
     {
         await h.Link();
         var model = h.Model(AgentHarness.ToolCall("propose_action", new { action = "cancel", appointmentId = Guid.NewGuid() }), AgentHarness.Reply("Puedo cancelar tu cita del lunes. ¿Deseas continuar?"));
@@ -87,7 +88,7 @@ public sealed class AgentGuardTests : IAsyncLifetime
         await h.Runtime(model, h.Sender(), h.Hospital()).Run(h.Job, CancellationToken.None);
 
         var code = (await h.Db.Activities.SingleAsync(a => a.Kind.StartsWith("proposal:"))).Kind[9..];
-        Assert.Contains(h.Sent, text => text.Contains("CONFIRMAR " + code));
+        Assert.Equal("CONFIRMAR " + code, h.Interactive[^1].GetProperty("action").GetProperty("buttons")[0].GetProperty("reply").GetProperty("id").GetString());
         Assert.Empty(h.HospitalWrites);
     }
 
@@ -120,7 +121,7 @@ public sealed class AgentGuardTests : IAsyncLifetime
         await h.Runtime(model, h.Sender(), h.Hospital()).Run(h.Job, CancellationToken.None);
 
         var sent = Assert.Single(h.Sent);
-        Assert.Contains($" {local.Day} de ", sent); Assert.Contains("a las 09:00", sent); Assert.Contains(local.Year.ToString(), sent);
+        Assert.Contains($" {local.Day} de ", sent); Assert.Contains("a las 09:00", sent);
     }
 
     [Theory]
@@ -176,8 +177,7 @@ public sealed class AgentGuardTests : IAsyncLifetime
         await h.Runtime(model, h.Sender(), hospital).Run(h.Job, CancellationToken.None);
 
         var sent = Assert.Single(h.Sent);
-        Assert.Equal(asks, sent.Contains("¿Es una emergencia?"));
-        Assert.Equal(asks, sent.Contains("2200 0000"));
+        Assert.Equal(asks, sent.Contains("¿Es una emergencia?")); // the hospital's number comes with the handoff, if the patient says yes
         Assert.Equal("agent", (await h.Fresh()).Status);
     }
 
@@ -246,7 +246,7 @@ public sealed class AgentGuardTests : IAsyncLifetime
 
         var sent = Assert.Single(h.Sent);
         Assert.Single(System.Text.RegularExpressions.Regex.Matches(sent, "¿Es una emergencia\\?"));
-        Assert.Contains("EMERGENCIA", sent);
+        Assert.Equal("EMERGENCIA", h.Interactive[^1].GetProperty("action").GetProperty("buttons")[0].GetProperty("reply").GetProperty("id").GetString()); // answered with a button, not by typing a keyword
     }
 
     [Theory]
@@ -294,21 +294,6 @@ public sealed class AgentGuardTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task EmergencyQuestionComesAfterTheProposalNotInsideIt()
-    {
-        await h.Link();
-        var start = new DateTimeOffset(DateTime.UtcNow.Date.AddDays(1).AddHours(15), TimeSpan.Zero);
-        var hospital = h.Hospital(availability: new { clinicalDayFrom = "", clinicalDayTo = "", maxDaysPerQuery = 31, rollState = "open", professionals = new[] { new { clinicianId = Guid.NewGuid(), clinicianName = "Dra. Sintética", placeName = "", defaultDurationMinutes = 30, days = new[] { new { clinicalDay = "", state = "open", takenSlotCount = 0, utcOffset = "-06:00", slots = new[] { new { slotId = "a", startsAt = DateTimeOffset.UtcNow.AddHours(30), durationMinutes = 30, takenBy = 0, offered = true } } } } } } });
-        var model = h.Model(AgentHarness.ToolCall("hospital_availability", new { date = DateTime.UtcNow.AddHours(-6).ToString("yyyy-MM-dd") }), AgentHarness.ToolCall("propose_action", new { action = "create", doctorId = Guid.NewGuid(), startsAt = start, durationMinutes = 30 }), AgentHarness.Reply("Te propongo esta cita."));
-
-        await h.Runtime(model, h.Sender(), hospital).Run(h.Job, CancellationToken.None);
-
-        var sent = Assert.Single(h.Sent);
-        Assert.True(sent.IndexOf("Cita:", StringComparison.Ordinal) < sent.IndexOf("CONFIRMAR", StringComparison.Ordinal));
-        Assert.True(sent.IndexOf("CONFIRMAR", StringComparison.Ordinal) < sent.IndexOf("¿Es una emergencia?", StringComparison.Ordinal));
-    }
-
-    [Fact]
     public async Task EchoingTheHourThePatientAskedForIsNotAnInventedSlot()
     {
         // Found reading the evals: «no hay espacio a las 15:00» was withheld because 15:00 came from the patient, not the agenda.
@@ -336,8 +321,8 @@ public sealed class AgentGuardTests : IAsyncLifetime
     }
 
     [Theory]
-    [InlineData("Creo que tomé una sobredosis", "Si es una emergencia, llama ya al 2200 0000")]
-    [InlineData("Quiero hablar con una persona, por favor", "Pasé tu consulta al equipo del hospital")]
+    [InlineData("Creo que tomé una sobredosis", "Si es una emergencia, llama ya al *2200 0000*")]
+    [InlineData("Quiero hablar con una persona, por favor", "Le pasé tu consulta al equipo del hospital")]
     public async Task HandoffMessageSaysWhatHappensNext(string message, string opening)
     {
         // Found reading the evals: a price question and an overdose got the same emergency-flavoured sentence.
@@ -475,7 +460,8 @@ public sealed class AgentHarness(Guid? tenant = null, string phone = "5037000000
     /// <summary>Appends a message; the job always answers the newest patient message.</summary>
     public async Task Say(string sender, string body)
     {
-        var message = new Message { TenantId = Scope.Id, ConversationId = Conversation.Id, ExternalId = "m-" + Guid.NewGuid(), Body = body, Sender = sender, CreatedAt = DateTimeOffset.UtcNow.AddSeconds(Db.Messages.Local.Count) }; Db.Add(message);
+        await Task.Delay(3); // messages are ordered by their timestamp, which the database keeps to the microsecond
+        var message = new Message { TenantId = Scope.Id, ConversationId = Conversation.Id, ExternalId = "m-" + Guid.NewGuid(), Body = body, Sender = sender }; Db.Add(message);
         if (sender == "patient") { Job = new() { TenantId = Scope.Id, ConversationId = Conversation.Id, Key = "agent:" + message.ExternalId }; Db.Add(Job); }
         await Db.SaveChangesAsync();
     }

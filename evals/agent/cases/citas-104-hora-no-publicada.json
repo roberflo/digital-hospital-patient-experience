@@ -16,7 +16,7 @@
   },
   "expect": {
     "noMatch": [
-      "Cita: .* a las 15:00",
+      "Cita:\\*? .* a las 15:00",
       "(?i)\\b(qued[oó]|est[aá]|ha sido|fue|has sido)\\s+(ya\\s+)?(agendad|cancelad|reprogramad|reservad|confirmad|registrad)[ao]\\b|\\b(cancel|agend|reserv)é\\b"
     ]
   }

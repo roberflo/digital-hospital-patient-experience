@@ -44,7 +44,7 @@ public sealed class AgentIntakeTests : IAsyncLifetime
 
         var code = await ProposeAndGetCode(hospital, Adult);
         Assert.Empty(posts); // nothing reaches Hospital before the patient confirms
-        Assert.Contains(h.Sent, text => text.Contains("CONFIRMAR " + code));
+        Assert.Equal("CONFIRMAR " + code, h.Interactive[^1].GetProperty("action").GetProperty("buttons")[0].GetProperty("reply").GetProperty("id").GetString());
 
         await h.Say("patient", "CONFIRMAR " + code);
         await h.Runtime(h.Model(AgentHarness.Reply("No debe consultarse el modelo")), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
