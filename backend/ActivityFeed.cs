@@ -18,8 +18,8 @@ public static class ActivityFeed
     };
     public static string Category(string kind) => kind switch
     {
-        "response" => "response", "handoff" or "assignment" => "handoff", "note" => "note",
-        "appointment" or "appointment_reminder" => "appointment", "clinical_review" => "clinical", "error" or "delivery" => "review",
+        "response" => "response", "handoff" or "assignment" or "handoff_offer" => "handoff", "note" => "note",
+        "appointment" or "appointment_reminder" => "appointment", "clinical_review" or "prescription_delivered" => "clinical", "error" or "delivery" or "guard" or "agent_provider" => "review",
         "agent_tool" => "ai_action", _ when kind.StartsWith("proposal", StringComparison.Ordinal) => "appointment", _ => "crm"
     };
     // Never disclose proposal JSON (patient/doctor identifiers and confirmation codes) in a general feed.
@@ -28,7 +28,7 @@ public static class ActivityFeed
         if (activity.Kind.StartsWith("proposal", StringComparison.Ordinal)) return activity.Kind.StartsWith("proposal_used:", StringComparison.Ordinal) ? "Confirmación de agenda procesada en la conversación." : "Propuesta de agenda enviada para confirmación del paciente.";
         if (activity.Kind == "agent_tool")
         {
-            var actions = new Dictionary<string,string> { ["handoff"]="Transferencia a una persona", ["record_note"]="Nota de seguimiento", ["hospital_availability"]="Consulta de disponibilidad", ["my_appointments"]="Consulta de citas del paciente", ["my_prescriptions"]="Consulta de recetas emitidas", ["get_prescription"]="Consulta de una receta", ["send_prescription"]="Envío de receta", ["propose_action"]="Propuesta de cambio en la agenda" };
+            var actions = new Dictionary<string,string> { ["handoff"]="Transferencia a una persona", ["record_note"]="Nota de seguimiento", ["hospital_availability"]="Consulta de disponibilidad", ["my_appointments"]="Consulta de citas del paciente", ["my_prescriptions"]="Consulta de recetas emitidas", ["get_prescription"]="Consulta de una receta", ["send_prescription"]="Envío de receta", ["send_latest_prescription"]="Envío de la última receta", ["propose_action"]="Propuesta de cambio en la agenda", ["propose_registration"]="Propuesta de registro del paciente", ["start_registration"]="Inicio del registro guiado" };
             foreach(var (name,label) in actions) if(activity.Body.StartsWith($"Herramienta: {name}.", StringComparison.Ordinal)) return label + (activity.Body.Contains("requiere revisión",StringComparison.Ordinal)?": requiere revisión.":": completado.");
         }
         return activity.Body;
@@ -45,7 +45,7 @@ public static class ActivityFeed
         if (q?.Length > 150 || page is < 1 or > 10000 || (!string.IsNullOrEmpty(care) && !careTypes.Contains(care))
             || (!string.IsNullOrEmpty(category) && !categories.Contains(category)) || (from is {} start && to is {} end && start > end))
             throw new ArgumentException("Revisa los filtros del historial.");
-        var query = db.Activities.AsNoTracking().Where(a => (contactId == null || a.ContactId == contactId) && (conversationId == null || a.ConversationId == conversationId));
+        var query = db.Activities.AsNoTracking().Where(a => a.Kind != "intake" && (contactId == null || a.ContactId == contactId) && (conversationId == null || a.ConversationId == conversationId));
         var zone = TimeZoneInfo.FindSystemTimeZoneById(await db.Tenants.Where(t => t.Id == scope.Id).Select(t => t.TimeZone).SingleAsync(ct));
         if (from is {} first) { var instant = new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(first.ToDateTime(TimeOnly.MinValue), zone)); query = query.Where(a => a.CreatedAt >= instant); }
         if (to is {} last) { if(last == DateOnly.MaxValue)throw new ArgumentException("Fecha fuera de rango"); var instant = new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(last.AddDays(1).ToDateTime(TimeOnly.MinValue), zone)); query = query.Where(a => a.CreatedAt < instant); }

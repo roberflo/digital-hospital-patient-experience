@@ -433,7 +433,7 @@ public sealed class AgentGuardTests : IAsyncLifetime
 
         Assert.DoesNotContain("api.openai.com", hosts); // no fallback key configured: the second provider is never contacted
         Assert.Equal("agent", (await h.Fresh()).Status);
-        Assert.StartsWith("En este momento no puedo leer mensajes escritos", Assert.Single(h.Sent)); // not silence: the menu, which needs no model
+        Assert.StartsWith("Disculpa, en este momento no puedo leer mensajes escritos", Assert.Single(h.Sent)); // not silence: the menu, which needs no model
         Assert.Single(h.Interactive);
         Assert.Contains(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => a.Kind == "agent_provider");
     }

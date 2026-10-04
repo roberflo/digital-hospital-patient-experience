@@ -11,14 +11,14 @@ public sealed partial record Intake(int Step, string? GivenNames = null, string?
     public bool Minor => Step < 0;
     static readonly string[] Months = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
 
-    public static (Intake State, string Prompt, Choices? Choices) Start() => Ask(new Intake(1), "Para agendar necesito registrarte. Son 7 preguntas cortas.\n\n");
+    public static (Intake State, string Prompt, Choices? Choices) Start() => Ask(new Intake(1), "Con gusto. Primero creo tu expediente: son 7 preguntas cortas.\n\n");
 
     public (Intake State, string Prompt, Choices? Choices) Answer(string text, DateOnly today)
     {
         var value = text.Trim();
         switch (Step)
         {
-            case 1: return Name().IsMatch(value) ? Ask(this with { Step = 2, GivenNames = value }) : Ask(this, "No pude leer tus nombres.\n\n");
+            case 1: return Name().IsMatch(value) ? Ask(this with { Step = 2, GivenNames = value }, $"Gracias, {value.Split(' ')[0]}.\n\n") : Ask(this, "No pude leer tus nombres.\n\n");
             case 2: return Name().IsMatch(value) ? Ask(this with { Step = 3, FamilyNames = value }) : Ask(this, "No pude leer tus apellidos.\n\n");
             case 3:
                 if (Date(value) is not { } born || born > today || born < today.AddYears(-120)) return Ask(this, "No pude leer esa fecha.\n\n");
