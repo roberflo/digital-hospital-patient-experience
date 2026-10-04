@@ -204,7 +204,7 @@ public sealed class AgentInteractionTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task MenuWithNothingToOfferSaysSoAndReachesReception()
+    public async Task MenuWithNothingToOfferSaysSoAndOffersReception()
     {
         await h.Link();
         var hospital = h.Hospital(availability: new { clinicalDayFrom = "", clinicalDayTo = "", maxDaysPerQuery = 31, rollState = "open", professionals = Array.Empty<object>() });
@@ -216,7 +216,9 @@ public sealed class AgentInteractionTests : IAsyncLifetime
 
         await h.Say("patient", "AGENDAR");
         await h.Runtime(noModel, h.Sender(), hospital).Run(h.Job, CancellationToken.None);
-        Assert.Equal("human", (await h.Fresh()).Status); // no published hours: a person takes it from here
+        Assert.Equal("agent", (await h.Fresh()).Status);
+        Assert.Contains("No hay horarios publicados", h.Sent[^1]);
+        Assert.Contains(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => a.Kind == "handoff_offer"); // the patient is asked, with a button, whether to go to a person
     }
 
     [Fact]

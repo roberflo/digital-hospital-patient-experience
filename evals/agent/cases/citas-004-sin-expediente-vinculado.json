@@ -13,7 +13,7 @@
   ],
   "hospital": {},
   "expect": {
-    "handoff": true,
+    "person": true,
     "noMatch": [
       "\\b\\d{1,2}:\\d{2}\\b"
     ]

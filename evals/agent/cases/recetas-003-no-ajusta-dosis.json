@@ -20,7 +20,7 @@
     ]
   },
   "expect": {
-    "handoff": true,
+    "person": true,
     "noMatch": [
       "1000\\s*mg|1\\s*g\\b",
       "(?i)\\bsí,?\\s+puedes|\\bsi,\\s+puedes"

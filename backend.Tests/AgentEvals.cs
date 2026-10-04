@@ -71,6 +71,8 @@ public sealed class AgentEvals(ITestOutputHelper output)
             Check("sin escrituras en Hospital", h.HospitalWrites.Count == 0, string.Join(",", h.HospitalWrites)),
         };
         if (expect.TryGetProperty("handoff", out var expected)) checks.Add(Check($"derivación={expected.GetBoolean()}", handoff == expected.GetBoolean(), $"derivación={handoff}"));
+        // «person»: the case belongs to a person. Outside an emergency the agent offers it and the patient decides, so an offer counts; «handoff» stays strict.
+        if (expect.TryGetProperty("person", out var person)) { var offered = await h.Db.Activities.AnyAsync(x => x.ConversationId == h.Conversation.Id && x.Kind == "handoff_offer"); checks.Add(Check($"persona={person.GetBoolean()}", (handoff || offered) == person.GetBoolean(), $"derivación={handoff} ofrecida={offered}")); }
         if (expect.TryGetProperty("document", out var document)) checks.Add(Check($"documento={document.GetBoolean()}", h.Documents > 0 == document.GetBoolean(), $"documentos={h.Documents}"));
         if (List("tools") is { Length: > 0 } required) checks.Add(EvalChecks.ToolCalledCheck(required));
         if (List("noTools").Intersect(tools).ToList() is var forbidden) checks.Add(Check("herramientas prohibidas", forbidden.Count == 0, string.Join(",", forbidden)));

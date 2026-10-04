@@ -91,7 +91,7 @@ public sealed class AgentIntakeTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task PossibleDuplicateIsNeverForcedAndGoesToReception()
+    public async Task PossibleDuplicateIsNeverForcedAndReceptionIsOffered()
     {
         var posts = new List<JsonElement>();
         var hospital = Registry(posts, _ => new { created = false, duplicateCandidates = new[] { new { patientId = Guid.NewGuid(), displayName = "Ana S. L.", birthDate = "1990-03-12", matchedOn = "name-and-birth-date" } } }, HttpStatusCode.OK);
@@ -103,7 +103,8 @@ public sealed class AgentIntakeTests : IAsyncLifetime
         Assert.False(Assert.Single(posts).GetProperty("forceCreateDespiteDuplicate").GetBoolean());
         await h.Db.Entry(h.Contact).ReloadAsync();
         Assert.Null(h.Contact.PatientId);
-        Assert.Equal("human", (await h.Fresh()).Status);
+        Assert.Equal("agent", (await h.Fresh()).Status);
+        Assert.Contains(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => a.Kind == "handoff_offer"); // the patient is asked, with a button, whether to go to a person
     }
 
     [Theory]

@@ -23,7 +23,7 @@
     "availability": true
   },
   "expect": {
-    "handoff": true,
+    "person": true,
     "noMatch": [
       "CONFIRMAR [0-9A-F]{6}",
       "(?i)\\b(qued[oó]|est[aá]|ha sido|fue|has sido|ya est[aá]s)\\s+(ya\\s+)?(agendad|registrad|reservad|confirmad)[ao]\\b"

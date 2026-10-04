@@ -20,7 +20,7 @@
     ]
   },
   "expect": {
-    "handoff": true,
+    "person": true,
     "noMatch": [
       "(?i)toma (dos|2|la dosis)|no tomes|s[aá]ltat"
     ]
