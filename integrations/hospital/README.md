@@ -1,6 +1,6 @@
-# Puente de recetas para recepción — patch revisable
+# Puente de recetas para recepción
 
-Estado: **aplicado al hospital original el 2026-10-02; compila y pasa pruebas dirigidas en copia aislada**. `reception-delivery.patch` añade contrato compartido, controller en ClinicalRecord.Endpoints, servicio en Bootstrap, pruebas dirigidas, links a fixtures sintéticos existentes, spec/plan, OpenAPI, cliente TypeScript generado y registro scoped en `Hospital.Api`. `git apply --reverse --check` confirma la aplicación completa; el patch se conserva para revisión, no debe aplicarse dos veces. El patch contiene los fuentes y pruebas; una copia local equivalente está en `staged/` (ignorada por Git). No hay secretos, migraciones ni cambios en roles clínicos existentes.
+Estado: **publicado en Hospital `main` (commit `ad441e2`) y servido por el stack normal de Hospital**; este documento conserva el contrato y la evidencia. El puente añade contrato compartido, controller en ClinicalRecord.Endpoints, servicio en Bootstrap, pruebas dirigidas, spec/plan, OpenAPI, cliente TypeScript generado y registro scoped en `Hospital.Api`. No hay secretos, migraciones ni cambios en roles clínicos existentes.
 
 El bootstrap reúne puertos ya publicados de Patient, ClinicalRecord, Timeline, Audit, Calendar y PDF. El servicio nuevo realiza autorización y auditoría en cada entrada. No reusa un usuario médico, no debilita `PatientResourceClassPolicy`, y no llama a las rutas generales del expediente con privilegios prestados. El controller referencia el contrato compartido; no se añade dependencia de Endpoints hacia Bootstrap. Las pruebas del grafo de referencias pasan.
 
@@ -41,7 +41,7 @@ POST /v1/reception/prescriptions/{prescriptionId}/pdf
   -> application/pdf
 ```
 
-Todos los endpoints envían `Cache-Control: no-store`. El teléfono sale de la conversación de WhatsApp verificada, no de un argumento libre del LLM. El CRM ya soporta estas rutas activando `UseReceptionBridge=true` por tenant, tras desplegar y validar el patch.
+Todos los endpoints envían `Cache-Control: no-store`. El teléfono sale de la conversación de WhatsApp verificada, no de un argumento libre del LLM. El CRM ya soporta estas rutas activando `UseReceptionBridge=true` por tenant, tras desplegar y validar el puente.
 
 ## Configuración y aplicación
 
@@ -62,16 +62,9 @@ Hospital__Tenants__<tenant-guid>__AllowClinicalDelivery=true
 Hospital__Tenants__<tenant-guid>__UseReceptionBridge=true
 ```
 
-Comandos de referencia para otro checkout Hospital sin el bridge:
+Hospital carga estas variables desde un archivo opcional: `scripts/connect-hospital-local.py --delivery` escribe `secrets/hospital-delivery.env` y al terminar imprime la ruta absoluta que debe ponerse en `HOSPITAL_RECEPTION_ENV_FILE` en el `.env` de Hospital (lo lee `infra/compose/api.yml`); después se recrea `hospital-api-1`. No hay patches que aplicar ni imágenes que construir.
 
-```sh
-git apply --check ../Recepcion/integrations/hospital/reception-delivery.patch
-git apply ../Recepcion/integrations/hospital/reception-delivery.patch
-pnpm backend:test
-pnpm backend:live
-```
-
-Las pruebas del servicio, HTTP/JWT, arquitectura y OpenAPI indicadas abajo ya se ejecutaron. Se aplicó sobre el checkout actual preservando cambios anteriores de terceros; el cliente generado pasó en Hospital real. Falta el smoke con stores reales y revisión independiente según REVIEW.md. La prueba `git apply --check` por sí sola no compila el código ni prueba permisos. Google Calendar es un flujo separado; este bridge no lo implementa.
+Las pruebas del servicio, HTTP/JWT, arquitectura y OpenAPI indicadas abajo ya se ejecutaron. El cliente generado pasó en Hospital real. Falta el smoke con stores reales y revisión independiente según REVIEW.md. Google Calendar es un flujo separado; este bridge no lo implementa.
 
 ## Evidencia de validación en copia aislada
 
@@ -97,7 +90,7 @@ Revisión del autor: Bugs (realm_access no objeto corregido); Seguridad (tenant/
 
 ## Revisión independiente del coordinador
 
-2026-10-02: revisados los cuatro pases de REVIEW.md. Bugs: IDs de timeline coinciden con receta y permisos se comprueban antes de leer; Seguridad: caller firmado, tenant/sub/azp/role exactos, número actual, signed-only y audit awaited; Conformidad: AC1–9 reflejados, límites de evidencia indicados arriba; Diseño: endpoints sin interfaz, no aplica. No se detectaron nuevos hallazgos importantes en el patch. Esta revisión de código no reemplaza el smoke de stores reales ni la aprobación de CODEOWNERS para merge.
+2026-10-02: revisados los cuatro pases de REVIEW.md. Bugs: IDs de timeline coinciden con receta y permisos se comprueban antes de leer; Seguridad: caller firmado, tenant/sub/azp/role exactos, número actual, signed-only y audit awaited; Conformidad: AC1–9 reflejados, límites de evidencia indicados arriba; Diseño: endpoints sin interfaz, no aplica. No se detectaron nuevos hallazgos importantes en el puente. Esta revisión de código no reemplaza el smoke de stores reales ni la aprobación de CODEOWNERS para merge.
 
 ## Revisión de publicación, 2026-10-03
 
@@ -105,4 +98,4 @@ Detalle y PDF usan una única ID de receta; el servicio autentica la capacidad a
 
 Resultados finales: 36/36 bridge, 274/274 arquitectura, 52/52 contratos; suite completa 3507 aprobadas, 2 fallos conocidos Vitals, 429 omitidas, 3938 total (origin/main 3893 +45 pruebas propias). Revisión independiente completó bugs, seguridad, conformidad y diseño sin nuevos Important. La conexión real de agenda sí se probó en PostgreSQL local por API e interfaz; la entrega de recetas sigue deshabilitada y requiere su propia habilitación y prueba clínica.
 
-Publicado en Hospital `main`: [ad441e2](https://github.com/roberflo/digital-hospital/commit/ad441e265c9ec268c9659bca5bf4630bb39a4c48). Los patches finales corresponden a ese commit y fueron comprobados en orden sobre origin/main anterior.
+Publicado en Hospital `main`: [ad441e2](https://github.com/roberflo/digital-hospital/commit/ad441e265c9ec268c9659bca5bf4630bb39a4c48). Los patches usados para publicarlo ya no se conservan en este repositorio.

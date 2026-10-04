@@ -22,7 +22,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 def run(config):
     crm = 'http://recepcion-api-1:8080'
-    hospital = 'http://hospital-recepcion-api:8080'
+    hospital = 'http://hospital-api-1:8080'
 
     def request(base, path, method='GET', body=None, token=None, form=False):
         headers = {'Content-Type': 'application/x-www-form-urlencoded' if form else 'application/json'}

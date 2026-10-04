@@ -78,7 +78,7 @@ lines = [line for line in envfile.read_text().splitlines() if line.split('=', 1)
 with os.fdopen(os.open(envfile, os.O_WRONLY | os.O_TRUNC), 'w') as file:
     os.fchmod(file.fileno(), 0o600)
     file.write('\n'.join(lines + [k + '=' + v for k, v in updates.items()]) + '\n')
-subprocess.run(['docker', 'compose', '-f', 'docker-compose.yml', '-f', 'docker-compose.hospital.yml', '-f', 'docker-compose.kapso-local.yml', 'up', '-d', '--no-deps', 'api'], cwd=root, check=True)
+subprocess.run(['docker', 'compose', '-f', 'docker-compose.yml', '-f', 'docker-compose.hospital.yml', '-f', 'docker-compose.kapso-local.yml', 'up', '-d', '--no-deps', 'recepcion-api'], cwd=root, check=True)
 sql(f'''BEGIN; UPDATE "Channels" SET "Enabled"=false WHERE "PhoneNumberId"='{args.phone_number_id}' AND "TenantId"='{tenant}';
 INSERT INTO "Audits" ("Id","TenantId","Actor","Action","Resource","CreatedAt") VALUES ('{uuid.uuid4()}','{tenant}','local-operator','channel.receive_only','{args.phone_number_id}',now()); COMMIT;''')
 cli('whatsapp', 'webhooks', 'update', hook['id'], '--phone-number-id', args.phone_number_id, '--active')

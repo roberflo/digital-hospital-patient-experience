@@ -76,7 +76,7 @@ PASS: hospital client phone linkage, tenant/expiry guard, cross-patient appointm
 
 Con SDK 10: `dotnet run --project tests/hospital-client/HospitalClient.Checks.csproj`. Esto prueba el adaptador, no sustituye pruebas reales de Keycloak, base de datos ni el bridge en Hospital.
 
-Ese mismo comando se ejecutó posteriormente en `mcr.microsoft.com/dotnet/sdk:10.0` y también pasó. El puente ya tiene patch compilado en copia aislada del hospital y pruebas dirigidas: 33 del servicio/HTTP-JWT, 12 de arquitectura, 3 de baseline OpenAPI y 1 del cliente TypeScript generado, sin fallos ni omitidas. Ver `integrations/hospital/README.md` para evidencia y verificaciones de despliegue pendientes.
+Ese mismo comando se ejecutó posteriormente en `mcr.microsoft.com/dotnet/sdk:10.0` y también pasó. El puente ya está en Hospital `main` y se validó con pruebas dirigidas: 33 del servicio/HTTP-JWT, 12 de arquitectura, 3 de baseline OpenAPI y 1 del cliente TypeScript generado, sin fallos ni omitidas. Ver `integrations/hospital/README.md` para evidencia y verificaciones de despliegue pendientes.
 
 ## Ampliación de agenda (2026-10-02)
 

@@ -11,7 +11,7 @@ TENANT='cccccccc-cccc-4ccc-8ccc-cccccccccccc'
 PATIENT='01a0a362-0dd9-7418-a987-ad9c8e67758b'
 def run(config):
     def call(path,body=None,token=None,form=False):
-        host='http://hospital-keycloak-1:8080' if form else 'http://hospital-recepcion-api:8080'
+        host='http://hospital-keycloak-1:8080' if form else 'http://hospital-api-1:8080'
         data=None if body is None else (urllib.parse.urlencode(body) if form else json.dumps(body)).encode()
         headers={'Content-Type':'application/x-www-form-urlencoded' if form else 'application/json'}
         if token:headers['Authorization']='Bearer '+token

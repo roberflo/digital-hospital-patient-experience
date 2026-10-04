@@ -38,6 +38,6 @@ Descuento porcentual general confirmado por el usuario. Compra significa registr
 - `tests/hospital_connection_live.cjs`: login administrador real, conexión verificada guardada, búsqueda real, destino no autorizado rechazado y conexión anterior conservada. `tests/hospital_calendar_live.cjs`: agenda200 y hospital de prueba recordado.
 - Revisión adversarial cerró las condiciones de concurrencia de teléfono/contacto y conservación de clave idempotente después de respuesta perdida seguida de401/403.
 
-El entorno local usa `scripts/start-hospital-commercial-local.py` y las imágenes `hospital/api:commercial`, `hospital/web:commercial`. Preserva los servicios Hospital originales y ofrece la nueva interfaz en `http://localhost:3210/es/commercial`. Aplicar primero `infra/provision/commercial.sql` y la migración del contexto Commercial, como documenta Hospital. No volver a arrancar la imagen anterior con `start-hospital-local.py`, pues no contiene las APIs comerciales.
+Las APIs `/v1/commercial/*` forman parte de Hospital `main`: el stack normal de Hospital (`hospital-api-1`, red `hospital`) las sirve y su web ofrece la interfaz en `http://localhost:3210/es/commercial`. Recepción no arranca ninguna copia paralela. Aplicar primero `infra/provision/commercial.sql` y la migración del contexto Commercial, como documenta Hospital.
 
 Para el despliegue real, seguir [hospital-easypanel.md](hospital-easypanel.md). No se desplegó en un Easypanel remoto ni se enviaron mensajes WhatsApp durante estas pruebas.

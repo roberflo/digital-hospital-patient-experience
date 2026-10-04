@@ -6,7 +6,9 @@ Hospital's own realm job (infra/keycloak/configure-realms.sh §9) declares `rece
 into Recepción's ignored .env, after checking the service token carries exactly what it should.
 It never holds the Keycloak admin password. Synthetic Hospital C only; never a production endpoint.
 
-  --delivery   also enable signed-prescription delivery for Hospital C (explicit operator approval)
+  --delivery   also enable signed-prescription delivery for Hospital C (explicit operator approval).
+               Writes secrets/hospital-delivery.env; Hospital's api compose loads it when
+               HOSPITAL_RECEPTION_ENV_FILE in Hospital's .env is set to that absolute path (printed at the end).
 """
 import base64,json,os,pathlib,sys,urllib.request,urllib.parse,urllib.error
 root=pathlib.Path(__file__).resolve().parents[1]
@@ -38,8 +40,8 @@ def configure():
     updates={'KEYCLOAK_ISSUER':issuer,'KEYCLOAK_INTERNAL_ISSUER':internal,'KEYCLOAK_CLIENT_ID':'recepcion-web','KEYCLOAK_CLIENT_SECRET':web_secret,
         'Auth__Authority':issuer,'Auth__Audience':'hospital-api','DEV_HOSPITAL_TENANT_ID':tenant,
         # Installation-wide: every hospital connects from these, by signing in. Nothing per tenant.
-        'HOSPITAL_API_URL':'http://hospital-recepcion-api:8080/','HOSPITAL_SERVICE_CLIENT_SECRET':service_secret,
-        'HOSPITAL_ALLOWED_API_ORIGINS':'http://hospital-recepcion-api:8080','HOSPITAL_PUBLIC_URL':'http://localhost:3210'}
+        'HOSPITAL_API_URL':'http://hospital-api-1:8080/','HOSPITAL_SERVICE_CLIENT_SECRET':service_secret,
+        'HOSPITAL_ALLOWED_API_ORIGINS':'http://hospital-api-1:8080','HOSPITAL_PUBLIC_URL':'http://localhost:3210'}
     stale=tuple(prefix+k for k in ['BaseUrl','TokenEndpoint','ClientId','ClientSecret','UsePatientAgenda','PublicUrl'])+('ALLOW_DEV_LOGIN','DEV_JWT_KEY','DEV_PASSWORD','HOSPITAL_SELF_ONBOARDING')
     capability_file=root/'secrets/hospital-delivery.env'
     # Delivery stays an explicit opt-in. Once granted, re-runs keep it pointed at the current account.
@@ -48,12 +50,11 @@ def configure():
         delivery='ReceptionDelivery__Tenants__'+tenant+'__'
         capability={delivery+'Enabled':'true',delivery+'ClientId':client_id,delivery+'ServiceAccountSubject':claims['sub']}
         capability_file.parent.mkdir(exist_ok=True);capability_file.write_text('\n'.join(k+'='+v for k,v in capability.items())+'\n');os.chmod(capability_file,0o600)
-        runtime=root/'secrets/hospital-runtime.env'
-        if runtime.exists():write_env(runtime,capability)
     elif (root/'.env').exists() and prefix+'AllowClinicalDelivery' not in read_env(root/'.env'):
         updates[prefix+'AllowClinicalDelivery']='false'
     write_env(root/'.env',updates,drop=stale)
     print('Recepción now signs in through the local Hospital realm (recepcion-web, '+client_id+'); no secrets printed.')
+    if capability_file.exists():print('Delivery enabled: set HOSPITAL_RECEPTION_ENV_FILE='+str(capability_file)+' in Hospital\'s .env and recreate hospital-api-1.')
 
 if __name__=='__main__':
     try:configure()

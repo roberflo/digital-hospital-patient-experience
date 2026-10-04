@@ -4,13 +4,13 @@ Fecha de desarrollo: 2026-10-02 (America/El_Salvador). Ejecución local con Dock
 
 | Capa | Resultado ejecutado | Alcance |
 |---|---|---|
-| Build API | pasó | `docker compose build api`, publicación Release .NET 10 |
+| Build API | pasó | `docker compose build recepcion-api`, publicación Release .NET 10 |
 | Build frontend | pasó | `docker compose build web`, Next standalone + TypeScript |
 | Backend | 56 pasaron, 0 fallos, 0 omitidas | `scripts/test-backend.sh`, PostgreSQL temporal real y proveedores simulados |
 | API | 82 verificaciones pasaron | `python3 tests/api_smoke.py`, API real local |
 | Navegador | 14/14 pasaron en una ejecución completa tras corregir el nombre junto al contador de no leídos | `npm test --prefix frontend`, Chromium escritorio + móvil contra contenedores compilados |
 | Adaptador Hospital | pasó | `tests/hospital-client/HospitalClient.Checks.csproj` ejecutado con SDK 10 |
-| Bridge Hospital | 36/36 servicio/HTTP-JWT; arquitectura 274/274; contratos 52/52 | copia aislada del hospital; revisión independiente sin hallazgos Important nuevos |
+| Bridge Hospital | 36/36 servicio/HTTP-JWT; arquitectura 274/274; contratos 52/52 | validado en copia aislada del hospital antes de publicarse en `main`; revisión independiente sin hallazgos Important nuevos |
 | Suite Hospital completa | 3507 aprobadas, 2 fallos conocidos Vitals, 429 omitidas; 3938 total | base origin/main 3893 + 45 pruebas propias (36 bridge y 9 agenda); no se declara toda la suite verde |
 | Kapso MCP | conexión y lecturas reales correctas | initialize, tools/list y lectura del número configurado; servidor kapso-mcp 2.0.0 |
 | NVIDIA NIM | modelos, tool calling y 2 comprobaciones del asistente pasaron | proveedor real, prompt y contacto sintéticos; modelo `nvidia/nemotron-3-super-120b-a12b` |

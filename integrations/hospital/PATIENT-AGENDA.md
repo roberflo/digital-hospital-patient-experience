@@ -1,6 +1,6 @@
 # Consulta de citas por paciente
 
-Cambio aplicado en el checkout Hospital y preservado en `patient-agenda.patch`. Publicado en Hospital `main`, commit `ad441e265c9ec268c9659bca5bf4630bb39a4c48`, desde una copia aislada de origin/main que preservó el índice compartido. Recepción integra el cambio en `6fcfa44610c23a9d2b07b195ce38f5faf2a9be05`.
+Parte de Hospital `main`, servido por el stack normal de Hospital. Publicado en Hospital `main`, commit `ad441e265c9ec268c9659bca5bf4630bb39a4c48`, desde una copia aislada de origin/main que preservó el índice compartido. Recepción integra el cambio en `6fcfa44610c23a9d2b07b195ce38f5faf2a9be05`.
 
 - `GET /v1/agenda/patients/{patientId}?from=YYYY-MM-DD&to=YYYY-MM-DD`
 - Hasta 31 días, incluye canceladas. Proyección: appointmentId, clinicianId, clinicianName, scheduledStart (offset hospital), durationMinutes, status.
@@ -18,11 +18,9 @@ TDD: ruta ausente, ToString que incluía patientId y fecha extrema que desbordab
 
 El 2026-10-03 se probó el CRUD real con JWT de servicio, stores PostgreSQL existentes y paciente sintético C: creación, lectura, reprogramación y cancelación desde Recepción. Cada fase se contrastó con la nueva API y la API original Hospital. El ciclo se repitió satisfactoriamente sobre la imagen final corregida (manifest `sha256:2286e7716f97c39e5b5c9343f77a5552a0c415d285d8a21dddbfbc1788048c36`). También pasó el rechazo de otro tenant desde CRM (404), rango mayor de 31 días (400) e historial CRM de las tres acciones. La comprobación directa de filas de auditoría Hospital y los gates completos de aislamiento siguen siendo evidencia distinta; no se infieren de este smoke.
 
-## Imagen local activa
+## Stack local
 
-`hospital/api:recepcion-patient-agenda` está activa localmente mediante `patient-agenda.compose.yml`, sin reemplazar la API original. El contenedor original proviene de un checkout temporal que ya no existe. `scripts/start-hospital-local.py` utiliza una lista explícita de variables de base de datos app/jobs/keyring, cifrado y validación JWT; excluye Keycloak Admin, MinIO y credenciales de migración. El archivo privado tiene modo 0600 y está ignorado por Git.
-
-Recepción se une únicamente a la red `hospital` mediante `docker-compose.hospital.yml`. Sólo la API Hospital adicional requiere su red de llaves habitual. No se exponen puertos nuevos al host.
+La ruta se sirve desde `hospital-api-1`, la API normal de Hospital; Recepción no arranca una copia propia. Recepción se une a la red `hospital` mediante `docker-compose.hospital.yml` (servicios `web` y `recepcion-api`; el alias `api` de esa red pertenece sólo a Hospital). No se exponen puertos nuevos al host.
 
 ## Conexión local autorizada
 
@@ -33,7 +31,6 @@ El selector de login «Hospital local · citas de prueba» está disponible en l
 Comandos de operación local después de provisionar la cuenta autorizada:
 
 ```sh
-python3 scripts/start-hospital-local.py
 python3 tests/hospital_live.py
 python3 tests/hospital_live.py --inspect 2026-10-05
 ```

@@ -28,7 +28,7 @@ import json,sys,urllib.request,urllib.parse
 cfg=json.load(sys.stdin)
 req=urllib.request.Request('http://hospital-keycloak-1:8080/realms/hospital/protocol/openid-connect/token',data=urllib.parse.urlencode({'grant_type':'client_credentials','client_id':cfg['id'],'client_secret':cfg['secret']}).encode())
 token=json.load(urllib.request.urlopen(req))['access_token']
-req=urllib.request.Request('http://hospital-recepcion-api:8080/v1/patients/01a0a362-0dd9-7418-a987-ad9c8e67758b',headers={'Authorization':'Bearer '+token})
+req=urllib.request.Request('http://hospital-api-1:8080/v1/patients/01a0a362-0dd9-7418-a987-ad9c8e67758b',headers={'Authorization':'Bearer '+token})
 patient=json.load(urllib.request.urlopen(req));print(json.dumps(patient['givenNames']+' '+patient['familyNames']))
 `],{input:JSON.stringify({id:'recepcion-service-cccccccc-cccc-4ccc-8ccc-cccccccccccc',secret:reception.HOSPITAL_SERVICE_CLIENT_SECRET}),encoding:'utf8'}));
   const res=await page.request.post(`http://localhost:3215/api/crm/hospital/contacts/${linked.id}/patients/search`,{headers:{Origin:'http://localhost:3215'},data:{queryShape:'name-tokens',term:fixtureName}});

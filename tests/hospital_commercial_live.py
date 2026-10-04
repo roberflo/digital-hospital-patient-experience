@@ -7,7 +7,7 @@ TENANT='cccccccc-cccc-4ccc-8ccc-cccccccccccc'
 def envfile(path):
     return dict((k,v.strip().strip('"\'')) for k,v in (line.split('=',1) for line in path.read_text().splitlines() if line and not line.startswith('#') and '=' in line))
 def run(config):
-    crm='http://recepcion-api-1:8080'; hospital='http://hospital-recepcion-api:8080';kc='http://hospital-keycloak-1:8080'
+    crm='http://recepcion-api-1:8080'; hospital='http://hospital-api-1:8080';kc='http://hospital-keycloak-1:8080'
     def call(base,path,method='GET',body=None,token=None,form=False):
         headers={'Content-Type':'application/x-www-form-urlencoded' if form else 'application/json'}
         if token:headers['Authorization']='Bearer '+token
