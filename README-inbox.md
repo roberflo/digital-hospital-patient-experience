@@ -132,7 +132,7 @@ pulse Verificar conexión; no requiere un webhook de ciclo de vida del proyecto.
 - **Equipo** (`/?view=team`) muestra abiertas, pendientes y pospuestas por persona,
   incluyendo conversaciones de todos los números del hospital. Una persona puede tener
   varias conversaciones; cada conversación tiene un responsable principal.
-- Administradores y supervisores pueden seleccionar hasta 100 conversaciones de una página
+- Los administradores pueden seleccionar hasta 100 conversaciones de una página
   para reasignarlas juntas. El servidor valida pertenencia, acceso y revisiones; si alguna
   cambió, no aplica ninguna asignación de ese lote. Cada transferencia crea actividad y auditoría.
 - Un recepcionista puede tomar conversaciones sin responsable y transferir las suyas a

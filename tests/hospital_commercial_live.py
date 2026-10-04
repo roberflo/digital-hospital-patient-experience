@@ -22,7 +22,7 @@ def run(config):
         print('PASS '+label,flush=True);return result[1]
     def login(user):return ok(call(kc,'/realms/hospital/protocol/openid-connect/token','POST',{'grant_type':'password','client_id':'hospital-web','username':user,'password':config['hospital_password']},form=True),'Synthetic '+user+' login')['access_token']
     admin=login('dev-administrador-c');foreign=login('dev-administrador-a');doctor=login('dev-medicos-c')
-    reception=ok(call(crm,'/auth/dev','POST',{'user':'hospital','password':config['crm_password']}),'Reception C login')['accessToken']
+    reception=config['reception']
     assert ok(call(crm,'/api/me',token=reception),'Reception C tenant')['tenant']['id']==TENANT
     tag=uuid.uuid4().hex[:8].upper();company=None;service=None
     try:
@@ -74,6 +74,8 @@ if __name__=='__main__':
     if '--container' in sys.argv:run(json.load(sys.stdin))
     else:
         e=envfile(ROOT/'.env');h=envfile(ROOT.parent/'Hospital/.env');assert e.get('ASPNETCORE_ENVIRONMENT')=='Development' and e.get('DEV_HOSPITAL_TENANT_ID')==TENANT and h.get('KC_SEED_DEV_USERS')=='true'
-        cfg={'crm_password':e.get('DEV_PASSWORD','demo-recepcion'),'hospital_password':h['KC_DEV_USERS_PASSWORD']}
+        # Recepción only trusts Keycloak's public issuer, reachable from the host: mint its token here.
+        import keycloak_dev
+        cfg={'reception':keycloak_dev.token('hospital'),'hospital_password':h['KC_DEV_USERS_PASSWORD']}
         result=subprocess.run(['docker','run','--rm','-i','--network','hospital','-v',str(pathlib.Path(__file__).resolve())+':/tests/test.py:ro','python:3.12-slim','python','/tests/test.py','--container'],input=json.dumps(cfg),text=True)
         sys.exit(result.returncode)

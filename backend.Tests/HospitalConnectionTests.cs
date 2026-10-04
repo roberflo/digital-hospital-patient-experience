@@ -12,6 +12,28 @@ public class HospitalConnectionTests
     static IConfiguration Config() => new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?> {
         ["HOSPITAL_ALLOWED_API_ORIGINS"]="https://hospital-api.example.com,http://hospital-api:8080",["Auth:Authority"]="https://identity.example.com/realms/hospital"
     }).Build();
+    [Fact] public void EveryHospitalConnectsFromInstallationSettingsAlone()
+    {
+        var tenant=Guid.NewGuid();
+        var config=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{["Auth:Authority"]="https://identity.example.com/realms/hospital",["HOSPITAL_API_URL"]="http://hospital-api:8080",["HOSPITAL_PUBLIC_URL"]="https://hospital.example.com",["HOSPITAL_SERVICE_CLIENT_SECRET"]="synthetic-secret"}).Build();
+        var values=HospitalConnectionStore.Defaults(tenant,config);
+        Assert.Equal($"recepcion-service-{tenant:D}",values["ClientId"]);
+        Assert.Equal("https://identity.example.com/realms/hospital/protocol/openid-connect/token",values["TokenEndpoint"]);
+        Assert.Equal("http://hospital-api:8080",values["BaseUrl"]);
+        Assert.Equal("true",values["UsePatientAgenda"]);
+        // Delivering prescriptions is never implied by being connected.
+        Assert.False(values.ContainsKey("AllowClinicalDelivery"));Assert.False(values.ContainsKey("UseReceptionBridge"));
+        Assert.NotEqual(values["ClientId"],HospitalConnectionStore.Defaults(Guid.NewGuid(),config)["ClientId"]);
+        Assert.Empty(HospitalConnectionStore.Defaults(tenant,Config()));
+    }
+    [Fact] public void LinksIntoHospitalEnterThroughItsIdentityProvider()
+    {
+        var tenant=Guid.NewGuid();
+        var config=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{[$"Hospital:Tenants:{tenant}:PublicUrl"]="https://hospital.example.com/ignored?x=1"}).Build();
+        var client=new HospitalClient(new HttpClient(),config);
+        Assert.Equal("https://hospital.example.com/api/auth/idp?returnTo=%2Fes%2Fcommercial",client.EntryUrl(tenant,"/es/commercial"));
+        Assert.Null(client.EntryUrl(Guid.NewGuid(),"/es"));
+    }
     [Fact] public void TrustedOriginAndFixedIssuerOnly()
     {
         var values=HospitalConnectionRules.Validate(new("http://hospital-api:8080","https://hospital.example.com","recepcion","synthetic-secret"),Config());

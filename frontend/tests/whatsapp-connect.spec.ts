@@ -1,11 +1,5 @@
 import { test, expect } from '@playwright/test';
-import type { Page } from '@playwright/test';
-async function login(page: Page) {
-  await page.goto('/login');
-  await page.getByLabel('Contraseña', { exact: true }).fill('demo-recepcion');
-  await page.getByRole('button', { name: 'Entrar al espacio' }).click();
-  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
-}
+import { login } from './login';
 test('business admin gets hosted connection link and imports verified number without IDs', async ({
   page,
 }, info) => {

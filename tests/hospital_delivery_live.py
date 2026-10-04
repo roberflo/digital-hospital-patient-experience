@@ -40,7 +40,7 @@ if __name__=='__main__':
     else:
         env=dict(l.split('=',1) for l in (ROOT/'.env').read_text().splitlines() if '=' in l and not l.startswith('#'))
         assert env.get('ASPNETCORE_ENVIRONMENT')=='Development' and env.get('DEV_HOSPITAL_TENANT_ID')==TENANT
-        prefix='Hospital__Tenants__'+TENANT+'__';assert env[prefix+'ClientId']=='recepcion-agent-local-c'
-        config={'client':env[prefix+'ClientId'],'secret':env[prefix+'ClientSecret']}
+        prefix='Hospital__Tenants__'+TENANT+'__'
+        config={'client':'recepcion-service-'+TENANT,'secret':env['HOSPITAL_SERVICE_CLIENT_SECRET']}
         p=subprocess.run(['docker','run','--rm','-i','--network','hospital','-v',str(Path(__file__).resolve())+':/tests/test.py:ro','python:3.12-slim','python','/tests/test.py','--container'],input=json.dumps(config),text=True)
         sys.exit(p.returncode)

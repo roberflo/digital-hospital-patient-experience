@@ -33,15 +33,15 @@ public sealed class AgentIntegrationTests:IAsyncLifetime {
         Assert.Equal("synthetic-connection-secret",store.Section(scope.Id)["ClientSecret"]);
         Assert.Null(store.Section(Guid.NewGuid())["ClientSecret"]);
     }
-    [Theory][InlineData("admin",true,true)][InlineData("agent",true,false)][InlineData("doctor",true,false)][InlineData("admin",false,false)]
-    public async Task OnboardingUsesAuthenticatedHospitalAdministratorOnly(string role,bool enabled,bool expected)
+    [Theory][InlineData("Administrador","true",true)][InlineData("Administrador",null,true)][InlineData("Recepción",null,false)][InlineData("Médicos",null,false)][InlineData("Administrador","false",false)]
+    public async Task OnboardingUsesAuthenticatedHospitalAdministratorOnly(string role,string? enabled,bool expected)
     {
         var tid=Guid.NewGuid();var subject=Guid.NewGuid().ToString();
-        var cfg=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{["HOSPITAL_SELF_ONBOARDING"]=enabled?"true":"false",["Auth:Authority"]="https://identity.example.com"}).Build();
-        var ctx=new Microsoft.AspNetCore.Http.DefaultHttpContext{User=new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity(new[]{new System.Security.Claims.Claim("tenant_id",tid.ToString()),new("sub",subject),new("role",role),new("iss","https://identity.example.com"),new("name","Hospital staff")},"test"))};
+        var cfg=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{["HOSPITAL_SELF_ONBOARDING"]=enabled,["Auth:Authority"]="https://identity.example.com"}).Build();
+        var ctx=new Microsoft.AspNetCore.Http.DefaultHttpContext{User=new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity(new[]{new System.Security.Claims.Claim("tenant_id",tid.ToString()),new("sub",subject),new("realm_access","{\"roles\":[\""+role+"\"]}"),new("iss","https://identity.example.com"),new("name","Hospital staff")},"test"))};
         var current=new CurrentUser();var identityScope=new TenantScope();await using var identityDb=new CrmDb(options,identityScope,protection);var success=await Identity.Bind(ctx,identityDb,identityScope,current,cfg);
         Assert.Equal(expected,success);Assert.Equal(expected,await db.Tenants.AnyAsync(x=>x.Id==tid));
-        if(expected){Assert.Equal(role,current.Role);Assert.False((await db.Tenants.SingleAsync(x=>x.Id==tid)).AgentEnabled);}
+        if(expected){Assert.Equal("admin",current.Role);Assert.False((await db.Tenants.SingleAsync(x=>x.Id==tid)).AgentEnabled);}
     }
     [Theory][InlineData("pending")][InlineData("snoozed")][InlineData("resolved")]
     public async Task InactiveWorkflowNeverCallsModel(string state){
@@ -123,6 +123,28 @@ public sealed class AgentIntegrationTests:IAsyncLifetime {
         var ai=new Fake(_=>Task.FromResult(Json(new {choices=new[]{new {message=new {role="assistant",content=(string?)null,tool_calls=new[]{tool}}}}})));
         var k=Sending();await Runtime(ai,k).Run(job,CancellationToken.None);
         Assert.Equal("human",conversation.Status);Assert.Equal(1,k.Calls);Assert.Contains(await db.Activities.ToListAsync(),x=>x.Kind=="handoff");
+    }
+    [Fact] public async Task GoogleCalendarSelectionUsesNamesFiltersReadOnlyAndValidatesMembership()
+    {
+        var tenant=await db.Tenants.SingleAsync(x=>x.Id==scope.Id);tenant.GoogleRefreshToken="synthetic-refresh";tenant.GoogleCalendarId="previous";await db.SaveChangesAsync();
+        var cfg=GoogleConfig();
+        var transport=new Fake(req=>{
+            if(req.RequestUri!.Host=="oauth2.googleapis.com") return Task.FromResult(Json(new{access_token="synthetic-access"}));
+            Assert.Contains("minAccessRole=writer",req.RequestUri.Query);
+            Assert.Equal("Bearer",req.Headers.Authorization!.Scheme);
+            if(req.RequestUri.Query.Contains("pageToken=")) return Task.FromResult(Json(new{items=new[]{new{id="shared",summary="Agenda Hospital",accessRole="writer"}}}));
+            return Task.FromResult(Json(new{items=new[]{new{id="mine",summary="Mi agenda",accessRole="owner"},new{id="read-only",summary="Solo lectura",accessRole="reader"}},nextPageToken="second page"}));
+        });
+        var g=new GoogleCalendarClient(new HttpClient(transport),cfg,db,scope,new HospitalClient(new HttpClient(),cfg));
+        var choices=await g.Calendars(); Assert.Equal(2,choices.Count); Assert.Contains(choices,x=>x.Name=="Agenda Hospital");
+        await Assert.ThrowsAsync<ArgumentException>(()=>g.SelectCalendar("foreign-calendar")); Assert.Equal("previous",tenant.GoogleCalendarId);
+        await Assert.ThrowsAsync<ArgumentException>(()=>g.SelectCalendar("read-only"));
+        await g.SelectCalendar("shared"); Assert.Equal("shared",tenant.GoogleCalendarId);
+        // A different hospital never inherits the first hospital's Google credentials.
+        var other=new TenantScope{Id=Guid.NewGuid()}; await using var otherDb=new CrmDb(options,other,protection);
+        otherDb.Tenants.Add(new Tenant{Id=other.Id,Name="Other hospital"});await otherDb.SaveChangesAsync();
+        var isolated=new GoogleCalendarClient(new HttpClient(new Fake(_=>throw new Exception("Must not use another tenant's credentials"))),cfg,otherDb,other,new HospitalClient(new HttpClient(),cfg));
+        await Assert.ThrowsAsync<ArgumentException>(()=>isolated.Calendars());
     }
     [Fact]public async Task GoogleUsesDeterministicEventsAndExcludesPatientData(){
         var tenant=await db.Tenants.SingleAsync(x=>x.Id==scope.Id);tenant.GoogleRefreshToken="synthetic-refresh";tenant.GoogleCalendarId="synthetic-calendar";await db.SaveChangesAsync();

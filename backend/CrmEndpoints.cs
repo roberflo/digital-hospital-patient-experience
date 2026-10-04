@@ -83,16 +83,11 @@ public static class CrmEndpoints
         {
             u.RequireAdmin(); if (b.Guide.Length > 30000) throw new ArgumentException("Guía demasiado extensa");
             try { TimeZoneInfo.FindSystemTimeZoneById(b.TimeZone); } catch (TimeZoneNotFoundException) { throw new ArgumentException("Zona horaria inválida"); }
-            var row = await db.Tenants.SingleAsync(x => x.Id == t.Id); row.Name = Rules.Required(b.Name); row.Guide = b.Guide; row.TimeZone = b.TimeZone; row.AgentEnabled = b.AgentEnabled; row.GoogleCalendarId = string.IsNullOrWhiteSpace(b.GoogleCalendarId) ? null : b.GoogleCalendarId;
+            var row = await db.Tenants.SingleAsync(x => x.Id == t.Id); row.Name = Rules.Required(b.Name); row.Guide = b.Guide; row.TimeZone = b.TimeZone; row.AgentEnabled = b.AgentEnabled;
             Audit(db, t, u, "settings.updated", t.Id); await db.SaveChangesAsync(); return Results.Ok();
         });
-        api.MapGet("/audit", async (CrmDb db, CurrentUser u) => { u.RequireSupervisor(); return await db.Audits.OrderByDescending(x => x.CreatedAt).Take(200).ToListAsync(); });
-        api.MapGet("/jobs", async (CrmDb db, CurrentUser u) => { u.RequireSupervisor(); return await db.Jobs.OrderByDescending(x => x.CreatedAt).Take(100).ToListAsync(); });
-        api.MapPost("/platform/tenants", async (TenantInput b, CrmDb db, CurrentUser u) =>
-        {
-            if (u.Role != "platform_admin") throw new AccessDeniedException(); if (b.Id == Guid.Empty) throw new ArgumentException("ID de tenant requerido");
-            db.Tenants.Add(new Tenant { Id = b.Id, Name = Rules.Required(b.Name) }); await db.SaveChangesAsync(); return Results.Created("/api/platform/tenants", new { b.Id, b.Name });
-        });
+        api.MapGet("/audit", async (CrmDb db, CurrentUser u) => { u.RequireAdmin(); return await db.Audits.OrderByDescending(x => x.CreatedAt).Take(200).ToListAsync(); });
+        api.MapGet("/jobs", async (CrmDb db, CurrentUser u) => { u.RequireAdmin(); return await db.Jobs.OrderByDescending(x => x.CreatedAt).Take(100).ToListAsync(); });
     }
     static void SetContact(Contact row, ContactInput b, IConfiguration c) { row.Name = Rules.Required(b.Name); row.Phone = Rules.Phone(b.Phone); row.PhoneHash = Rules.PhoneHash(b.Phone, c["PHONE_HASH_KEY"]!); row.Email = b.Email ?? ""; row.Tags = b.Tags ?? ""; if (row.Email.Length > 320 || row.Tags.Length > 500) throw new ArgumentException("Campo demasiado largo"); }
     static void ValidateStage(string stage) { if (stage is not ("new" or "contacted" or "scheduled" or "won" or "lost")) throw new ArgumentException("Etapa inválida"); }
@@ -105,4 +100,3 @@ public record ActivityInput(string Body, Guid? ContactId, Guid? ConversationId);
 public record PatientLinkInput(Guid PatientId);
 public record MemberInput(bool Disabled);
 public record SettingsInput(string Name, string Guide, string TimeZone, bool AgentEnabled, string? GoogleCalendarId);
-public record TenantInput(Guid Id, string Name);

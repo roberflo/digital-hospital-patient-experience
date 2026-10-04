@@ -4,50 +4,58 @@ La misma instalación Hospital puede servir a varios hospitales. Recepción dete
 
 ## 1. Preparar el despliegue una vez
 
-Crear los servicios web, API y PostgreSQL de [deployment.md](deployment.md), con volumen persistente `/keys` en API. Mantener `ALLOW_DEV_LOGIN=false` y `ASPNETCORE_ENVIRONMENT=Production`. No copiar la configuración local ni habilitar envíos durante el montaje.
+Esto lo hace el operador una sola vez por instalación, no por hospital.
 
-En la API de Recepción configurar:
+En el servicio de infraestructura de **Hospital**, definir y volver a ejecutar su job `keycloak-config`:
+
+```text
+KC_RECEPCION_WEB_CLIENT_SECRET=<secreto A>
+KC_RECEPCION_WEB_REDIRECT_URIS=https://recepcion.tudominio.com/api/auth/callback/keycloak
+KC_RECEPCION_WEB_WEB_ORIGINS=https://recepcion.tudominio.com
+KC_RECEPCION_SERVICE_CLIENT_SECRET=<secreto B>
+```
+
+El job crea el cliente `recepcion-web` y, por cada hospital que tenga usuarios en el realm, su cuenta `recepcion-service-<UUID>` con exactamente los roles **Recepción** y `reception-agent`. Nadie copia UUIDs: Keycloak ya sabe qué hospitales existen. Un hospital nuevo recibe su cuenta en el siguiente despliegue de Hospital.
+
+En la **API de Recepción** (con volumen persistente `/keys`, `ASPNETCORE_ENVIRONMENT=Production`):
 
 ```text
 Auth__Authority=https://identidad.tudominio.com/realms/hospital
 Auth__Audience=hospital-api
-HOSPITAL_ALLOWED_API_ORIGINS=https://api-hospital.tudominio.com
+HOSPITAL_API_URL=http://proyecto_hospital-api:8080
+HOSPITAL_SERVICE_CLIENT_SECRET=<secreto B>
+HOSPITAL_ALLOWED_API_ORIGINS=http://proyecto_hospital-api:8080
 HOSPITAL_PUBLIC_URL=https://hospital.tudominio.com
-HOSPITAL_SELF_ONBOARDING=true
 ```
 
-`HOSPITAL_ALLOWED_API_ORIGINS` puede contener varias direcciones base separadas por comas. Una dirección interna de Easypanel como `http://proyecto_hospital-api:8080` también sirve si ambas APIs comparten la red. Copiar el nombre real del servicio; no usar los nombres Docker de este equipo local. Sólo esos destinos reciben el token de la cuenta de servicio. La URL pública de la interfaz Hospital debe usar HTTPS.
-
-`HOSPITAL_SELF_ONBOARDING=true` permite únicamente a un Administrador autenticado por el Hospital inicializar su propio espacio en Recepción. Los demás empleados entran después. Si se prefiere el alta por operador, dejarlo en `false` y usar `BOOTSTRAP_TENANT_ID` / `BOOTSTRAP_TENANT_NAME`.
-
-En la web de Recepción configurar el mismo proveedor:
+En la **web de Recepción**:
 
 ```text
 KEYCLOAK_ISSUER=https://identidad.tudominio.com/realms/hospital
 KEYCLOAK_CLIENT_ID=recepcion-web
-KEYCLOAK_CLIENT_SECRET=<secreto del cliente web>
+KEYCLOAK_CLIENT_SECRET=<secreto A>
 NEXTAUTH_URL=https://recepcion.tudominio.com
 API_URL=http://servicio-api-recepcion:8080
 AUTH_SECRET=<secreto propio de Recepción>
 ```
 
-En Keycloak crear el cliente confidencial `recepcion-web`, flujo Authorization Code + PKCE S256, callback exacto `https://recepcion.tudominio.com/api/auth/callback/keycloak`, origen web exacto y scopes `openid`, `profile`, `email`, `roles`, `tenant-context`. El token debe conservar `sub`, `tenant_id`, roles del Hospital y audiencia `hospital-api`. No crear otros usuarios ni contraseñas. El cliente web no necesita cuenta de servicio ni acceso administrativo a Keycloak.
+El issuer debe ser el mismo en ambos servicios. `KEYCLOAK_INTERNAL_ISSUER` es opcional para el backchannel interno. No hay variables por hospital, salvo la entrega automática de recetas, que se autoriza hospital por hospital ([hospital-integration.md](hospital-integration.md)).
 
-El issuer público de ambos servicios debe coincidir. `KEYCLOAK_INTERNAL_ISSUER` es opcional para el backchannel interno; debe apuntar al mismo realm, nunca a un proveedor distinto. Reiniciar los servicios tras cambiar variables.
+## 2. Conectar un hospital
 
-## 2. Conectar cada hospital desde Recepción
+El Administrador del hospital entra a Recepción con su cuenta de Hospital. Eso es todo: su espacio se crea en ese momento, el hospital y los permisos salen de su identidad, y la conexión con la agenda y los pacientes queda activa sin escribir direcciones, identificadores ni secretos. Para que sólo el operador pueda abrir espacios, `HOSPITAL_SELF_ONBOARDING=false` y `BOOTSTRAP_TENANT_ID` / `BOOTSTRAP_TENANT_NAME`.
 
-1. Entrar con **Continuar con mi cuenta del hospital**, usando una cuenta Administrador del Hospital.
-2. Abrir **Mi hospital → Conectar o actualizar Hospital**.
-3. Seleccionar la API permitida y escribir la dirección pública de Hospital.
-4. Introducir el ID y secreto de la cuenta de servicio creada para Recepción en ese hospital.
-5. Pulsar **Comprobar y conectar**. Se consulta la agenda real antes de guardar. Si falla el acceso o el `tenant_id` no corresponde a la sesión, se conserva la conexión anterior.
+El negocio sólo sigue estos pasos:
 
-La cuenta de servicio es un cliente confidencial de Keycloak con service accounts, sin login interactivo, sin password grant, sin full-scope. Debe incluir audiencia `hospital-api`, claim `tenant_id` fijo del hospital y rol **Recepción**. El ID/secreto de esta cuenta son distintos al cliente web de login. El administrador de identidad prepara esta cuenta una vez; el usuario del negocio no necesita editar variables por UUID.
+1. Pulsar **Continuar con mi cuenta del hospital**. Se reutiliza la sesión abierta en Hospital; cuando no existe, se pide el acceso habitual.
+2. Abrir **Mi hospital**. La identidad autenticada determina el hospital y los permisos; la disponibilidad se comprueba automáticamente consultando la agenda.
+3. Pulsar **Abrir agenda**, **Vincular pacientes** o **Trabajar con tu equipo**.
 
-El secreto queda cifrado en PostgreSQL con Data Protection. Debe preservarse `/keys` al reiniciar o migrar: sin ese volumen no se pueden descifrar las conexiones. No se devuelve el secreto en las respuestas ni se guarda en almacenamiento del navegador. La configuración guardada prevalece sobre la configuración histórica por variables del mismo hospital.
+No se piden URLs, identificadores ni secretos al negocio. Si el operador todavía no preparó el acceso para ese hospital, se muestra una explicación y se conserva la identidad correcta. Si Hospital no responde, **Volver a intentar** repite la comprobación sin cambiar la conexión. **Usar otra cuenta del hospital** solicita un nuevo inicio de sesión explícitamente.
 
-Este formulario conecta agenda, pacientes y CRM comercial. No otorga permisos clínicos al servicio ni activa agentes, recordatorios o envíos. La entrega automática de recetas usa el puente acotado y los permisos separados descritos en [hospital-integration.md](hospital-integration.md). Los doctores consultan documentos con su propia identidad del Hospital.
+Este acceso no otorga permisos clínicos al servicio ni activa agentes, recordatorios o envíos. La entrega automática de recetas usa el puente acotado y los permisos separados descritos en [hospital-integration.md](hospital-integration.md). Los doctores consultan documentos con su propia identidad del Hospital.
+
+Google y WhatsApp requieren su propia autorización externa. WhatsApp ofrece el alta guiada de números. En Google se elige el calendario por nombre entre aquellos con permiso de escritura; no se copia su identificador. La selección se valida de nuevo en el servidor para el hospital de la sesión. Una autorización antigua de Google puede requerir reconexión para permitir listar calendarios. Referencia: [CalendarList.list](https://developers.google.com/workspace/calendar/api/v3/reference/calendarList/list).
 
 ## 3. Usar pacientes y equipo
 
@@ -58,10 +66,12 @@ Este formulario conecta agenda, pacientes y CRM comercial. No otorga permisos cl
 
 ## Validación antes de abrir al equipo
 
-Comprobar login real del administrador y un empleado; botón **Comprobar conexión**; vínculo con paciente sintético; creación, consulta, reprogramación y cancelación de una cita verificando también Hospital. Probar que otra cuenta de hospital no pueda acceder al contacto ni a su paciente. La prueba de desarrollo está en `tests/hospital_connection_live.cjs`; utiliza cuentas sintéticas locales, no credenciales de producción.
+Comprobar login real del administrador y un empleado; comprobación automática de **Mi hospital**; vínculo con paciente sintético; creación, consulta, reprogramación y cancelación de una cita verificando también Hospital. Probar que otra cuenta de hospital no pueda acceder al contacto ni a su paciente. La prueba de desarrollo está en `tests/hospital_connection_live.cjs`; utiliza cuentas sintéticas locales, no credenciales de producción.
 
 No se ha realizado un despliegue remoto en Easypanel como parte de esta implementación: hacen falta los dominios y acceso al despliegue real. La conexión local se verifica por separado con Hospital C.
 
 ## Evidencia local de conexión
 
 2026-10-03: acceso SSO del Administrador C existente, guardado de conexión comprobada desde la interfaz, búsqueda del paciente sintético del Hospital y rechazo de dirección no permitida sin reemplazar la configuración válida. Pruebas de cifrado y aislamiento de configuración, alta de tenant sólo por administrador del issuer esperado; suite Recepción144/144. Navegador72/72 incluyendo escritorio y móvil. Agenda CRUD real verificado con la conexión guardada.
+
+2026-10-03, simplificación de acceso: Mi hospital comprueba automáticamente la agenda y reutiliza la sesión de Hospital, conservando nombre, hospital y permisos. Retirados los formularios de secretos e identificadores. Google ofrece calendarios por nombre, con validación de escritura y aislamiento por hospital; no se ha autorizado una cuenta real de Google durante estas pruebas. Verificados 145 tests backend, 106 comprobaciones API, 76 pruebas navegador escritorio/móvil y 12 tests servidor. Acceso SSO real y búsqueda del paciente sintético C comprobados por separado.

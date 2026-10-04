@@ -1,37 +1,29 @@
-using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
-using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.IdentityModel.Tokens;
 namespace Recepcion;
 
 public sealed class CurrentUser
 {
     public string Subject { get; set; } = ""; public string Role { get; set; } = ""; public string Name { get; set; } = "";
-    public bool Admin => Role is "admin" or "platform_admin";
-    public bool Supervisor => Admin || Role == "supervisor";
+    public bool Admin => Role == "admin";
     public void RequireAdmin() { if (!Admin) throw new AccessDeniedException(); }
-    public void RequireSupervisor() { if (!Supervisor) throw new AccessDeniedException(); }
 }
 public sealed class AccessDeniedException : Exception;
 public static class Identity
 {
     public static string? MapRole(ClaimsPrincipal user)
     {
-        var roles = user.FindAll("role").Select(c => c.Value).ToList();
+        // Hospital's Keycloak realm is the only issuer, and its seven PRD §3 roles the only vocabulary.
+        // Enfermería has no Recepción workspace: it maps to nothing and is denied.
+        var roles = new List<string>();
         var realm = user.FindFirst("realm_access")?.Value;
         if (realm is not null) { try { using var j = JsonDocument.Parse(realm); if (j.RootElement.ValueKind == JsonValueKind.Object && j.RootElement.TryGetProperty("roles", out var a) && a.ValueKind == JsonValueKind.Array) roles.AddRange(a.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!)); } catch (JsonException) { return null; } }
-        if (roles.Contains("platform_admin")) return "platform_admin";
-        if (roles.Any(r => r is "admin" or "Administrador")) return "admin";
-        if (roles.Any(r => r is "supervisor" or "Supervisor")) return "supervisor";
-        if (roles.Any(r => r is "doctor" or "Médicos" or "Odontólogos" or "Nutricionistas")) return "doctor";
-        if (roles.Any(r => r is "agent" or "Recepción" or "Admisión")) return "agent";
+        if (roles.Contains("Administrador")) return "admin";
+        if (roles.Any(r => r is "Médicos" or "Odontólogos" or "Nutricionistas")) return "doctor";
+        if (roles.Any(r => r is "Recepción" or "Admisión")) return "agent";
         return null;
     }
-    public static string DevToken(string subject, string name, string role, Guid tenant, IConfiguration config) => new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(
-        issuer: "recepcion-dev", audience: "recepcion", claims: [new("sub", subject), new("name", name), new("role", role), new("tenant_id", tenant.ToString())],
-        expires: DateTime.UtcNow.AddHours(1), signingCredentials: new SigningCredentials(new SymmetricSecurityKey(Encoding.UTF8.GetBytes(config["DEV_JWT_KEY"]!)), SecurityAlgorithms.HmacSha256)));
     public static async Task<bool> Bind(HttpContext ctx, CrmDb db, TenantScope scope, CurrentUser current, IConfiguration? config = null)
     {
         if (ctx.User.Identity?.IsAuthenticated != true) return false;
@@ -41,8 +33,9 @@ public static class Identity
         scope.Id = tenant;
         if (!await db.Tenants.AnyAsync(t => t.Id == tenant))
         {
-            // Only administrators authenticated by the configured Hospital issuer may onboard.
-            if (config?["HOSPITAL_SELF_ONBOARDING"] != "true" || role is not ("admin" or "platform_admin") ||
+            // The hospital's own Administrador opens its space by signing in; no operator step.
+            // HOSPITAL_SELF_ONBOARDING=false returns that to the operator (BOOTSTRAP_TENANT_ID).
+            if (config is null || config["HOSPITAL_SELF_ONBOARDING"] == "false" || role != "admin" ||
                 ctx.User.FindFirst("iss")?.Value != config["Auth:Authority"] ||
                 await db.Members.IgnoreQueryFilters().AnyAsync(x=>x.Subject==sub)) return false;
             var hospital = new Tenant { Id=tenant, Name="Hospital · configura tu nombre", AgentEnabled=false };
@@ -74,17 +67,19 @@ public static class Identity
 }
 public static class DemoSeed
 {
-    public static readonly Guid TenantId = Guid.Parse("11111111-1111-4111-8111-111111111111");
-    public static readonly Guid SecondTenantId = Guid.Parse("22222222-2222-4222-8222-222222222222");
+    // The synthetic tenants A and B of Hospital's dev realm (configure-realms.sh): a demo space is
+    // only reachable by the `dev-<rol>-<a|b>` users Keycloak issues tokens for.
+    public static readonly Guid TenantId = Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+    public static readonly Guid SecondTenantId = Guid.Parse("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
     public static async Task Run(CrmDb db, TenantScope scope)
     {
-        if (await db.Tenants.AnyAsync()) return;
         foreach (var id in new[] { TenantId, SecondTenantId })
         {
             scope.Id = id;
+            if (await db.Tenants.AnyAsync(t => t.Id == id)) continue;
             db.Tenants.Add(new Tenant { Id = id, Name = id == TenantId ? "Hospital Demo · datos sintéticos" : "Clínica de prueba B", Guide = "Atención de lunes a viernes de 7:00 a 18:00. Para urgencias, orientar a servicios de emergencia. No confirmar precios sin consultar recepción.", AgentEnabled = false });
-            await db.SaveChangesAsync();
-            if (id != TenantId) continue;
+            // One save per tenant: a tenant row without its demo data would never be seeded again.
+            if (id != TenantId) { await db.SaveChangesAsync(); continue; }
             var people = new[] { ("Ana Martínez", "50370000001", "Control"), ("Carlos Rivera", "50370000002", "Nuevo paciente"), ("María López", "50370000003", "Seguimiento"), ("José Hernández", "50370000004", "Receta") };
             var channel = new Channel { TenantId = id, Name = "Recepción · demostración", PhoneNumberId = "demo", Enabled = false }; db.Add(channel);
             foreach (var (name, phone, tag) in people)

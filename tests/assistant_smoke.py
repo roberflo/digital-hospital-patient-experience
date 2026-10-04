@@ -1,12 +1,13 @@
 """NIM live smoke: only anonymous counts and a synthetic user instruction leave the CRM."""
 import json,urllib.request,uuid
+import keycloak_dev
 BASE='http://127.0.0.1:5215'
 def post(path,body,token=None):
  h={'Content-Type':'application/json'}
  if token:h['Authorization']='Bearer '+token
  req=urllib.request.Request(BASE+path,data=json.dumps(body).encode(),headers=h)
  with urllib.request.urlopen(req,timeout=90) as r:return json.load(r)
-token=post('/auth/dev',{'user':'admin','password':'demo-recepcion'})['accessToken']
+token=keycloak_dev.token('admin')
 r=post('/api/assistant',{'message':'Resume brevemente las métricas anónimas de atención.'},token)
 assert len(r['answer'])>10
 print('PASS authenticated internal assistant returns anonymous CRM summary')

@@ -256,5 +256,4 @@ public static class Rules
         try { return CryptographicOperations.FixedTimeEquals(HMACSHA256.HashData(Encoding.UTF8.GetBytes(secret), body), Convert.FromHexString(signature)); } catch (FormatException) { return false; }
     }
     public static bool WithinWindow(DateTimeOffset? inbound, DateTimeOffset now) => inbound is not null && inbound <= now && now - inbound < TimeSpan.FromHours(24);
-    public static readonly string[] Roles = ["platform_admin", "admin", "supervisor", "agent", "doctor"];
 }

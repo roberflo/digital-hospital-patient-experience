@@ -2,7 +2,8 @@
 
 Run after the operator provisions the service account: python3 tests/hospital_live.py
 Creates a synthetic CRM contact if missing and cancels its test appointment at the end.
-Only minimal integration credentials travel over stdin to an ephemeral Docker verifier.
+Only minimal integration credentials and two short-lived user tokens travel over stdin to an
+ephemeral Docker verifier.
 """
 import datetime as dt
 import json
@@ -54,7 +55,7 @@ def run(config):
             assert persisted['status'] == row['status'] and persisted['scheduledStart'] == row['scheduledStart']
         print('RESULT ' + json.dumps([{k: r[k] for k in ['appointmentId', 'scheduledStart', 'status']} for r in page['rows']]))
         return
-    reception = ok(request(crm, '/auth/dev', 'POST', {'user': 'hospital', 'password': config['password']}), 'Reception login')['accessToken']
+    reception = config['reception']
     me = ok(request(crm, '/api/me', token=reception), 'CRM tenant binding')
     assert me['tenant']['id'] == TENANT
     patient = ok(request(hospital, '/v1/patients/' + PATIENT, token=token), 'Synthetic Hospital patient accessible')
@@ -63,7 +64,7 @@ def run(config):
     if contact is None:
         contact = ok(request(crm, '/api/contacts', 'POST', {'name': 'Paciente sintético · prueba agenda Hospital', 'phone': patient['phone'], 'tags': 'integration-test'}, reception), 'Create synthetic contact', 201)
         contact = ok(request(crm, '/api/contacts/' + contact['id'] + '/patient', 'POST', {'patientId': PATIENT}, reception), 'Link patient through verified phone')
-    other = ok(request(crm, '/auth/dev', 'POST', {'user': 'other', 'password': config['password']}), 'Other tenant login')['accessToken']
+    other = config['other']
     today = dt.datetime.now(dt.timezone(dt.timedelta(hours=-6))).date()
     start = today + dt.timedelta(days=2)
     end = start + dt.timedelta(days=10)
@@ -116,9 +117,12 @@ if __name__ == '__main__':
         env = dict(line.split('=', 1) for line in (ROOT / '.env').read_text().splitlines() if line and not line.startswith('#') and '=' in line)
         assert env.get('ASPNETCORE_ENVIRONMENT') == 'Development' and env.get('DEV_HOSPITAL_TENANT_ID') == TENANT
         prefix = 'Hospital__Tenants__' + TENANT + '__'
-        assert env[prefix + 'ClientId'] in {'recepcion-agenda-local-c', 'recepcion-agent-local-c'}
-        config = {'client': env[prefix + 'ClientId'], 'secret': env[prefix + 'ClientSecret'], 'password': env.get('DEV_PASSWORD', 'demo-recepcion')}
+        # Keycloak's public issuer is only reachable from the host, so user tokens are minted here.
+        import keycloak_dev
+        config = {'client': 'recepcion-service-' + TENANT, 'secret': env['HOSPITAL_SERVICE_CLIENT_SECRET']}
         if '--inspect' in sys.argv:
             config['inspect'] = sys.argv[sys.argv.index('--inspect') + 1]
+        else:
+            config.update(reception=keycloak_dev.token('hospital'), other=keycloak_dev.token('other'))
         result = subprocess.run(['docker', 'run', '--rm', '-i', '--network', 'hospital', '-v', str(pathlib.Path(__file__).resolve()) + ':/tests/test.py:ro', 'python:3.12-slim', 'python', '/tests/test.py', '--container'], input=json.dumps(config), text=True)
         sys.exit(result.returncode)

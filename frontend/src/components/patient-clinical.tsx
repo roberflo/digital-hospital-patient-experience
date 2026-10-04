@@ -133,7 +133,7 @@ function ClinicalRead<T>({
         const message = err.message as string;
         setError(
           message.includes('doctor_login_required')
-            ? 'Inicia sesión con tu cuenta médica de Hospital. La cuenta de demostración no permite consultar expedientes reales.'
+            ? 'Inicia sesión con tu cuenta médica de Hospital para consultar el expediente.'
             : err.status === 403
               ? 'No tienes acceso clínico. Comprueba tu cuenta médica y que sigues a cargo de esta conversación.'
               : err.status === 404

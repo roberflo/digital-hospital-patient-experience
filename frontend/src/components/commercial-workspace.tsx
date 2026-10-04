@@ -38,8 +38,7 @@ type Quote = {
 type Purchase = { id: string; createdAt: string; status: string; quote: Quote };
 const money = (amount: number, currency = 'USD') =>
   new Intl.NumberFormat('es-SV', { style: 'currency', currency }).format(amount);
-const operator = (me?: Me) =>
-  !!me && ['admin', 'platform_admin', 'supervisor', 'agent'].includes(me.role);
+const operator = (me?: Me) => !!me && ['admin', 'agent'].includes(me.role);
 function Failure({ error }: { error?: Error }) {
   return error ? (
     <p className="error" role="alert">

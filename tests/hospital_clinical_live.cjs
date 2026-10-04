@@ -24,7 +24,7 @@ function sql(text){return execFileSync('docker',['compose','exec','-T','db','psq
   if(!/^[0-9a-f-]{36}$/.test(contact.id))throw new Error('Invalid fixture ID');
   sql(`BEGIN;
 INSERT INTO "Channels" ("Id","TenantId","Name","PhoneNumberId","Coexistence","Enabled") VALUES ('${channel}','${tenant}','Prueba clínica sintética','clinical-test-${channel}',false,false);
-INSERT INTO "Conversations" ("Id","TenantId","ContactId","ChannelId","ExternalId","Status","Summary","UpdatedAt","State","Priority","Labels","Revision") SELECT '${conversation}','${tenant}','${contact.id}','${channel}','','human',"Summary",now(),'open','normal','',0 FROM "Conversations" WHERE "TenantId"='11111111-1111-4111-8111-111111111111' LIMIT 1;
+INSERT INTO "Conversations" ("Id","TenantId","ContactId","ChannelId","ExternalId","Status","Summary","UpdatedAt","State","Priority","Labels","Revision") SELECT '${conversation}','${tenant}','${contact.id}','${channel}','','human',"Summary",now(),'open','normal','',0 FROM "Conversations" WHERE "TenantId"='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' LIMIT 1;
 COMMIT;`);seeded=true;
   const base=`http://localhost:3215/api/crm/hospital/conversations/${conversation}/clinical`;
   if((await page.request.get(base+'/timeline')).status()!==403)throw new Error('Unassigned access allowed');

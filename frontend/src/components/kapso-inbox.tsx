@@ -521,7 +521,7 @@ function InboxForNumber({ number, selector }: { number: string; selector: React.
             )}
           </div>
           <footer className={styles.listFooter}>
-            Consulta de Kapso · responsables y seguimiento en Bandeja
+            Historial de WhatsApp · responsables y seguimiento en Bandeja
           </footer>
         </aside>
         <section className={styles.chat} aria-label="Chat">

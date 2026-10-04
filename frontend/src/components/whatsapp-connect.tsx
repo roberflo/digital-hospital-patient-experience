@@ -28,7 +28,7 @@ async function api<T>(path: string, method = 'GET'): Promise<T> {
 export default function WhatsAppConnect() {
   const { data: me, error: authError } = useSWR<{ role: string; name: string }>('/me', api);
   const { data: channels, mutate } = useSWR<Channel[]>('/channels', api);
-  const admin = !!me && ['admin', 'platform_admin'].includes(me.role);
+  const admin = !!me && me.role === 'admin';
   const [link, setLink] = useState<{ url: string; expiresAt?: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [checking, setChecking] = useState(false);

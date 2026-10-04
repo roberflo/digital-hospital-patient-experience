@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { login as signIn } from './login';
 const contact = '11111111-aaaa-4111-8111-111111111111';
 const conversation = '11111111-bbbb-4111-8111-111111111111';
 const longNote = 'Seguimiento sintético. '.repeat(20) + 'Fin de la nota clínica interna.';
@@ -50,11 +51,7 @@ const events = [
   channelName: 'Recepción general',
 }));
 async function login(page: Page) {
-  await page.goto('/login');
-  await page.getByLabel('Usuario de demostración').selectOption('admin');
-  await page.getByLabel('Contraseña', { exact: true }).fill('demo-recepcion');
-  await page.getByRole('button', { name: 'Entrar al espacio' }).click();
-  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
+  await signIn(page);
   await page.goto('/?view=activity');
 }
 test.afterEach(async ({ page }) => {

@@ -33,7 +33,7 @@
 - En Agente de atención, un administrador elige un número general activo y activa o pausa los recordatorios. «Consultar agenda ahora» sincroniza sin despachar; el worker realiza el envío cuando vence el aviso.
 - Plantillas versionadas en `integrations/kapso/templates`. El worker exige `APPROVED`, categoría `UTILITY` y parámetros compatibles antes de cada envío; una aprobación pendiente nunca se trata como éxito.
 - La cola persiste en PostgreSQL y se consulta cada minuto. La instalación y su conexión con Hospital/Kapso deben permanecer encendidas. El túnel de prueba no sustituye una URL pública estable para producción.
-- `scripts/connect-hospital-delivery-local.py` prepara únicamente la capacidad explícita de la clínica sintética C; guarda secretos en archivos ignorados. `tests/hospital_delivery_live.py` verifica listado, propietario, teléfono y PDF sin WhatsApp.
+- `scripts/connect-hospital-local.py --delivery` prepara únicamente la capacidad explícita de la clínica sintética C; guarda secretos en archivos ignorados. `tests/hospital_delivery_live.py` verifica listado, propietario, teléfono y PDF sin WhatsApp.
 - Las conversaciones que ya atiende una persona no se devuelven automáticamente al agente al activar el hospital; el equipo puede hacerlo desde la bandeja.
 
 ## Verificación local · 2026-10-03

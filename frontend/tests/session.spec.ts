@@ -1,16 +1,10 @@
 import { test, expect, type Page } from '@playwright/test';
+import { enter, login, users } from './login';
 test.afterEach(async ({ page }) => {
   await page.unrouteAll({ behavior: 'wait' });
 });
-async function enter(page: Page, user = 'admin') {
-  await page.getByLabel('Usuario de demostración').selectOption(user);
-  await page.getByLabel('Contraseña', { exact: true }).fill('demo-recepcion');
-  await page.getByRole('button', { name: 'Entrar al espacio' }).click();
-}
 async function draftConversation(page: Page) {
-  await page.goto('/login');
-  await enter(page);
-  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
+  await login(page);
   await page.goto('/?view=inbox');
   await page.getByLabel('Filtrar por estado').selectOption('');
   await page.locator('.conversation-card').filter({ hasText: 'Ana Martínez' }).click();
@@ -64,8 +58,8 @@ test('login returns to requested workspace and rejects external callback', async
   await enter(page);
   await expect(page).toHaveURL('/?view=calendar');
   await expect(page.getByRole('heading', { name: 'Agenda', exact: true })).toBeVisible();
-  await page.goto('/login?callbackUrl=https%3A%2F%2Fevil.example');
-  await enter(page);
+  await login(page, 'admin', 'https://evil.example');
+  expect(page.url()).not.toContain('evil.example');
   await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
 });
 test('temporary server failure is not presented as expired login', async ({ page }) => {
@@ -103,7 +97,7 @@ test('recovery with another account clears old workspace instead of reusing its 
   await enter(auth, 'doctor');
   await expect(auth.getByRole('heading', { name: 'Ya puedes continuar' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
-  await expect(page.locator('.profile')).toContainText('Doctor demo');
+  await expect(page.locator('.profile')).toContainText(users.doctor.name);
   await expect(page.getByLabel('Mensaje al paciente')).toHaveCount(0);
   await auth.close();
 });

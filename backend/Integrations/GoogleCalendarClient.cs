@@ -8,12 +8,46 @@ namespace Recepcion.Integrations;
 
 public sealed class GoogleCalendarClient(HttpClient http, IConfiguration config, CrmDb db, TenantScope scope, HospitalClient hospital)
 {
-    public string AuthorizationUrl(string state) => "https://accounts.google.com/o/oauth2/v2/auth?" + Query(new() { ["client_id"] = Required("GOOGLE_CLIENT_ID"), ["redirect_uri"] = Required("GOOGLE_REDIRECT_URI"), ["response_type"] = "code", ["scope"] = "https://www.googleapis.com/auth/calendar.events", ["access_type"] = "offline", ["prompt"] = "consent", ["state"] = state });
+    public string AuthorizationUrl(string state) => "https://accounts.google.com/o/oauth2/v2/auth?" + Query(new() { ["client_id"] = Required("GOOGLE_CLIENT_ID"), ["redirect_uri"] = Required("GOOGLE_REDIRECT_URI"), ["response_type"] = "code", ["scope"] = "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.calendarlist.readonly", ["access_type"] = "offline", ["prompt"] = "consent", ["state"] = state });
     public async Task<string?> Exchange(string code, CancellationToken ct) { var j = await Token(new() { ["code"] = code, ["redirect_uri"] = Required("GOOGLE_REDIRECT_URI"), ["grant_type"] = "authorization_code" }, ct); return j.TryGetProperty("refresh_token", out var refresh) ? refresh.GetString() : null; }
     async Task<JsonElement> Token(Dictionary<string, string> form, CancellationToken ct)
     {
         form["client_id"] = Required("GOOGLE_CLIENT_ID"); form["client_secret"] = Required("GOOGLE_CLIENT_SECRET");
         using var res = await http.PostAsync("https://oauth2.googleapis.com/token", new FormUrlEncodedContent(form), ct); res.EnsureSuccessStatusCode(); return await res.Content.ReadFromJsonAsync<JsonElement>(ct);
+    }
+    public async Task<IReadOnlyList<CalendarChoice>> Calendars(CancellationToken ct = default)
+    {
+        var tenant = await db.Tenants.SingleAsync(x => x.Id == scope.Id, ct);
+        if (string.IsNullOrEmpty(tenant.GoogleRefreshToken)) throw new ArgumentException("Conecta tu cuenta de Google para elegir un calendario.");
+        var token = await Token(new() { ["refresh_token"] = tenant.GoogleRefreshToken, ["grant_type"] = "refresh_token" }, ct);
+        var calendars = new List<CalendarChoice>();
+        string? page = null;
+        do
+        {
+            var url = "https://www.googleapis.com/calendar/v3/users/me/calendarList?minAccessRole=writer&maxResults=250";
+            if (page != null) url += "&pageToken=" + Uri.EscapeDataString(page);
+            using var req = Google(HttpMethod.Get, url, token.GetProperty("access_token").GetString()!);
+            using var res = await http.SendAsync(req, ct);
+            if (!res.IsSuccessStatusCode) throw new ArgumentException("No pudimos consultar tus calendarios. Vuelve a conectar Google para revisar el acceso.");
+            var payload = await res.Content.ReadFromJsonAsync<JsonElement>(ct);
+            foreach (var item in payload.GetProperty("items").EnumerateArray())
+            {
+                if (item.GetProperty("accessRole").GetString() is not ("owner" or "writer")) continue;
+                if (item.TryGetProperty("deleted", out var deleted) && deleted.GetBoolean()) continue;
+                var name = item.TryGetProperty("summaryOverride", out var custom) ? custom.GetString() : item.GetProperty("summary").GetString();
+                calendars.Add(new(item.GetProperty("id").GetString()!, name ?? "Calendario", item.TryGetProperty("primary", out var primary) && primary.GetBoolean()));
+            }
+            page = payload.TryGetProperty("nextPageToken", out var next) ? next.GetString() : null;
+        } while (!string.IsNullOrEmpty(page));
+        return calendars;
+    }
+    public async Task SelectCalendar(string id, CancellationToken ct = default)
+    {
+        var calendars = await Calendars(ct);
+        if (!calendars.Any(x => x.Id == id)) throw new ArgumentException("Elige uno de los calendarios disponibles en tu cuenta de Google.");
+        var tenant = await db.Tenants.SingleAsync(x => x.Id == scope.Id, ct);
+        tenant.GoogleCalendarId = id;
+        await db.SaveChangesAsync(ct);
     }
     public async Task<int> Sync(DateOnly from, int days, CancellationToken ct = default)
     {
@@ -73,11 +107,15 @@ public static class GoogleEndpoints
             var refresh = await google.Exchange(code, CancellationToken.None); if (string.IsNullOrEmpty(refresh)) return Results.BadRequest(new { title = "Google no entregó acceso persistente. Repite la conexión con consentimiento." });
             row.GoogleStateHash = null; row.GoogleStateExpires = null; row.GoogleRefreshToken = refresh; await db.SaveChangesAsync(); return Results.Redirect((c["FRONTEND_URL"] ?? "http://localhost:3215") + "/?view=settings&google=connected");
         });
+        app.MapGet("/api/google/calendars", async (CurrentUser u, GoogleCalendarClient g, CancellationToken ct) => { u.RequireAdmin(); return Results.Ok(await g.Calendars(ct)); }).RequireAuthorization();
+        app.MapPut("/api/google/calendar", async (CalendarSelection b, CurrentUser u, GoogleCalendarClient g, CancellationToken ct) => { u.RequireAdmin(); await g.SelectCalendar(b.Id, ct); return Results.Ok(); }).RequireAuthorization();
         app.MapPost("/api/google/sync", async (CalendarSync b, CurrentUser u, GoogleCalendarClient g) => { u.RequireAdmin(); return Results.Ok(new { synced = await g.Sync(b.From, b.Days) }); }).RequireAuthorization();
         app.MapDelete("/api/google", async (CrmDb db, TenantScope t, CurrentUser u) => { u.RequireAdmin(); var row = await db.Tenants.SingleAsync(x => x.Id == t.Id); row.GoogleRefreshToken = null; row.GoogleStateHash = null; row.GoogleStateExpires = null; await db.SaveChangesAsync(); return Results.Ok(); }).RequireAuthorization();
     }
     static string Hash(string input) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(input)));
 }
+public record CalendarChoice(string Id, string Name, bool Primary);
+public record CalendarSelection(string Id);
 public record CalendarSync(DateOnly From, int Days);
 public sealed class CalendarWorker(IServiceScopeFactory factory, ILogger<CalendarWorker> logger) : BackgroundService
 {

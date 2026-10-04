@@ -6,10 +6,7 @@ public static class CommercialEndpoints
     public static void MapCommercial(this WebApplication app)
     {
         var api=app.MapGroup("/api/commercial").RequireAuthorization();
-        api.MapGet("/settings",(HospitalClient h,TenantScope t)=>{
-            var value=h.PublicUrl(t.Id);
-            return new{hospitalUrl=Uri.TryCreate(value,UriKind.Absolute,out var uri)&&uri.Scheme is "http" or "https"?uri.GetLeftPart(UriPartial.Authority)+"/es/commercial":null};
-        });
+        api.MapGet("/settings",(HospitalClient h,TenantScope t)=>new{hospitalUrl=h.EntryUrl(t.Id,"/es/commercial")});
         api.MapGet("/companies",async(string? q,int? page,HospitalClient h,TenantScope t)=>await h.Companies(t.Id,Query(q),Page(page)));
         api.MapGet("/services",async(string? q,int? page,HospitalClient h,TenantScope t)=>await h.Services(t.Id,Query(q),Page(page)));
         api.MapGet("/contacts/{id:guid}",async(Guid id,int? page,CrmDb db,TenantScope t,HospitalClient h)=>{

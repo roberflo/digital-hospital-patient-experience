@@ -20,26 +20,44 @@ Copiar la estructura de `.env.example` al almacén de secretos del despliegue. G
 
 API:
 
-- `ASPNETCORE_ENVIRONMENT=Production`, `ALLOW_DEV_LOGIN=false`, `SEND_ENABLED=false` inicialmente.
+- `ASPNETCORE_ENVIRONMENT=Production`, `SEND_ENABLED=false` inicialmente.
 - `ConnectionStrings__Database=Host=<servicio-db>;Database=recepcion;Username=recepcion;Password=<secreto>`.
 - `KEY_DIRECTORY=/keys`, `PHONE_HASH_KEY`, `Auth__Authority`, `Auth__Audience=hospital-api`.
 - `BOOTSTRAP_TENANT_ID`: UUID real de Hospital; `BOOTSTRAP_TENANT_NAME`: nombre del negocio inicial.
 - `KAPSO_API_KEY`, `KAPSO_WEBHOOK_SECRET`, opcional `KAPSO_PHONE_NUMBER_ID` para asociar el primer número al tenant bootstrap.
 - `NVIDIA_API_KEY`, `AI_BASE_URL=https://integrate.api.nvidia.com/v1`, `AI_MODEL=nvidia/nemotron-3-super-120b-a12b`.
 - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI=https://<api>/oauth/google/callback`, `FRONTEND_URL=https://<web>`.
-- Configuración `Hospital__Tenants__<UUID>__...` de [hospital-integration.md](hospital-integration.md).
+- `HOSPITAL_API_URL`, `HOSPITAL_SERVICE_CLIENT_SECRET`, `HOSPITAL_ALLOWED_API_ORIGINS` y `HOSPITAL_PUBLIC_URL`, una vez por instalación ([hospital-easypanel.md](hospital-easypanel.md)). No hay configuración por hospital.
 
-Web recibe únicamente `AUTH_SECRET`, `NEXTAUTH_SECRET` (mismo valor), `NEXTAUTH_URL=https://<web>`, `API_URL=http://<servicio-api>:8080`, `KEYCLOAK_ISSUER`, `KEYCLOAK_CLIENT_ID`, `KEYCLOAK_CLIENT_SECRET`, `ASPNETCORE_ENVIRONMENT=Production`, `ALLOW_DEV_LOGIN=false`. No necesita claves Kapso/NIM/Google ni acceso a PostgreSQL. El login se resuelve en runtime, no queda compilado en modo demo.
+Web recibe únicamente `AUTH_SECRET`, `NEXTAUTH_SECRET` (mismo valor), `NEXTAUTH_URL=https://<web>`, `API_URL=http://<servicio-api>:8080`, `KEYCLOAK_ISSUER`, `KEYCLOAK_CLIENT_ID`, `KEYCLOAK_CLIENT_SECRET`. No necesita claves Kapso/NIM/Google ni acceso a PostgreSQL.
 
 Las migraciones EF están versionadas en `backend/Migrations`. Tras respaldar, iniciar una sola réplica con `INITIALIZE_DATABASE=true` para aplicarlas; después poner `false`. Antes de retroceder una versión, comprobar compatibilidad del esquema; no ejecutar `migrations remove` ni borrar volúmenes en producción.
 
 ## Keycloak y hospitales
 
-Usar el realm actual de Hospital. Crear un cliente confidential para web, flujo authorization code y redirect URI exacto `https://<web>/api/auth/callback/keycloak`; web origins exactos y acceso directo por contraseña desactivado. El access token debe incluir audiencia de la API, `sub`, `tenant_id` UUID y `realm_access.roles`.
+El realm `hospital` de Hospital es el único proveedor de identidad, en todos los entornos: Recepción no emite tokens, no guarda contraseñas y no tiene usuarios propios. Sus clientes no se crean a mano; los declara y verifica en cada arranque el job `keycloak-config` de Hospital (`infra/keycloak/configure-realms.sh` §9) cuando su `.env` define:
 
-Roles CRM: `platform_admin`, `admin`, `supervisor`, `agent`, `doctor`. Se reconocen también `Administrador`, `Recepción`, `Admisión`, `Médicos`, `Odontólogos` y `Nutricionistas` para compartir el directorio existente. Los usuarios se materializan en CRM al iniciar sesión; un `sub` ya vinculado a una empresa no puede cambiar a otra con un token diferente. Los roles se administran en Keycloak; CRM permite desactivar el acceso de miembros.
+```text
+KC_RECEPCION_WEB_CLIENT_SECRET=<secreto>                 # cliente recepcion-web
+KC_RECEPCION_WEB_REDIRECT_URIS=https://<web>/api/auth/callback/keycloak
+KC_RECEPCION_WEB_WEB_ORIGINS=https://<web>
+KC_RECEPCION_SERVICE_CLIENT_SECRET=<secreto>             # clientes recepcion-service-<tenant>
+KC_RECEPCION_SERVICE_TENANTS=<uuid> <uuid>               # un hospital por UUID
+```
 
-Un `platform_admin` autenticado puede crear el registro de otra empresa mediante `POST /api/platform/tenants` con `{id,name}`. El UUID debe coincidir con Hospital y con el mapper de sus usuarios. Después configurar su cliente de servicio Hospital independiente. No hay selector de empresas para usuarios; cada usuario pertenece a una sola.
+`recepcion-web` es confidencial, authorization code + PKCE, sin acceso directo por contraseña ni cuenta de servicio, y sólo puede afirmar los siete roles de Hospital. El access token incluye audiencia `hospital-api`, `sub`, `tenant_id` y `realm_access.roles`.
+
+| Rol en Keycloak (realm `hospital`) | En Recepción | Puede |
+|---|---|---|
+| `Administrador` | Administrador | Todo lo operativo: equipo, canales, agente, recordatorios, auditoría, cola, respuestas guardadas, macros, reasignación masiva. Sin acceso clínico. |
+| `Recepción`, `Admisión` | Recepcionista | Bandeja, contactos, agenda, seguimiento comercial. Transfiere sólo sus conversaciones. |
+| `Médicos`, `Odontólogos`, `Nutricionistas` | Doctor | Sus conversaciones asignadas y, con su propia identidad, el expediente del paciente vinculado. |
+| `Enfermería` | — | Sin acceso a Recepción. |
+| `reception-agent` | — | Capacidad de la cuenta de servicio, nunca de una persona. |
+
+No existen otros roles ni equivalencias: un token sin uno de los seis que dan acceso recibe 403. Los usuarios se materializan al iniciar sesión; un `sub` ya vinculado a un hospital no puede cambiar a otro con un token diferente. Los roles se administran en Keycloak; Recepción sólo permite desactivar el acceso de un miembro.
+
+El espacio de cada hospital lo abre su Administrador al entrar por primera vez (`HOSPITAL_SELF_ONBOARDING=true`) o el operador con `BOOTSTRAP_TENANT_ID` / `BOOTSTRAP_TENANT_NAME`. No hay selector de empresas; cada usuario pertenece a una sola.
 
 Desplegar el [puente de recetas](../integrations/hospital/README.md) y configurar el `azp` y `sub` reales antes de habilitar entrega clínica. El bot usa `reception-agent` y, para agenda, `Recepción`; nunca necesita un rol médico. La revisión y smoke del bridge con stores reales siguen siendo requisito previo a su habilitación.
 
@@ -67,7 +85,7 @@ El agente de WhatsApp envía al proveedor la guía de atención, hasta 24 mensaj
 ## Operación y respaldo
 
 - Comprobar `/health/live`, `/health/ready` y el inicio de sesión después de cada despliegue.
-- Revisar `/api/jobs` y `/api/audit` como supervisor/admin; `failed` o `uncertain` requieren seguimiento humano. Una entrega incierta conserva el intento y no se reenvía automáticamente: consultar WhatsApp/agenda antes de repetir.
+- Revisar `/api/jobs` y `/api/audit` como Administrador; `failed` o `uncertain` requieren seguimiento humano. Una entrega incierta conserva el intento y no se reenvía automáticamente: consultar WhatsApp/agenda antes de repetir.
 - Usar `scripts/backup.sh` con Compose o el equivalente en Easypanel. Guarda un dump de PostgreSQL y el keyring `/keys`. Mantener copias cifradas fuera del host y probar restauración en un entorno separado.
 - Restauración: detener API, restaurar el dump con `pg_restore` en una base vacía, restaurar `/keys` con dueño UID 1654, conservar el mismo `PHONE_HASH_KEY`, y reiniciar la API de una versión compatible. Nunca restaurar sobre datos activos sin respaldo y ventana de mantenimiento.
 - Perder `/keys` impide descifrar contactos/mensajes/notas/tokens. Cambiar `PHONE_HASH_KEY` exige recalcular los índices de teléfonos; no cambiarlo como si fuera una contraseña ordinaria.

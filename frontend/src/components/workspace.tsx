@@ -1,4 +1,5 @@
 'use client';
+import { GoogleCalendarConnection } from './google-calendar-connection';
 import { useEffect, useState, useRef, type FormEvent, type ReactNode } from 'react';
 import useSWR, { useSWRConfig } from 'swr';
 import { signOut } from 'next-auth/react';
@@ -52,7 +53,6 @@ import {
   type Message,
   type Activity,
   type Channel,
-  type Member,
   type Opportunity,
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -107,8 +107,6 @@ const labels: Record<string, string> = {
   human: 'Atención humana',
   closed: 'Cerrada',
   admin: 'Administrador',
-  platform_admin: 'Administrador de plataforma',
-  supervisor: 'Supervisor',
   doctor: 'Doctor',
   patient: 'Paciente',
   sent: 'Enviado',
@@ -381,7 +379,7 @@ export default function Workspace() {
               Ver actividad del agente <ArrowUpRight size={14} />
             </button>
           </div>
-          {['admin', 'platform_admin'].includes(me?.role ?? '') && (
+          {me?.role === 'admin' && (
             <button
               className={cn('nav-item', view === 'settings' && 'active')}
               onClick={() => navigate('settings')}
@@ -398,7 +396,14 @@ export default function Workspace() {
                 {me?.role === 'agent' ? 'Recepcionista' : (labels[me?.role ?? ''] ?? '')}
               </small>
             </div>
-            <button aria-label="Cerrar sesión" onClick={() => signOut({ callbackUrl: '/login' })}>
+            <button
+              aria-label="Cerrar sesión"
+              onClick={async () => {
+                const end = await fetch('/api/session/end').then((r) => r.json());
+                await signOut({ redirect: false });
+                window.location.href = end.url;
+              }}
+            >
               <LogOut size={17} />
             </button>
           </div>
@@ -1619,7 +1624,10 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
       r.displayName.toLowerCase().includes(search.toLowerCase()) ||
       r.clinicianName.toLowerCase().includes(search.toLowerCase()),
   );
-  const notConfigured = error instanceof Error && error.message.includes('hospital.not_configured');
+  const notConfigured =
+    error instanceof Error &&
+    ((error as Error & { code?: string }).code === 'hospital.not_configured' ||
+      error.message.includes('hospital.not_configured'));
   const shift = (n: number) => {
     const d = new Date(day + 'T12:00:00');
     d.setDate(d.getDate() + n);
@@ -1899,7 +1907,7 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
 }
 function AgentView({ me }: { me: Me }) {
   const { data } = useSWR<Activity[]>('/activities', fetcher, { refreshInterval: 5000 });
-  const admin = ['admin', 'platform_admin'].includes(me.role);
+  const admin = me.role === 'admin';
   const { data: contacts } = useSWR<Contact[]>('/contacts', fetcher);
   const [contactId, setContactId] = useState('');
   const [query, setQuery] = useState('');
@@ -2059,10 +2067,8 @@ function SettingsView({ me }: { me: Me }) {
   const { mutate: globalMutate } = useSWRConfig();
   const { data, error, mutate } = useSWR<SettingsData>('/settings', fetcher);
   const { data: channels, mutate: refreshChannels } = useSWR<Channel[]>('/channels', fetcher);
-  const { data: members } = useSWR<Member[]>('/members', fetcher);
-  const [channel, setChannel] = useState(false);
   const [saving, setSaving] = useState(false);
-  if (!['admin', 'platform_admin'].includes(me.role))
+  if (me.role !== 'admin')
     return (
       <Empty icon={ShieldCheck} title="Solo administradores">
         Tu administrador gestiona las conexiones y la guía del negocio.
@@ -2092,7 +2098,6 @@ function SettingsView({ me }: { me: Me }) {
                       timeZone: f.get('timeZone'),
                       guide: f.get('guide'),
                       agentEnabled: f.get('agentEnabled') === 'on',
-                      googleCalendarId: f.get('googleCalendarId'),
                     });
                     mutate();
                     globalMutate('/me');
@@ -2135,14 +2140,6 @@ function SettingsView({ me }: { me: Me }) {
                   </div>
                   <input type="checkbox" name="agentEnabled" defaultChecked={data.agentEnabled} />
                 </label>
-                <label>
-                  Calendario de Google del hospital
-                  <input
-                    name="googleCalendarId"
-                    defaultValue={data.googleCalendarId ?? ''}
-                    placeholder="ID del calendario compartido"
-                  />
-                </label>
                 <div className="dialog-actions">
                   <Button disabled={saving}>
                     {saving ? <Loader2 className="animate-spin" /> : <Check />}Guardar cambios
@@ -2159,7 +2156,7 @@ function SettingsView({ me }: { me: Me }) {
                   [HeartPulse, 'Hospital', data.hospitalConfigured, 'Agenda y expediente'],
                   [
                     MessageCircle,
-                    'WhatsApp · Kapso',
+                    'WhatsApp',
                     data.kapsoConfigured,
                     data.sendEnabled
                       ? 'Envío habilitado'
@@ -2167,7 +2164,7 @@ function SettingsView({ me }: { me: Me }) {
                         ? 'Envío manual habilitado'
                         : 'Envío en pausa',
                   ],
-                  [Sparkles, 'NVIDIA NIM', data.aiConfigured, 'Agente de atención'],
+                  [Sparkles, 'Agente de atención', data.aiConfigured, 'Respuestas y seguimiento'],
                   [CalendarDays, 'Google Calendar', data.googleConnected, 'Agenda compartida'],
                 ].map(([Icon, title, ok, sub], i) => {
                   const I = Icon as typeof Inbox;
@@ -2188,55 +2185,14 @@ function SettingsView({ me }: { me: Me }) {
                   );
                 })}
                 <p className="hint">
-                  Las conexiones requieren credenciales vigentes. Los indicadores muestran su
-                  configuración.
+                  Tu cuenta del Hospital reúne a tu equipo, pacientes y agenda. Google y WhatsApp te
+                  pedirán autorización al conectarlos.
                 </p>
-                <Button
-                  variant="outline"
-                  className="w-full"
-                  onClick={async () => {
-                    try {
-                      const r = await api<{ url: string }>('/google/connect', 'POST', {});
-                      location.href = r.url;
-                    } catch (e) {
-                      toast.error((e as Error).message);
-                    }
-                  }}
-                >
-                  <Link2 />
-                  {data.googleConnected ? 'Volver a conectar Google' : 'Conectar Google Calendar'}
-                </Button>
-                {data.googleConnected && (
-                  <>
-                    <Button
-                      variant="outline"
-                      className="w-full mt-2"
-                      onClick={async () => {
-                        try {
-                          const r = await api<{ synced: number }>('/google/sync', 'POST', {
-                            from: new Date().toISOString().slice(0, 10),
-                            days: 7,
-                          });
-                          toast.success(`${r.synced} citas sincronizadas`);
-                        } catch (e) {
-                          toast.error((e as Error).message);
-                        }
-                      }}
-                    >
-                      <RefreshCw />
-                      Sincronizar próximos 7 días
-                    </Button>
-                    <button
-                      className="text-button mt-3"
-                      onClick={async () => {
-                        await api('/google', 'DELETE');
-                        mutate();
-                      }}
-                    >
-                      Desconectar Google
-                    </button>
-                  </>
-                )}
+                <GoogleCalendarConnection
+                  connected={data.googleConnected}
+                  selected={data.googleCalendarId}
+                  onChange={() => mutate()}
+                />
               </div>
             </section>
             <section className="content-card wide">
@@ -2249,12 +2205,6 @@ function SettingsView({ me }: { me: Me }) {
                       Agregar mi número
                     </a>
                   </Button>
-                  {me.role === 'platform_admin' && (
-                    <Button variant="outline" size="sm" onClick={() => setChannel(true)}>
-                      <Plus />
-                      Registro avanzado
-                    </Button>
-                  )}
                 </div>
               </div>
               <div className="table-scroll">
@@ -2262,9 +2212,8 @@ function SettingsView({ me }: { me: Me }) {
                   <thead>
                     <tr>
                       <th>Canal</th>
-                      <th>Identificador</th>
                       <th>Atención</th>
-                      <th>Coexistencia</th>
+                      <th>Uso en el celular</th>
                       <th>Conexión</th>
                       <th>Estado</th>
                     </tr>
@@ -2280,9 +2229,8 @@ function SettingsView({ me }: { me: Me }) {
                             <strong>{c.name}</strong>
                           </div>
                         </td>
-                        <td>{c.phoneNumberId}</td>
                         <td>{c.doctorId ? 'Doctor' : 'General'}</td>
-                        <td>{c.coexistence ? 'Sí' : 'No'}</td>
+                        <td>{c.coexistence ? 'WhatsApp Business y Recepción' : 'Recepción'}</td>
                         <td>
                           <ChannelConnection id={c.id} />
                         </td>
@@ -2321,47 +2269,6 @@ function SettingsView({ me }: { me: Me }) {
       ) : (
         !error && <Loading />
       )}
-      <FormDialog
-        title="Registrar número conectado"
-        description="El número debe pertenecer al cliente Kapso de este hospital."
-        open={channel}
-        onClose={() => setChannel(false)}
-        fields={[
-          {
-            name: 'name',
-            label: 'Nombre del canal',
-            required: true,
-            placeholder: 'Recepción general',
-          },
-          { name: 'phoneNumberId', label: 'Identificador del número en Kapso', required: true },
-          {
-            name: 'doctorId',
-            label: 'Doctor (opcional)',
-            options:
-              members
-                ?.filter((m) => m.role === 'doctor' && !m.disabled)
-                .map((m) => ({ value: m.subject, label: m.name })) ?? [],
-          },
-          {
-            name: 'coexistence',
-            label: 'Coexistencia con WhatsApp Business',
-            required: true,
-            value: 'false',
-            options: [
-              { value: 'false', label: 'No' },
-              { value: 'true', label: 'Sí' },
-            ],
-          },
-        ]}
-        onSubmit={async (v) => {
-          await api('/channels', 'POST', {
-            ...v,
-            doctorId: v.doctorId || null,
-            coexistence: v.coexistence === 'true',
-          });
-          refreshChannels();
-        }}
-      />
     </>
   );
 }

@@ -350,7 +350,7 @@ export function SavedReplies({ me, onInsert }: { me: Me; onInsert: (text: string
   const { data, mutate } = useSWR<SavedReply[]>('/saved-replies', fetcher);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const manager = ['admin', 'platform_admin', 'supervisor'].includes(me.role);
+  const manager = me.role === 'admin';
   return (
     <>
       <div className="saved-replies">
@@ -485,29 +485,26 @@ export function ChannelConnection({ id }: { id: string }) {
       {data && (
         <div role="status">
           <strong>{data.ready ? 'Conexión configurada' : 'Conexión pendiente'}</strong>
+          <p>{data.kind === 'sandbox' ? 'Número de prueba' : 'Número del negocio'}</p>
           <p>
-            {data.kind === 'sandbox' ? 'Sandbox' : 'Número de negocio'} · Proveedor:{' '}
-            {data.providerStatus}
-          </p>
-          <p>
-            Webhook CRM:{' '}
-            {data.crmWebhookFound
-              ? 'encontrado'
-              : data.webhookUrlConfigured
-                ? 'no registrado'
-                : 'falta URL pública'}
-            <br />
-            Eventos entrantes: {data.receivesMessages ? 'sí' : 'no'}
-            <br />
-            Firma: {data.signatureMatches ? 'coincide' : 'sin verificar'}
+            Recepción de mensajes:{' '}
+            {data.crmWebhookFound && data.receivesMessages && data.signatureMatches
+              ? 'lista'
+              : 'pendiente de preparación'}
             <br />
             Envío: {data.enabled && data.sendEnabled ? 'habilitado' : 'pausado'}
             <br />
-            Último evento:{' '}
+            Última actualización recibida:{' '}
             {data.lastWebhookAt
               ? new Date(data.lastWebhookAt).toLocaleString('es-SV')
-              : 'sin eventos recibidos'}
+              : 'aún no hay mensajes'}
           </p>
+          {!data.ready && (
+            <p>
+              Si acabas de conectar el número, espera un momento y vuelve a revisar. Si continúa
+              pendiente, pide ayuda al administrador.
+            </p>
+          )}
         </div>
       )}
     </div>

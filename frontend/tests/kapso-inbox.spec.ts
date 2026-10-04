@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
+import { enter, login as signIn } from './login';
 const id = '11111111-1111-4111-8111-111111111111';
 const second = '22222222-2222-4222-8222-222222222222';
 const base = {
@@ -29,10 +30,7 @@ async function login(page: Page) {
       ],
     }),
   );
-  await page.goto('/login');
-  await page.getByLabel('Contraseña', { exact: true }).fill('demo-recepcion');
-  await page.getByRole('button', { name: 'Entrar al espacio' }).click();
-  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
+  await signIn(page);
 }
 async function realtime(page: Page) {
   await page.addInitScript(() => {
@@ -324,8 +322,7 @@ test('expired manual send restores WhatsApp draft and conversation after signing
   const popup = context.waitForEvent('page');
   await dialog.getByRole('link', { name: 'Iniciar sesión y continuar' }).click();
   const auth = await popup;
-  await auth.getByLabel('Contraseña', { exact: true }).fill('demo-recepcion');
-  await auth.getByRole('button', { name: 'Entrar al espacio' }).click();
+  await enter(auth);
   await expect(auth.getByRole('heading', { name: 'Ya puedes continuar' })).toBeVisible();
   await expect(dialog).not.toBeVisible();
   await expect(page.getByLabel('Mensaje', { exact: true })).toHaveValue(

@@ -7,7 +7,7 @@ namespace Recepcion;
 public sealed class CommercialService(CrmDb db,TenantScope scope,HospitalClient hospital,ConversationService locks)
 {
     static readonly JsonSerializerOptions Json=new(JsonSerializerDefaults.Web);
-    public static void RequireOperator(CurrentUser user){if(user.Role is not("admin" or "platform_admin" or "supervisor" or "agent"))throw new AccessDeniedException();}
+    public static void RequireOperator(CurrentUser user){if(user.Role is not("admin" or "agent"))throw new AccessDeniedException();}
     public async Task<HospitalCustomer> Link(Contact contact,Guid customerId,CurrentUser user,CancellationToken ct=default)
     {
         RequireOperator(user);using var lease=await locks.Lock(contact.Id,ct);await db.Entry(contact).ReloadAsync(ct);

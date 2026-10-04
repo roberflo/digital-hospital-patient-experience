@@ -17,6 +17,11 @@ public sealed class SecurityTests {
     [Fact]public void WhatsAppWindowBoundary(){var now=DateTimeOffset.UtcNow;Assert.False(Rules.WithinWindow(null,now));Assert.False(Rules.WithinWindow(now.AddHours(-24),now));Assert.False(Rules.WithinWindow(now.AddMinutes(1),now));Assert.True(Rules.WithinWindow(now.AddHours(-23),now));}
     [Theory][InlineData("[]")][InlineData("{\"roles\":42}")][InlineData("invalid")]
     public void MalformedRolesDenied(string json){var p=new ClaimsPrincipal(new ClaimsIdentity([new Claim("realm_access",json)],"test"));Assert.Null(Identity.MapRole(p));}
+    // Hospital's seven PRD §3 roles are the whole vocabulary: nothing Recepción once invented, no
+    // service capability and no self-asserted `role` claim opens a workspace.
+    [Theory][InlineData("Administrador","admin")][InlineData("Médicos","doctor")][InlineData("Odontólogos","doctor")][InlineData("Nutricionistas","doctor")][InlineData("Recepción","agent")][InlineData("Admisión","agent")]
+    [InlineData("Enfermería",null)][InlineData("reception-agent",null)][InlineData("platform_admin",null)][InlineData("supervisor",null)][InlineData("Supervisor",null)][InlineData("admin",null)][InlineData("agent",null)][InlineData("doctor",null)]
+    public void OnlyHospitalRolesMap(string hospitalRole,string? expected){var p=new ClaimsPrincipal(new ClaimsIdentity([new Claim("realm_access","{\"roles\":[\""+hospitalRole+"\"]}"),new Claim("role","admin")],"test"));Assert.Equal(expected,Identity.MapRole(p));}
     [Fact]public void ClinicalRoleMapsButDoesNotBecomeAdmin(){var p=new ClaimsPrincipal(new ClaimsIdentity([new Claim("realm_access","{\"roles\":[\"Médicos\"]}")],"test"));Assert.Equal("doctor",Identity.MapRole(p));Assert.False(new CurrentUser{Role="doctor"}.Admin);}
     [Fact]public void CalendarIdsAreStableAndTenantBound(){var a=Guid.NewGuid();var b=Guid.NewGuid();var appointment=Guid.NewGuid();Assert.Equal(GoogleCalendarClient.EventId(a,appointment),GoogleCalendarClient.EventId(a,appointment));Assert.NotEqual(GoogleCalendarClient.EventId(a,appointment),GoogleCalendarClient.EventId(b,appointment));Assert.Matches("^[0-9a-f]{64}$",GoogleCalendarClient.EventId(a,appointment));}
 }

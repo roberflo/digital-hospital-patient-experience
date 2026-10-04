@@ -4,24 +4,39 @@ Checks tenant isolation and public signed webhook -> persistent Node SSE.
 """
 import hashlib
 import hmac
+import html
 import http.cookiejar
 import json
+import re
 from pathlib import Path
 import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
 
+import keycloak_dev
+
 root = Path(__file__).resolve().parents[1]
 env = dict(line.split('=', 1) for line in (root / '.env').read_text().splitlines() if '=' in line and not line.startswith('#'))
 assert env.get('ASPNETCORE_ENVIRONMENT') == 'Development', 'Local development fixture only'
 base = 'http://localhost:3215'
 
+class LocalhostCookies(http.cookiejar.DefaultCookiePolicy):
+    # Browsers treat http://localhost as a secure context, so they send Keycloak's Secure cookies.
+    def return_ok_secure(self, cookie, request):
+        return True
+
 def session(user):
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar(LocalhostCookies())))
+    # Authorization-code login as a browser would do it: Recepción -> Keycloak's form -> back.
     csrf = json.load(opener.open(base + '/api/auth/csrf', timeout=10))['csrfToken']
-    body = urllib.parse.urlencode({'csrfToken': csrf, 'user': user, 'password': env.get('DEV_PASSWORD', 'demo-recepcion'), 'json': 'true', 'callbackUrl': base + '/inbox'}).encode()
-    opener.open(urllib.request.Request(base + '/api/auth/callback/credentials', data=body, headers={'Content-Type': 'application/x-www-form-urlencoded'}), timeout=10).read()
+    body = urllib.parse.urlencode({'csrfToken': csrf, 'json': 'true', 'callbackUrl': base + '/inbox'}).encode()
+    authorize = json.load(opener.open(urllib.request.Request(base + '/api/auth/signin/keycloak', data=body), timeout=20))['url']
+    form = opener.open(authorize, timeout=20).read().decode()
+    action = html.unescape(re.search(r'<form[^>]*\baction="([^"]+)"', form).group(1))
+    body = urllib.parse.urlencode({'username': keycloak_dev.USERS[user], 'password': keycloak_dev.password(), 'credentialId': ''}).encode()
+    opener.open(urllib.request.Request(action, data=body), timeout=20).read()
+    assert json.load(opener.open(base + '/api/auth/session', timeout=10)).get('user'), 'Keycloak login failed for ' + user
     return opener
 
 for endpoint in ['/api/conversations', '/api/kapso/stream']:

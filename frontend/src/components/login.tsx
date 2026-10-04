@@ -1,32 +1,8 @@
 'use client';
 import { signIn } from 'next-auth/react';
-import { useEffect, useState } from 'react';
 import { HeartPulse, ArrowRight, MessageCircle, CalendarCheck, ShieldCheck } from 'lucide-react';
 import { Button } from './ui/button';
-export default function Login({
-  demo,
-  hospitalLogin = false,
-  hospitalDemo,
-  returnTo = '/',
-}: {
-  demo: boolean;
-  hospitalLogin?: boolean;
-  hospitalDemo: boolean;
-  returnTo?: string;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [demoUser, setDemoUser] = useState('admin');
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem('recepcion.demo-user');
-      if (
-        saved &&
-        ['admin', 'agent', 'doctor', ...(hospitalDemo ? ['hospital'] : [])].includes(saved)
-      )
-        setDemoUser(saved);
-    } catch {}
-  }, [hospitalDemo]);
+export default function Login({ returnTo = '/' }: { returnTo?: string }) {
   return (
     <main className="login-shell">
       <section className="login-story">
@@ -69,89 +45,17 @@ export default function Login({
             {returnTo === '/session-restored' ? 'Recupera tu sesión' : 'Bienvenido a recepción'}
           </h2>
           <p>Inicia sesión para continuar con la atención.</p>
-          {demo && hospitalLogin && (
-            <Button
-              className="w-full mt-4"
-              variant="default"
-              onClick={() => signIn('keycloak', { callbackUrl: returnTo })}
-            >
-              Continuar con mi cuenta del hospital
-              <ArrowRight />
-            </Button>
-          )}
-          {hospitalLogin && (
-            <p className="hint">
-              Usa el mismo usuario y contraseña de Hospital. Abriremos el hospital de tu cuenta y
-              conservaremos tu rol.
-            </p>
-          )}
-          {demo && <h3 className="demo-login-title">Explorar con datos de prueba</h3>}
-          {demo ? (
-            <form
-              onSubmit={async (e) => {
-                e.preventDefault();
-                setBusy(true);
-                setError('');
-                const f = new FormData(e.currentTarget);
-                const r = await signIn('credentials', {
-                  user: f.get('user'),
-                  password: f.get('password'),
-                  redirect: false,
-                });
-                if (r?.ok) {
-                  try {
-                    localStorage.setItem('recepcion.demo-user', demoUser);
-                  } catch {}
-                  window.location.href = returnTo;
-                } else {
-                  setError('No fue posible iniciar sesión. Comprueba tus datos.');
-                  setBusy(false);
-                }
-              }}
-            >
-              <label>
-                Usuario de demostración
-                <select name="user" value={demoUser} onChange={(e) => setDemoUser(e.target.value)}>
-                  <option value="admin">Administrador</option>
-                  <option value="agent">Recepcionista</option>
-                  <option value="doctor">Doctor</option>
-                  {hospitalDemo && (
-                    <option value="hospital">Hospital local · citas de prueba</option>
-                  )}
-                </select>
-              </label>
-              {hospitalDemo && (
-                <p className="hint">
-                  Para trabajar con las citas del hospital conectado, selecciona «Hospital local ·
-                  citas de prueba». Los otros perfiles usan una demostración independiente.
-                </p>
-              )}
-              <label>
-                Contraseña
-                <input name="password" type="password" required autoComplete="current-password" />
-              </label>
-              <p className="hint">
-                Entorno de prueba con datos sintéticos. Contraseña local: demo-recepcion.
-              </p>
-              {error && (
-                <p role="alert" className="error">
-                  {error}
-                </p>
-              )}
-              <Button className="w-full" disabled={busy}>
-                {busy ? 'Conectando…' : 'Entrar al espacio'}
-                <ArrowRight />
-              </Button>
-            </form>
-          ) : (
-            <Button
-              className="w-full"
-              onClick={() => signIn('keycloak', { callbackUrl: returnTo })}
-            >
-              Continuar con mi cuenta del hospital
-              <ArrowRight />
-            </Button>
-          )}
+          <Button
+            className="w-full mt-4"
+            onClick={() => signIn('keycloak', { callbackUrl: returnTo })}
+          >
+            Continuar con mi cuenta del hospital
+            <ArrowRight />
+          </Button>
+          <p className="hint">
+            Si ya tienes una sesión abierta en Hospital, podrás continuar con ella. Reconoceremos tu
+            hospital y conservaremos tus permisos.
+          </p>
           <small>Tu acceso conserva los permisos del hospital.</small>
         </div>
       </section>

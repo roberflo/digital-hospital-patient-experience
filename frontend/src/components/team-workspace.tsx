@@ -9,11 +9,9 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from './ui/dial
 
 export type WorkloadMember = Member & { open: number; pending: number; snoozed: number };
 export type Workload = { members: WorkloadMember[]; unassigned: number };
-export const managesTeam = (me: Me) => ['admin', 'platform_admin', 'supervisor'].includes(me.role);
+export const managesTeam = (me: Me) => me.role === 'admin';
 const roles: Record<string, string> = {
   admin: 'Administrador',
-  platform_admin: 'Administrador de plataforma',
-  supervisor: 'Supervisor',
   agent: 'Recepcionista',
   doctor: 'Doctor',
 };
@@ -85,7 +83,7 @@ export function AssignmentControl({
           Asignarme
         </Button>
       )}
-      {!canEdit && <small>El responsable o un supervisor puede transferirla.</small>}
+      {!canEdit && <small>El responsable o un administrador puede transferirla.</small>}
       {error && <small role="alert">No se pudo cargar el equipo.</small>}
       <a href="/?view=team">Ver equipo ↗</a>
     </div>
@@ -107,7 +105,7 @@ export function TeamWorkspace({
   const { mutate: refresh } = useSWRConfig();
   const [onboarding, setOnboarding] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
-  const admin = ['admin', 'platform_admin'].includes(me.role);
+  const admin = me.role === 'admin';
   async function toggle(m: WorkloadMember) {
     setBusy(m.subject);
     try {

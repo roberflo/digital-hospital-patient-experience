@@ -160,7 +160,7 @@ export function ConversationMacros({
   const [selected, setSelected] = useState('');
   const [busy, setBusy] = useState(false);
   const macro = data?.find((x) => x.id === selected);
-  const supervisor = ['admin', 'platform_admin', 'supervisor'].includes(me.role);
+  const supervisor = me.role === 'admin';
   return (
     <>
       <Button size="sm" variant="ghost" aria-label="Acciones rápidas" onClick={() => setOpen(true)}>
@@ -194,7 +194,7 @@ export function ConversationMacros({
             {macro && <MacroPreview macro={macro} />}
             {data?.length === 0 && (
               <p className="hint">
-                Un supervisor puede crear procedimientos como «Revisar consulta con doctor».
+                Un administrador puede crear procedimientos como «Revisar consulta con doctor».
               </p>
             )}
             <Button

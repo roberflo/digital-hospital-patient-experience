@@ -57,7 +57,7 @@ public static class WhatsAppEndpoints
             if(b.ExpectedRevision is {} revision && revision != conv.Revision)return Results.Conflict(new{title="La conversación cambió. Actualiza antes de guardar."});
             if (b.Status is not ("human" or "agent" or "closed")) throw new ArgumentException("Estado inválido");
             if (b.AssignedTo != null && !await db.Members.AnyAsync(x => x.Subject == b.AssignedTo && !x.Disabled)) throw new ArgumentException("Usuario no disponible");
-            if (!u.Supervisor && b.AssignedTo != null && b.AssignedTo != u.Subject) throw new AccessDeniedException();
+            if (!u.Admin && b.AssignedTo != null && b.AssignedTo != u.Subject) throw new AccessDeniedException();
             if(b.Status=="closed")InboxWorkflow.SetState(conv,"resolved");
             else if(b.Status=="agent"||conv.State=="resolved")InboxWorkflow.SetState(conv,"open");
             conv.Status = b.Status; conv.AssignedTo = b.AssignedTo; conv.Revision++; conv.UpdatedAt = DateTimeOffset.UtcNow;
@@ -73,7 +73,7 @@ public static class WhatsAppEndpoints
             var tenant = await db.Tenants.SingleAsync(x => x.Id == t.Id);
             var expected = tenant.KapsoCustomerId ?? c[$"Kapso:Tenants:{t.Id}:CustomerId"];
             var initial = (c["BOOTSTRAP_TENANT_ID"] ?? DemoSeed.TenantId.ToString()) == t.Id.ToString() && b.PhoneNumberId == c["KAPSO_PHONE_NUMBER_ID"];
-            if (u.Role != "platform_admin" && !initial && (string.IsNullOrEmpty(expected) || customer != expected)) throw new AccessDeniedException();
+            if (!initial && (string.IsNullOrEmpty(expected) || customer != expected)) throw new AccessDeniedException();
             if (b.DoctorId is not null && !await db.Members.AnyAsync(x => x.Subject == b.DoctorId && x.Role == "doctor" && !x.Disabled)) throw new ArgumentException("Selecciona un doctor activo de este hospital");
             var coexistence = number.TryGetProperty("is_coexistence", out var coexist) && coexist.ValueKind == JsonValueKind.True;
             if (b.Coexistence && !coexistence) throw new ArgumentException("Kapso todavía no reporta coexistencia activa para este número");

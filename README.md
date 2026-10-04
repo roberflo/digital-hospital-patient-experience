@@ -6,20 +6,21 @@ CRM de atención hospitalaria con bandeja WhatsApp, agente con herramientas, con
 
 ## Iniciar localmente
 
-Requisitos: Docker Compose; Python 3 para preparar el entorno. Node 22 LTS sólo si desarrollas o ejecutas las pruebas de navegador fuera del contenedor.
+Requisitos: Docker Compose, Python 3 y el stack de [Hospital](../Hospital) en marcha con sus usuarios sintéticos (`KC_SEED_DEV_USERS=true`). Su Keycloak es el único inicio de sesión de Recepción, también en desarrollo. Node 22 LTS sólo si desarrollas o ejecutas las pruebas de navegador fuera del contenedor.
 
 ```sh
-python3 scripts/init-dev.py
-docker compose up -d --build
+python3 scripts/init-dev.py              # .env con secretos locales aleatorios
+python3 scripts/connect-hospital-local.py   # apunta al realm local de Hospital
+docker compose -f docker-compose.yml -f docker-compose.hospital.yml up -d --build
 ```
 
-Abre [Recepción local](http://localhost:3215). En modo demo: usuario `admin`, contraseña `demo-recepcion`. También existen `agent`, `doctor` y `other` (otra empresa). La base contiene exclusivamente ejemplos sintéticos. `init-dev.py` conserva cualquier `.env` existente y genera secretos aleatorios en una instalación nueva.
+`connect-hospital-local.py` pide que `Hospital/.env` declare los `KC_RECEPCION_*` (ver [despliegue](docs/deployment.md)) y que su job `keycloak-config` haya corrido. Abre [Recepción local](http://localhost:3215) y pulsa **Continuar con mi cuenta del hospital**: `dev-administrador-a`, `dev-recepcion-a` y `dev-medicos-a` comparten el hospital de demostración; `dev-administrador-b` es otra empresa; los `-c` pertenecen a la clínica conectada al Hospital local. La contraseña es `KC_DEV_USERS_PASSWORD` de Hospital. La base contiene exclusivamente ejemplos sintéticos.
 
 La API escucha en `127.0.0.1:5215`, el frontend en `127.0.0.1:3215`; PostgreSQL sólo está disponible en la red de contenedores. `SEND_ENABLED=false`, `KAPSO_MANUAL_SEND_ENABLED=false`, canales pausados y agente desactivado por defecto impiden envíos accidentales. Para atención manual en ambas bandejas, activa el canal y `KAPSO_MANUAL_SEND_ENABLED=true`; puedes conservar `SEND_ENABLED=false` y el agente apagado. El permiso manual no autoriza envíos del agente. Ninguna clave va en variables `NEXT_PUBLIC_*`.
 
 ## Funciones
 
-- Usuarios compartidos con Hospital mediante Keycloak, membresía única y cinco roles. Aislamiento de empresa en API, persistencia, canales, herramientas del agente y auditoría.
+- Un solo proveedor de identidad: el Keycloak de Hospital. Sin usuarios ni contraseñas propios; tres perfiles derivados de los roles del hospital y membresía única. Aislamiento de empresa en API, persistencia, canales, herramientas del agente y auditoría.
 - Contactos con búsqueda/paginación, empresas y convenios, oportunidades por etapas, actividades y notas persistentes.
 - Actividad identifica atención del agente IA, recepción humana y doctores, con paciente, acción, entrega y acceso a la conversación. Búsqueda por paciente, teléfono, profesional o nota; filtros por tipo, acción y fechas del hospital, y paginación de 30 registros. Los eventos nuevos conservan el rol al realizar la acción; los anteriores aparecen como «Histórico sin rol». La consulta clínica registra únicamente que se consultó Hospital.
 
@@ -68,6 +69,6 @@ npx playwright install chromium
 npm test
 ```
 
-Las pruebas API y navegador requieren el modo demo local; no se ejecutan contra producción. Backend usa una base temporal de PostgreSQL que se elimina al terminar y proveedores simulados. Las pruebas reales opcionales `scripts/check-integrations.py`, `scripts/kapso-mcp-read.py`, `scripts/check-nim.py` y `tests/assistant_smoke.py` requieren las claves locales; las pruebas NIM usan texto sintético y consumen cuota.
+Las pruebas API y navegador inician sesión en el Keycloak local de Hospital con sus usuarios sintéticos (leen `KC_DEV_USERS_PASSWORD` de `../Hospital/.env` o del entorno); no se ejecutan contra producción ni en CI, que sólo corre lo que no necesita identidad. Backend usa una base temporal de PostgreSQL que se elimina al terminar y proveedores simulados. Las pruebas reales opcionales `scripts/check-integrations.py`, `scripts/kapso-mcp-read.py`, `scripts/check-nim.py` y `tests/assistant_smoke.py` requieren las claves locales; las pruebas NIM usan texto sintético y consumen cuota.
 
 [Agente de citas y recordatorios](docs/appointment-agent.md) · [Resultados y límites de validación](docs/verification.md) · [Backlog](docs/backlog.md) · [Easypanel y operación](docs/deployment.md) · [Contrato Hospital](docs/hospital-integration.md) · [Puente de recetas](integrations/hospital/README.md)

@@ -1,10 +1,5 @@
-import { test, expect, type Page } from '@playwright/test';
-async function login(page: Page) {
-  await page.goto('/login');
-  await page.getByLabel('Contraseña', { exact: true }).fill('demo-recepcion');
-  await page.getByRole('button', { name: 'Entrar al espacio' }).click();
-  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
-}
+import { test, expect } from '@playwright/test';
+import { login } from './login';
 const cid = '78000000-0000-4000-8000-000000000001',
   oid = '78000000-0000-4000-8000-000000000002',
   sid = '78000000-0000-4000-8000-000000000003';
@@ -44,7 +39,7 @@ test('Hospital masters are read only in Reception and services show current serv
         ];
     return route.fulfill({
       json: path.endsWith('settings')
-        ? { hospitalUrl: 'http://localhost:3210/es/commercial' }
+        ? { hospitalUrl: 'http://localhost:3210/api/auth/idp?returnTo=%2Fes%2Fcommercial' }
         : { items, total: 1, page: 1, pageSize: 100 },
     });
   });
@@ -54,7 +49,7 @@ test('Hospital masters are read only in Reception and services show current serv
   await expect(page.getByRole('button', { name: 'Nueva empresa', exact: true })).toHaveCount(0);
   await expect(page.getByRole('link', { name: 'Administrar en Hospital' })).toHaveAttribute(
     'href',
-    'http://localhost:3210/es/commercial',
+    'http://localhost:3210/api/auth/idp?returnTo=%2Fes%2Fcommercial',
   );
   await page.getByRole('button', { name: 'Servicios y precios', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Consulta sintética' })).toBeVisible();

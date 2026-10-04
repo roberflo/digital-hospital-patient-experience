@@ -15,16 +15,12 @@ const tenant='cccccccc-cccc-4ccc-8ccc-cccccccccccc', prefix='Hospital__Tenants__
   await page.locator('#username').fill('dev-administrador-c');await page.locator('#password').fill(hospital.KC_DEV_USERS_PASSWORD);await page.locator('#kc-login').click();await page.waitForURL('http://localhost:3215/',{timeout:30000});
   const me=await (await page.request.get('http://localhost:3215/api/crm/me')).json();if(me.tenant.id!==tenant||me.role!=='admin')throw Error('Shared identity not correctly bound');
   console.log('PASS Hospital administrator login uses existing hospital and role');
-  await page.goto('http://localhost:3215/?view=hospital');await page.getByText('Sesión compartida activa',{exact:false}).waitFor();
-  await page.getByText('Conectar o actualizar Hospital',{exact:true}).click();
-  await page.getByLabel('Dirección de la aplicación Hospital').fill('http://localhost:3210');
-  await page.getByLabel('Identificador de conexión').fill(reception[prefix+'ClientId']);
-  await page.getByLabel('Secreto de conexión').fill(reception[prefix+'ClientSecret']);
-  const saving=page.waitForResponse(r=>r.url().endsWith('/api/crm/hospital/connection')&&r.request().method()==='PUT');
-  await page.getByRole('button',{name:'Comprobar y conectar',exact:true}).click();const saved=await saving;if(!saved.ok())throw Error('Connection saving HTTP '+saved.status());
-  const raw=await saved.text();if(raw.includes(reception[prefix+'ClientSecret']))throw Error('Secret leak');
-  await page.getByText('Conexión comprobada con la agenda de este hospital.',{exact:true}).waitFor();
-  console.log('PASS verified connection saved using current service account, secret not returned');
+  await page.goto('http://localhost:3215/?view=hospital');
+  await page.getByRole('status').filter({hasText:'Hospital conectado'}).waitFor();
+  if(await page.getByLabel('Secreto de conexión').count())throw Error('Technical credentials visible to business');
+  if(await page.getByText('Conectar o actualizar Hospital',{exact:true}).count())throw Error('Technical setup form still visible');
+  await page.getByRole('link',{name:'Abrir agenda',exact:true}).waitFor();
+  console.log('PASS saved Hospital connection verified automatically without technical input');
   await page.screenshot({path:root+'/artifacts/hospital-connection-live.png',fullPage:true});
   const contacts=await (await page.request.get('http://localhost:3215/api/crm/contacts')).json();const linked=contacts.find(c=>c.patientId==='01a0a362-0dd9-7418-a987-ad9c8e67758b');if(!linked)throw Error('Synthetic linked patient fixture required');
   const fixtureName=JSON.parse(execFileSync('docker',['run','--rm','-i','--network','hospital','python:3.12-slim','python','-c',`
@@ -34,7 +30,7 @@ req=urllib.request.Request('http://hospital-keycloak-1:8080/realms/hospital/prot
 token=json.load(urllib.request.urlopen(req))['access_token']
 req=urllib.request.Request('http://hospital-recepcion-api:8080/v1/patients/01a0a362-0dd9-7418-a987-ad9c8e67758b',headers={'Authorization':'Bearer '+token})
 patient=json.load(urllib.request.urlopen(req));print(json.dumps(patient['givenNames']+' '+patient['familyNames']))
-`],{input:JSON.stringify({id:reception[prefix+'ClientId'],secret:reception[prefix+'ClientSecret']}),encoding:'utf8'}));
+`],{input:JSON.stringify({id:'recepcion-service-cccccccc-cccc-4ccc-8ccc-cccccccccccc',secret:reception.HOSPITAL_SERVICE_CLIENT_SECRET}),encoding:'utf8'}));
   const res=await page.request.post(`http://localhost:3215/api/crm/hospital/contacts/${linked.id}/patients/search`,{headers:{Origin:'http://localhost:3215'},data:{queryShape:'name-tokens',term:fixtureName}});
   if(!res.ok())throw Error('Patient search HTTP '+res.status());const result=await res.json();
   if(!result.results.some(r=>r.patientId===linked.patientId))throw Error('Patient search did not find linked synthetic patient');

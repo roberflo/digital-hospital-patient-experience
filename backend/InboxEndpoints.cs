@@ -49,11 +49,11 @@ public static class InboxEndpoints
         });
         api.MapGet("/saved-replies",async(CrmDb db)=>await db.SavedReplies.OrderBy(x=>x.Title).Take(200).ToListAsync());
         api.MapPost("/saved-replies",async(SavedReplyInput b,CrmDb db,TenantScope scope,CurrentUser user)=>{
-            user.RequireSupervisor();var row=new SavedReply{TenantId=scope.Id,Title=Rules.Required(b.Title,80),Body=Rules.Required(b.Body,4000)};
+            user.RequireAdmin();var row=new SavedReply{TenantId=scope.Id,Title=Rules.Required(b.Title,80),Body=Rules.Required(b.Body,4000)};
             db.Add(row);CrmEndpoints.Audit(db,scope,user,"saved_reply.created",row.Id);await db.SaveChangesAsync();return Results.Ok(row);
         });
         api.MapDelete("/saved-replies/{id:guid}",async(Guid id,CrmDb db,TenantScope scope,CurrentUser user)=>{
-            user.RequireSupervisor();var row=await db.SavedReplies.SingleOrDefaultAsync(x=>x.Id==id);if(row is null)return Results.NotFound();
+            user.RequireAdmin();var row=await db.SavedReplies.SingleOrDefaultAsync(x=>x.Id==id);if(row is null)return Results.NotFound();
             db.Remove(row);CrmEndpoints.Audit(db,scope,user,"saved_reply.deleted",id);await db.SaveChangesAsync();return Results.Ok();
         });
     }

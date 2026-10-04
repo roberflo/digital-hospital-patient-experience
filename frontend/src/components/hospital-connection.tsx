@@ -19,121 +19,127 @@ type Connection = {
 };
 export function HospitalConnection() {
   const { data, error, mutate } = useSWR<Connection>('/hospital/connection', fetcher);
-  const [checking, setChecking] = useState(false);
-  const [checked, setChecked] = useState(false);
-  const [failure, setFailure] = useState('');
+  // A real read verifies availability; configured credentials alone never mean connected.
+  const {
+    data: health,
+    error: healthError,
+    isValidating,
+    mutate: check,
+  } = useSWR<{ connected: boolean }>(
+    data?.configured ? ['/hospital/connection/check', data.hospital.id] : null,
+    ([path]: [string, string]) => api(path, 'POST', {}),
+    { revalidateOnFocus: false, shouldRetryOnError: false, dedupingInterval: 30000 },
+  );
+  const connected = !!health?.connected && !healthError;
   return (
     <section className="content-card hospital-connection">
       <div className="card-toolbar">
         <h2>
-          <HeartPulse size={20} /> Tu hospital conectado
+          <HeartPulse size={20} /> Mi hospital
         </h2>
       </div>
       <div className="hospital-connection-body">
         {error && (
           <p role="alert">
-            No se pudo consultar la conexión.{' '}
+            No pudimos cargar tu hospital.{' '}
             <Button variant="outline" onClick={() => mutate()}>
               Reintentar
             </Button>
           </p>
         )}
-        {!data && !error && <p>Cargando conexión…</p>}
+        {!data && !error && <p>Cargando tu hospital…</p>}
         {data && (
           <>
-            <h3>{data.hospital.name}</h3>
-            <p>
-              Este es el hospital de tu sesión. Las citas, los pacientes y el equipo pertenecen a
-              este espacio.
-            </p>
-            {['admin', 'platform_admin'].includes(data.role) && (
-              <HospitalSetup
-                onConnected={() => {
-                  setChecked(true);
-                  setFailure('');
-                  mutate();
-                }}
-              />
-            )}
-            <ol className="hospital-steps">
-              <li>
-                <strong>1. Tu cuenta del hospital</strong>
+            <div className="hospital-overview">
+              <div>
+                <h3>{data.hospital.name}</h3>
                 <p>
                   {data.sharedIdentity
-                    ? `Sesión compartida activa · ${data.name}`
-                    : 'Estás usando una cuenta de demostración. Entra con tu cuenta del Hospital para usar tus permisos y tu equipo.'}
+                    ? `Has entrado como ${data.name}. Tu cuenta conserva los permisos del hospital.`
+                    : 'Estás en un espacio de prueba. Para trabajar con tu equipo, usa tu cuenta del hospital.'}
                 </p>
-                {data.hospitalLoginAvailable && (
-                  <Button
-                    variant="outline"
-                    onClick={() =>
-                      signIn('keycloak', { callbackUrl: '/?view=hospital' }, { prompt: 'login' })
-                    }
-                  >
-                    {data.sharedIdentity
-                      ? 'Entrar con otra cuenta del hospital'
-                      : 'Continuar con mi cuenta del hospital'}
-                  </Button>
-                )}
-              </li>
-              <li>
-                <strong>2. Agenda y servicios</strong>
+              </div>
+              <span role="status" className={`hospital-status ${connected ? 'is-connected' : ''}`}>
+                {connected ? <CheckCircle2 size={16} /> : <HeartPulse size={16} />}
+                {connected
+                  ? 'Hospital conectado'
+                  : isValidating
+                    ? 'Conectando con tu hospital…'
+                    : data.configured
+                      ? 'Conexión interrumpida'
+                      : 'Pendiente de conexión'}
+              </span>
+            </div>
+            {!data.sharedIdentity && data.hospitalLoginAvailable && (
+              <div className="hospital-access-callout">
+                <h4>Una cuenta para ambas aplicaciones</h4>
                 <p>
-                  {data.configured
-                    ? checked
-                      ? 'Conexión comprobada con la agenda de este hospital.'
-                      : 'Conexión configurada. Comprueba que Hospital responde antes de trabajar.'
-                    : 'La integración de este hospital todavía no está configurada. Entra con la cuenta del hospital conectado o solicita la conexión al administrador de la plataforma.'}
+                  Inicia sesión con el usuario que ya utilizas en Hospital. Reconoceremos tu
+                  hospital automáticamente.
                 </p>
-                <div className="hospital-actions">
-                  <Button
-                    disabled={!data.configured || checking}
-                    onClick={async () => {
-                      setChecking(true);
-                      setFailure('');
-                      setChecked(false);
-                      try {
-                        await api('/hospital/connection/check', 'POST', {});
-                        setChecked(true);
-                      } catch {
-                        setFailure(
-                          'No se pudo comprobar la conexión. Tu administrador debe revisar el acceso de Recepción a este hospital.',
-                        );
-                      } finally {
-                        setChecking(false);
-                      }
-                    }}
-                  >
-                    {checked ? <CheckCircle2 /> : <RefreshCw />}{' '}
-                    {checking ? 'Comprobando…' : 'Comprobar conexión'}
-                  </Button>
-                  {data.hospitalUrl && (
-                    <a href={data.hospitalUrl} target="_blank" rel="noreferrer">
-                      Abrir Hospital <ArrowUpRight size={15} />
-                    </a>
-                  )}
-                </div>
-                {failure && (
-                  <p role="alert" className="error">
-                    {failure}
-                  </p>
-                )}
-              </li>
-              <li>
-                <strong>3. Pacientes y equipo</strong>
+                <Button onClick={() => signIn('keycloak', { callbackUrl: '/?view=hospital' })}>
+                  Conectar con mi hospital <ArrowUpRight />
+                </Button>
+              </div>
+            )}
+            {data.sharedIdentity && !data.configured && (
+              <p className="hospital-access-callout">
+                Tu cuenta ya está vinculada. Falta habilitar el acceso de Recepción a este hospital;
+                pide al administrador de la plataforma que lo complete. No necesitas introducir
+                contraseñas de conexión ni otros datos técnicos.
+              </p>
+            )}
+            {healthError && (
+              <div role="alert" className="hospital-access-callout">
                 <p>
-                  En Contactos o en una conversación, usa «Vincular paciente» para buscar su
-                  expediente. Cada compañero aparece en Equipo al entrar con su cuenta del Hospital.
+                  No pudimos comunicarnos con Hospital. Tu cuenta y tus datos siguen vinculados.
                 </p>
-                <div className="hospital-actions">
-                  <a href="/?view=contacts">Ir a Contactos →</a>
-                  <a href="/?view=team">Ver equipo →</a>
-                </div>
-              </li>
-            </ol>
+                <Button variant="outline" disabled={isValidating} onClick={() => check()}>
+                  <RefreshCw /> Volver a intentar
+                </Button>
+              </div>
+            )}
+            <div className="hospital-actions">
+              {connected && (
+                <Button asChild>
+                  <a href="/?view=calendar">
+                    Abrir agenda <ArrowUpRight />
+                  </a>
+                </Button>
+              )}
+              {data.hospitalUrl && (
+                <Button asChild variant="outline">
+                  <a href={data.hospitalUrl} target="_blank" rel="noreferrer">
+                    Abrir Hospital <ArrowUpRight size={15} />
+                  </a>
+                </Button>
+              )}
+            </div>
+            <div className="hospital-next-steps">
+              <a href="/?view=contacts">
+                <strong>Vincular pacientes</strong>
+                <span>Busca el expediente desde un contacto para consultar sus citas.</span>
+                <span aria-hidden="true">→</span>
+              </a>
+              <a href="/?view=team">
+                <strong>Trabajar con tu equipo</strong>
+                <span>Tus compañeros entran con su cuenta del Hospital y aparecen aquí.</span>
+                <span aria-hidden="true">→</span>
+              </a>
+            </div>
+            {data.sharedIdentity && data.hospitalLoginAvailable && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() =>
+                  signIn('keycloak', { callbackUrl: '/?view=hospital' }, { prompt: 'login' })
+                }
+              >
+                Usar otra cuenta del hospital
+              </Button>
+            )}
             <p className="hint">
-              El hospital se determina por tu cuenta. Cambiar de cuenta no mueve contactos ni
-              conversaciones entre hospitales.
+              Los pacientes, las citas y las conversaciones permanecen en su hospital.
             </p>
           </>
         )}
@@ -162,7 +168,7 @@ export function PatientLink({
   const [error, setError] = useState('');
   const { data: connection } = useSWR<Connection>(open ? '/hospital/connection' : null, fetcher);
   const { data: me } = useSWR<Me>(open ? '/me' : null, fetcher);
-  const allowed = me && ['admin', 'platform_admin', 'supervisor', 'agent'].includes(me.role);
+  const allowed = me && ['admin', 'agent'].includes(me.role);
   function reset() {
     setResults(null);
     setSelected(null);
@@ -339,112 +345,5 @@ export function PatientLink({
         )}
       </DialogContent>
     </Dialog>
-  );
-}
-
-function HospitalSetup({ onConnected }: { onConnected: () => void }) {
-  const { data } = useSWR<{ allowedOrigins: string[]; publicUrl: string }>(
-    '/hospital/connection/setup',
-    fetcher,
-  );
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  return (
-    <details className="hospital-setup">
-      <summary>Conectar o actualizar Hospital</summary>
-      <p>
-        Usa la cuenta de servicio de Recepción creada en el Hospital. El hospital se obtiene de tu
-        sesión; no necesitas copiar su identificador.
-      </p>
-      {!data ? (
-        <p>Cargando opciones de conexión…</p>
-      ) : data.allowedOrigins.length === 0 ? (
-        <p>
-          En Easypanel, añade la dirección de la API de Hospital a{' '}
-          <code>HOSPITAL_ALLOWED_API_ORIGINS</code> y reinicia la API de Recepción. Tu administrador
-          configura esto una sola vez.
-        </p>
-      ) : (
-        <form
-          className="dialog-form"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            const form = e.currentTarget;
-            const values = new FormData(form);
-            setBusy(true);
-            setError('');
-            try {
-              await api('/hospital/connection', 'PUT', Object.fromEntries(values));
-              form.reset();
-              onConnected();
-              toast.success('Hospital conectado y verificado');
-            } catch (e) {
-              const message = (e as Error).message;
-              setError(
-                message.includes('hospital.')
-                  ? 'Hospital no aceptó esta conexión. Revisa las credenciales, los permisos de Recepción y que la cuenta de servicio pertenezca al mismo hospital que tu usuario.'
-                  : message,
-              );
-            } finally {
-              setBusy(false);
-            }
-          }}
-        >
-          <label>
-            API de Hospital
-            <select name="baseUrl" required disabled={busy}>
-              {data.allowedOrigins.map((url) => (
-                <option key={url} value={url}>
-                  {url}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Dirección de la aplicación Hospital
-            <input
-              name="publicUrl"
-              type="url"
-              placeholder="https://hospital.tudominio.com"
-              defaultValue={data.publicUrl}
-              required
-              disabled={busy}
-            />
-          </label>
-          <label>
-            Identificador de conexión
-            <input
-              name="clientId"
-              required
-              maxLength={150}
-              placeholder="recepcion-servicio"
-              autoComplete="off"
-              disabled={busy}
-            />
-          </label>
-          <label>
-            Secreto de conexión
-            <input
-              name="clientSecret"
-              type="password"
-              required
-              maxLength={4096}
-              autoComplete="new-password"
-              disabled={busy}
-            />
-          </label>
-          <p className="hint">
-            Las credenciales se guardan cifradas. Si la comprobación falla, se conserva la conexión
-            anterior. Los agentes y envíos no se activan con este formulario.
-          </p>
-          {error && (
-            <p className="error" role="alert">
-              {error}
-            </p>
-          )}
-          <Button disabled={busy}>{busy ? 'Verificando hospital…' : 'Comprobar y conectar'}</Button>
-        </form>
-      )}
-    </details>
   );
 }

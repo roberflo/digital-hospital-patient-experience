@@ -1,13 +1,18 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Browser, type Page } from '@playwright/test';
+import { login, users, type User } from './login';
 test.afterEach(async ({ page }) => {
   await page.unrouteAll({ behavior: 'wait' });
 });
-async function login(page: Page, user = 'admin') {
-  await page.goto('/login');
-  await page.getByLabel('Usuario de demostración').selectOption(user);
-  await page.getByLabel('Contraseña', { exact: true }).fill('demo-recepcion');
-  await page.getByRole('button', { name: 'Entrar al espacio' }).click();
-  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
+// A teammate exists in Recepción only after their first sign-in, so register them through it.
+async function register(browser: Browser, user: User) {
+  const context = await browser.newContext();
+  await login(await context.newPage(), user);
+  await context.close();
+}
+// Subjects are Keycloak user ids: read the teammate's from the directory by name.
+async function subject(page: Page, user: User): Promise<string> {
+  const { members } = await (await page.request.get('/api/crm/members/workload')).json();
+  return members.find((m: { name: string }) => m.name === users[user].name).subject;
 }
 async function nav(page: Page, name: string) {
   const menu = page.getByRole('button', { name: 'Abrir menú' });
@@ -19,11 +24,10 @@ test('team assigns multiple conversations, filters workload and transfers one wi
   browser,
 }, info) => {
   // Register the shared synthetic identity through its normal login, not a fake local member.
-  const teammate = await browser.newContext();
-  const teammatePage = await teammate.newPage();
-  await login(teammatePage, 'agent');
-  await teammate.close();
+  await register(browser, 'agent');
   await login(page);
+  const agent = await subject(page, 'agent');
+  const admin = await subject(page, 'admin');
   await nav(page, 'Bandeja de entrada');
   await page.getByLabel('Filtrar por estado', { exact: true }).selectOption('');
   await expect(page.getByRole('link', { name: 'Números ↗', exact: true })).toHaveAttribute(
@@ -33,27 +37,27 @@ test('team assigns multiple conversations, filters workload and transfers one wi
   for (const name of ['Ana Martínez', 'Carlos Rivera']) {
     await page.getByLabel('Seleccionar conversación de ' + name, { exact: true }).check();
   }
-  await page.getByLabel('Responsable de la selección').selectOption('dev-agent');
+  await page.getByLabel('Responsable de la selección').selectOption(agent);
   await page.getByRole('button', { name: 'Asignar selección', exact: true }).click();
   await expect(page.getByText('Conversaciones asignadas', { exact: true })).toBeVisible();
   await nav(page, 'Equipo');
   const member = page
     .getByRole('row')
-    .filter({ has: page.getByText('Recepción demo', { exact: true }) });
+    .filter({ has: page.getByText(users.agent.name, { exact: true }) });
   await expect(member).toBeVisible();
   await page.screenshot({ path: `../artifacts/team-${info.project.name}.png`, fullPage: true });
   await member.getByRole('button', { name: 'Ver conversaciones', exact: true }).click();
-  await expect(page.getByLabel('Filtrar por responsable')).toHaveValue('member:dev-agent');
+  await expect(page.getByLabel('Filtrar por responsable')).toHaveValue('member:' + agent);
   await page.locator('.conversation-card').filter({ hasText: 'Ana Martínez' }).click();
   // Assignment is visible without opening the patient context panel, including on mobile.
   await expect(page.getByLabel('Asignar conversación', { exact: true })).toBeVisible();
   expect((await page.locator('.assignment-bar').boundingBox())!.height).toBeLessThan(100);
-  await expect(page.getByLabel('Asignar conversación', { exact: true })).toHaveValue('dev-agent');
+  await expect(page.getByLabel('Asignar conversación', { exact: true })).toHaveValue(agent);
   await page.screenshot({
     path: `../artifacts/team-inbox-${info.project.name}.png`,
     fullPage: true,
   });
-  await page.getByLabel('Asignar conversación', { exact: true }).selectOption('dev-admin');
+  await page.getByLabel('Asignar conversación', { exact: true }).selectOption(admin);
   await expect(page.getByText('Responsable actualizado', { exact: true })).toBeVisible();
   // Reassigned work leaves the teammate's queue rather than remaining falsely assigned.
   await expect(page.locator('.conversation-card').filter({ hasText: 'Ana Martínez' })).toHaveCount(
@@ -61,7 +65,9 @@ test('team assigns multiple conversations, filters workload and transfers one wi
   );
   await nav(page, 'Actividad');
   await expect(
-    page.getByText('Responsable: Recepción demo → Administrador demo.', { exact: true }).first(),
+    page
+      .getByText(`Responsable: ${users.agent.name} → ${users.admin.name}.`, { exact: true })
+      .first(),
   ).toBeVisible();
   await nav(page, 'Equipo');
   await page.getByRole('button', { name: 'Incorporar compañero', exact: true }).click();
@@ -86,8 +92,11 @@ test('team assigns multiple conversations, filters workload and transfers one wi
 });
 test('attendant sees team but cannot bulk assign, disable coworkers or edit another owner', async ({
   page,
+  browser,
 }) => {
+  await register(browser, 'admin');
   await login(page, 'agent');
+  const admin = await subject(page, 'admin');
   await nav(page, 'Equipo');
   await expect(
     page.getByRole('heading', { name: 'Equipo de atención', exact: true }),
@@ -101,7 +110,7 @@ test('attendant sees team but cannot bulk assign, disable coworkers or edit anot
     route.fulfill({
       json: rows.map((row: { conversation: object }) => ({
         ...row,
-        conversation: { ...row.conversation, assignedTo: 'dev-admin' },
+        conversation: { ...row.conversation, assignedTo: admin },
       })),
     }),
   );
@@ -110,5 +119,7 @@ test('attendant sees team but cannot bulk assign, disable coworkers or edit anot
   await expect(page.getByLabel('Seleccionar conversaciones visibles')).toHaveCount(0);
   await page.locator('.conversation-card').filter({ hasText: 'Ana Martínez' }).click();
   await expect(page.getByLabel('Asignar conversación', { exact: true })).toBeDisabled();
-  await expect(page.getByText('El responsable o un supervisor puede transferirla.')).toBeVisible();
+  await expect(
+    page.getByText('El responsable o un administrador puede transferirla.'),
+  ).toBeVisible();
 });

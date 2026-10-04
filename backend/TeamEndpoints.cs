@@ -26,7 +26,7 @@ public static class TeamEndpoints
     // Attendants can hand off their own or unassigned work. Supervisors can redistribute any work.
     public static void RequireEditable(Conversation conversation, CurrentUser user)
     {
-        if (!user.Supervisor && conversation.AssignedTo is {} owner && owner != user.Subject)
+        if (!user.Admin && conversation.AssignedTo is {} owner && owner != user.Subject)
             throw new AccessDeniedException();
     }
 
@@ -35,7 +35,7 @@ public static class TeamEndpoints
         if (input.Conversations is null || input.Conversations.Length is < 1 or > 100 || input.Conversations.Any(x => x is null) ||
             input.Conversations.Select(x => x.Id).Distinct().Count() != input.Conversations.Length)
             throw new ArgumentException("Selecciona de 1 a 100 conversaciones distintas");
-        if (input.Conversations.Length > 1) user.RequireSupervisor();
+        if (input.Conversations.Length > 1) user.RequireAdmin();
         using var teamLease = await locks.Lock(scope.Id);
         var target = input.AssignedTo is null ? null : await db.Members.SingleOrDefaultAsync(m => m.Subject == input.AssignedTo && !m.Disabled);
         if (input.AssignedTo is not null && target is null) throw new ArgumentException("La persona no está disponible en este hospital");

@@ -315,7 +315,13 @@ public sealed class HospitalIntegrationException(string code, HttpStatusCode sta
         "commercial.idempotency_conflict" => "Esta compra ya tiene otro registro en Hospital. Revisa su historial antes de continuar.",
         "commercial.invalid_purchase" or "commercial.invalid_input" or "commercial.invalid_lines" or "commercial.invalid_phone" => "Hospital rechazó los datos de la compra. Revisa los servicios y el teléfono del contacto.",
         "hospital.customer_identity_mismatch" => "El cliente Hospital no coincide con el teléfono o expediente de este contacto.",
-        _ => "Conexión con el hospital: " + Code
+        "hospital.not_configured" => "Tu cuenta del Hospital está reconocida. El administrador debe habilitar la agenda para este hospital desde la configuración de la plataforma.",
+        "hospital.credentials_missing" or "hospital.token_request_failed" or "hospital.token_missing" or "hospital.token_tenant_or_expiry_invalid" => "No pudimos acceder a Hospital. Tu cuenta sigue vinculada; pide al administrador que revise la conexión.",
+        "hospital.patient_phone_mismatch" => "El teléfono del expediente no coincide con el contacto. Corrige los datos en Hospital antes de vincular.",
+        "hospital.http_403" or "hospital.clinical_delivery_not_authorized" => "Tu cuenta no tiene permiso para esta operación en Hospital. Consulta al administrador.",
+        "hospital.http_404" or "hospital.prescription_unavailable" or "hospital.appointment_unavailable" => "No encontramos la cita o el documento en Hospital. Actualiza la información y vuelve a intentar.",
+        "hospital.http_409" => "La información cambió en Hospital. Actualiza la agenda antes de continuar.",
+        _ => "No pudimos completar la operación en Hospital. Revisa la conexión desde Mi hospital y vuelve a intentar."
     };
     public HttpStatusCode StatusCode { get; } = statusCode;
 }

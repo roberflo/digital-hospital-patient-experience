@@ -33,7 +33,7 @@ public static class HospitalConnectionEndpoints
         api.MapGet("/connection", async (CrmDb db, TenantScope t, CurrentUser u, HospitalClient h, HttpContext ctx, IConfiguration config) => new
         {
             hospital = await db.Tenants.Where(x => x.Id == t.Id).Select(x => new { x.Id, x.Name, x.TimeZone }).SingleAsync(),
-            configured = h.IsConfigured(t.Id), hospitalUrl = h.PublicUrl(t.Id),
+            configured = h.IsConfigured(t.Id), hospitalUrl = h.EntryUrl(t.Id, "/es"),
             sharedIdentity = ctx.User.FindFirst("iss")?.Value == config["Auth:Authority"] && !string.IsNullOrEmpty(config["Auth:Authority"]),
             hospitalLoginAvailable = !string.IsNullOrEmpty(config["Auth:Authority"]), u.Name, u.Role
         });

@@ -6,7 +6,7 @@ Contratos comprobados en el código de `../Hospital/backend/src` el 2026-10-02. 
 
 - El hospital exige JWT Keycloak firmado, audiencia/issuer válidos, `sub` GUID y `tenant_id` GUID no vacío. No acepta tenant en body, query ni un header alternativo.
 - Lee los roles desde `realm_access.roles`, con etiquetas exactas: `Recepción`, `Admisión`, `Enfermería`, `Médicos`, `Odontólogos`, `Nutricionistas`, `Administrador`.
-- Roles del CRM `platform_admin`, `admin`, `supervisor`, `agent`, `doctor` deben mapearse explícitamente en CRM; no se deben inventar equivalencias que el hospital no reconoce. Administrador no tiene acceso clínico en Hospital.
+- Recepción no tiene roles propios: deriva sus tres perfiles de esos siete (tabla en [deployment.md](deployment.md)) y deniega cualquier otro. Administrador no tiene acceso clínico en Hospital.
 - Cada tenant CRM usa una configuración de hospital independiente. Su identificador debe coincidir con el `tenant_id` del token de servicio. El adaptador rechaza token ajeno, expirado o sin claim antes de hacer llamadas. El hospital sigue validando firma/issuer/audience; decodificar localmente el payload sólo evita errores de enrutamiento de credenciales configuradas.
 - Registrar el HttpClient con timeout de 30 segundos, máximo de respuesta razonable y redirecciones deshabilitadas. No aplicar retries automáticos a escrituras.
 
@@ -18,6 +18,8 @@ services.AddHttpClient<HospitalClient>(client => {
 ```
 
 Configurar secretos por entorno (UUID ilustrativo, sin credenciales reales):
+
+La conexión de cada hospital se deriva de los ajustes de instalación (`HOSPITAL_API_URL`, `HOSPITAL_SERVICE_CLIENT_SECRET`) y de su cuenta `recepcion-service-<UUID>` en el realm: no se configura por hospital. Las claves `Hospital__Tenants__<UUID>__...` siguen existiendo sólo para excepciones y para autorizar la entrega de recetas:
 
 ```text
 Hospital__Tenants__11111111-1111-1111-1111-111111111111__BaseUrl=https://hospital.example/
@@ -88,9 +90,9 @@ Conexión local autorizada y activa desde el 2026-10-03. Crear, consultar, repro
 
 Las nuevas rutas `GET /api/hospital/conversations/{id}/clinical/{timeline|antecedentes|allergies}` y `.../{prescriptions|notes}/{documentId}` usan **el JWT del doctor autenticado**. Nunca utilizan la cuenta de servicio de recepción. Hospital valida firma, audiencia, rol, tenant y permisos clínicos; registra el acceso con la identidad real. Recepción verifica tenant, asignación, teléfono y pertenencia del documento, y agrega auditoría con identificadores, sin contenido clínico. Cada consulta vuelve a comprobar el vínculo. La ventana descarta sus datos al cerrarse o expirar la sesión. No hay caché clínica compartida ni almacenamiento del navegador. Las antiguas rutas clínicas de contactos devuelven 410 para doctores: migrar consumidores a las rutas acotadas por conversación. El puente privado de entrega de recetas al paciente no cambia.
 
-El ingreso **Continuar con mi cuenta del hospital** admite las cuentas compartidas Keycloak; en desarrollo puede coexistir con el acceso demo. El doctor demo no puede leer expedientes reales. Configurar issuer, client ID, secret, audiencia `hospital-api` y scopes `basic`, `profile`, `email`, `roles`, `tenant-context`; el claim `sub` es imprescindible. El cliente OAuth usa authorization code + PKCE, sin service accounts ni password grants. En producción se mantiene HTTPS y se deshabilita `ALLOW_DEV_LOGIN`. El issuer y las credenciales deben corresponder al mismo sistema de identidad que valida Hospital.
+**Continuar con mi cuenta del hospital** es el único ingreso, también en desarrollo. El cliente `recepcion-web` y las cuentas de servicio `recepcion-service-<tenant>` los declara el job `keycloak-config` de Hospital (ver [deployment.md](deployment.md)); aquí sólo se configuran issuer, client ID, secret y audiencia `hospital-api`. **Cerrar sesión** termina también la sesión de Keycloak. El issuer y las credenciales deben corresponder al mismo realm que valida Hospital.
 
-Para el Hospital sintético local: `python3 scripts/connect-hospital-doctors-local.py` crea un cliente OAuth limitado al callback `http://localhost:3215/api/auth/callback/keycloak`, conserva los roles de los usuarios y guarda el secreto sólo en `.env` ignorado. `KEYCLOAK_INTERNAL_ISSUER` permite alcanzar Keycloak dentro de Docker conservando el issuer público. Aplicar `docker-compose.hospital.yml` conecta también el frontend a esa red y evita la colisión del alias `api` de ambos proyectos. No se toca el código ni se amplían permisos del Hospital.
+Para el Hospital sintético local: añadir los `KC_RECEPCION_*` a `Hospital/.env` con `KC_RECEPCION_SERVICE_TENANTS=cccccccc-cccc-4ccc-8ccc-cccccccccccc`, volver a ejecutar su job `keycloak-config` y luego `python3 scripts/connect-hospital-local.py`, que copia esos secretos al `.env` ignorado tras comprobar que el token de servicio lleva exactamente `Recepción` + `reception-agent`. No crea nada en Keycloak ni usa su contraseña de administrador. Los usuarios son los sintéticos `dev-<rol>-<a|b|c>` del realm. `KEYCLOAK_INTERNAL_ISSUER` permite alcanzar Keycloak dentro de Docker conservando el issuer público. Aplicar `docker-compose.hospital.yml` conecta también el frontend a esa red y evita la colisión del alias `api` de ambos proyectos. No se toca el código ni se amplían permisos del Hospital.
 
 Verificación opt-in: `node tests/hospital_clinical_live.cjs`. Usa la cuenta médica sintética C existente, una conversación temporal en un canal deshabilitado y el paciente sintético ya vinculado por `tests/hospital_live.py`. Comprueba denegación sin asignación, login real, lectura de historial/antecedentes/alergias y documentos mediante el BFF, y abre el lector en navegador. Elimina sus fixtures al terminar; conserva la auditoría de acceso. Nunca envía WhatsApp ni escribe expedientes.
 

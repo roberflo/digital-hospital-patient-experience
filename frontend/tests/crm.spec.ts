@@ -1,10 +1,5 @@
 import { test, expect } from '@playwright/test';
-async function login(page: import('@playwright/test').Page) {
-  await page.goto('/login');
-  await page.getByLabel('Contraseña', { exact: true }).fill('demo-recepcion');
-  await page.getByRole('button', { name: 'Entrar al espacio' }).click();
-  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
-}
+import { login } from './login';
 async function nav(page: import('@playwright/test').Page, name: string) {
   const menu = page.getByRole('button', { name: 'Abrir menú' });
   if (await menu.isVisible()) await menu.click();
@@ -184,7 +179,7 @@ test('personal views persist and conversation search filters messages', async ({
   await page.getByRole('button', { name: 'Buscar mensajes', exact: true }).click();
 });
 
-test('supervisor creates and applies an internal macro', async ({ page }, info) => {
+test('admin creates and applies an internal macro', async ({ page }, info) => {
   await login(page);
   await nav(page, 'Bandeja de entrada');
   await page.getByLabel('Filtrar por estado').selectOption('');

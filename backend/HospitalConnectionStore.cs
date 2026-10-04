@@ -9,13 +9,29 @@ public sealed class HospitalConnectionStore(CrmDb db, IConfiguration config)
     public IConfigurationSection Section(Guid tenant)
     {
         if (cache.TryGetValue(tenant, out var section)) return section;
-        var values = config.GetSection($"Hospital:Tenants:{tenant:D}").GetChildren().ToDictionary(x=>x.Key,x=>x.Value);
+        var values = Defaults(tenant, config);
+        foreach (var pair in config.GetSection($"Hospital:Tenants:{tenant:D}").GetChildren()) values[pair.Key]=pair.Value;
         var saved = db.Tenants.AsNoTracking().Where(x=>x.Id==tenant).Select(x=>x.HospitalConnection).SingleOrDefault();
         if (saved is not null)
             foreach (var pair in JsonSerializer.Deserialize<Dictionary<string,string?>>(saved)!) values[pair.Key]=pair.Value;
         section = new ConfigurationBuilder().AddInMemoryCollection(values.Select(x=>new KeyValuePair<string,string?>("connection:"+x.Key,x.Value))).Build().GetSection("connection");
         cache[tenant]=section;
         return section;
+    }
+    // What makes a hospital connect by signing in: one installation-wide Hospital API and the
+    // service account Hospital's realm job declares for every tenant, `recepcion-service-<tenant>`.
+    // Nothing here is per hospital, so nobody types a UUID, a URL or a secret to connect one.
+    // Prescription delivery is NOT defaulted: it stays an explicit per-hospital authorization.
+    public static Dictionary<string,string?> Defaults(Guid tenant, IConfiguration config)
+    {
+        var issuer = config["KEYCLOAK_INTERNAL_ISSUER"] is { Length: > 0 } internalIssuer ? internalIssuer : config["Auth:Authority"];
+        if (string.IsNullOrWhiteSpace(config["HOSPITAL_API_URL"]) || string.IsNullOrWhiteSpace(config["HOSPITAL_SERVICE_CLIENT_SECRET"]) || string.IsNullOrWhiteSpace(issuer)) return new();
+        return new()
+        {
+            ["BaseUrl"]=config["HOSPITAL_API_URL"], ["PublicUrl"]=config["HOSPITAL_PUBLIC_URL"],
+            ["TokenEndpoint"]=issuer.TrimEnd('/')+"/protocol/openid-connect/token",
+            ["ClientId"]=$"recepcion-service-{tenant:D}", ["ClientSecret"]=config["HOSPITAL_SERVICE_CLIENT_SECRET"], ["UsePatientAgenda"]="true"
+        };
     }
 }
 public record HospitalConnectInput(string BaseUrl, string PublicUrl, string ClientId, string ClientSecret);

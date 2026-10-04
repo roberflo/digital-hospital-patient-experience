@@ -18,12 +18,14 @@ export async function api<T = unknown>(
   });
   if (!res.ok) {
     let message = 'No se pudo completar la operación';
+    let code: string | undefined;
     try {
       const p = await res.json();
       message = p.title ?? message;
+      code = typeof p.code === 'string' ? p.code : undefined;
     } catch {}
     if (res.status === 401) message = 'Tu sesión expiró. Vuelve a iniciar sesión.';
-    throw Object.assign(new Error(message), { status: res.status });
+    throw Object.assign(new Error(message), { status: res.status, code });
   }
   if (res.status === 204) return undefined as T;
   const text = await res.text();

@@ -1,13 +1,13 @@
 import { test, expect, type Page } from '@playwright/test';
+import { login as signIn, type User } from './login';
 const id = 'aaa00000-0000-4000-8000-000000000001';
-async function login(page: Page, role = 'doctor') {
-  await page.goto('/login');
-  await page.getByLabel('Usuario de demostración').selectOption(role);
-  await page.getByRole('textbox', { name: 'Contraseña', exact: true }).fill('demo-recepcion');
-  await page.getByRole('button', { name: 'Entrar al espacio' }).click();
-  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
-}
-async function inbox(page: Page, assigned = 'dev-doctor') {
+const login = (page: Page, user: User = 'doctor') => signIn(page, user);
+// Subjects are Keycloak user ids, so the signed-in one is read rather than assumed.
+const subject = async (page: Page): Promise<string> =>
+  (await (await page.request.get('/api/crm/me')).json()).subject;
+/** Opens a synthetic conversation; assigned to whoever is signed in unless told otherwise. */
+async function inbox(page: Page, owner?: string) {
+  const assigned = owner ?? (await subject(page));
   await page.route('**/api/crm/conversations?*', (r) =>
     r.fulfill({
       json: [
@@ -125,13 +125,14 @@ test('doctor reads Hospital on demand with prescription, pagination, and explici
 });
 test('clinical access requires assignment and staff API access is denied', async ({ page }) => {
   await login(page);
+  const doctor = await subject(page);
   await inbox(page, 'another-doctor');
   await expect(
     page.getByRole('button', { name: 'Expediente y recetas', exact: true }),
   ).toBeDisabled();
   await page.unrouteAll({ behavior: 'wait' });
   await login(page, 'agent');
-  await inbox(page);
+  await inbox(page, doctor);
   await expect(page.getByRole('button', { name: 'Expediente y recetas', exact: true })).toHaveCount(
     0,
   );

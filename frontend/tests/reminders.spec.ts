@@ -1,11 +1,5 @@
-import { test, expect, type Page } from '@playwright/test';
-async function login(page: Page, user = 'admin') {
-  await page.goto('/login');
-  await page.getByLabel('Usuario de demostración').selectOption(user);
-  await page.getByLabel('Contraseña', { exact: true }).fill('demo-recepcion');
-  await page.getByRole('button', { name: 'Entrar al espacio' }).click();
-  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
-}
+import { test, expect } from '@playwright/test';
+import { login } from './login';
 test.afterEach(async ({ page }) => {
   await page.unrouteAll({ behavior: 'wait' });
 });

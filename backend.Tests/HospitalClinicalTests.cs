@@ -92,14 +92,14 @@ public sealed class HospitalClinicalTests
         var requests = Enumerable.Range(0, 8).Select(async _ => {
             var scope = new TenantScope();
             await using var db = new CrmDb(options, scope, protection);
-            var ctx = new DefaultHttpContext { User = new ClaimsPrincipal(new ClaimsIdentity(new[] { new Claim("sub", actor.ToString()), new Claim("tenant_id", tenant.ToString()), new Claim("role", "doctor") }, "test")) };
+            var ctx = new DefaultHttpContext { User = new ClaimsPrincipal(new ClaimsIdentity(new[] { new Claim("sub", actor.ToString()), new Claim("tenant_id", tenant.ToString()), new Claim("realm_access", "{\"roles\":[\"Médicos\"]}") }, "test")) };
             return await Identity.Bind(ctx, db, scope, new CurrentUser());
         });
         Assert.All(await Task.WhenAll(requests), allowed => Assert.True(allowed));
         await using var verify = new CrmDb(options, new TenantScope { Id = tenant }, protection);
         Assert.Equal(1, await verify.Members.CountAsync(m => m.Subject == actor.ToString()));
         var otherTenant = Guid.NewGuid(); verify.Tenants.Add(new Tenant { Id = otherTenant, Name = "Other synthetic tenant" }); await verify.SaveChangesAsync();
-        var other = new DefaultHttpContext { User = new ClaimsPrincipal(new ClaimsIdentity(new[] { new Claim("sub", actor.ToString()), new Claim("tenant_id", otherTenant.ToString()), new Claim("role", "doctor") }, "test")) };
+        var other = new DefaultHttpContext { User = new ClaimsPrincipal(new ClaimsIdentity(new[] { new Claim("sub", actor.ToString()), new Claim("tenant_id", otherTenant.ToString()), new Claim("realm_access", "{\"roles\":[\"Médicos\"]}") }, "test")) };
         Assert.False(await Identity.Bind(other, verify, new TenantScope(), new CurrentUser()));
     }
     sealed class Handler(Func<HttpRequestMessage,HttpResponseMessage> send) : HttpMessageHandler
