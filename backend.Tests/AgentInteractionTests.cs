@@ -125,9 +125,7 @@ public sealed class AgentInteractionTests : IAsyncLifetime
 
         Assert.Equal(menu ? 0 : 1, model.Calls);
         if (!menu) { Assert.Empty(fresh.Interactive); return; }
-        var titles = Buttons(Assert.Single(fresh.Interactive)).Select(b => b.Title).ToList();
-        Assert.Equal(3, titles.Count);
-        Assert.NotNull(AgentGuard.Inbound(titles[2], "interactive")); // the third button reaches a person without the model
+        Assert.Equal(["AGENDAR", "MISCITAS", "RECETA", "PERSONA"], AgentHarness.Options(Assert.Single(fresh.Interactive)).Select(option => option.Id)); // every option is served without the model
     }
 
     [Fact]
@@ -245,7 +243,7 @@ public sealed class AgentInteractionTests : IAsyncLifetime
         await h.Runtime(down, h.Sender()).Run(h.Job, CancellationToken.None);
 
         Assert.Equal("agent", (await h.Fresh()).Status);
-        var ids = Buttons(Assert.Single(h.Interactive)).Select(b => b.Id).ToList();
+        var ids = AgentHarness.Options(Assert.Single(h.Interactive)).Select(option => option.Id).ToList();
         Assert.Contains("AGENDAR", ids); Assert.Contains("RECETA", ids);
         Assert.Contains(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => a.Kind == "agent_provider");
     }

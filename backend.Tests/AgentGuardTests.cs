@@ -508,10 +508,15 @@ public sealed class AgentHarness(Guid? tenant = null, string phone = "5037000000
         if (path.EndsWith("/prescriptions/list")) return Task.FromResult(Json(new { prescriptionIds = prescription is null ? [] : new[] { JsonSerializer.SerializeToElement(prescription).GetProperty("prescriptionId").GetGuid() }, nextCursor = (string?)null }));
         if (path.EndsWith("/pdf")) { var pdf = new ByteArrayContent("%PDF-synthetic"u8.ToArray()); pdf.Headers.ContentType = new("application/pdf"); return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = pdf }); }
         if (path.StartsWith("/v1/reception/prescriptions/") && prescription is not null) return Task.FromResult(Json(prescription));
-        if (request.Method != HttpMethod.Get && (path.StartsWith("/v1/agenda") || path == "/v1/patients")) HospitalWrites.Add(path);
+        if (request.Method == HttpMethod.Get && path.StartsWith("/v1/agenda/") && Guid.TryParse(path["/v1/agenda/".Length..], out var one)) return Task.FromResult(Json(new { appointmentId = one, patientId = Contact.PatientId, visitKind = "follow-up", status = "booked" }));
+        if (request.Method != HttpMethod.Get && (path.StartsWith("/v1/agenda") || path == "/v1/patients")) { HospitalWrites.Add(path); return Task.FromResult(Json(new { appointmentId = Guid.NewGuid(), status = "booked", overlaps = false })); }
         return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound) { Content = new StringContent("{}", Encoding.UTF8, "application/json") });
     });
 
+    /// <summary>What a message lets the patient tap: its buttons, or the rows of its list.</summary>
+    public static List<(string Id, string Title)> Options(JsonElement interactive) =>
+        (interactive.GetProperty("action").TryGetProperty("buttons", out var buttons) ? buttons.EnumerateArray().Select(b => b.GetProperty("reply")) : interactive.GetProperty("action").GetProperty("sections").EnumerateArray().SelectMany(section => section.GetProperty("rows").EnumerateArray()))
+        .Select(option => (option.GetProperty("id").GetString()!, option.GetProperty("title").GetString()!)).ToList();
     public static HttpResponseMessage Reply(string text) => Json(new { choices = new[] { new { message = new { role = "assistant", content = text } } } });
     public static HttpResponseMessage ToolCall(string name, object arguments) => Json(new { choices = new[] { new { message = new { role = "assistant", content = (string?)null, tool_calls = new[] { new { id = "call-" + Guid.NewGuid().ToString("N"), type = "function", function = new { name, arguments = JsonSerializer.Serialize(arguments) } } } } } } });
     public static HttpResponseMessage Json(object value) => Raw(JsonSerializer.Serialize(value));

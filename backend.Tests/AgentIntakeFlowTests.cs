@@ -133,6 +133,6 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
         await h.Runtime(down, h.Sender()).Run(h.Job, CancellationToken.None);
 
         Assert.Equal("agent", (await h.Fresh()).Status);
-        Assert.Contains(h.Interactive[^1].GetProperty("action").GetProperty("buttons").EnumerateArray(), b => b.GetProperty("reply").GetProperty("id").GetString() == "AGENDAR");
+        Assert.Contains(AgentHarness.Options(h.Interactive[^1]), option => option.Id == "AGENDAR");
     }
 }
