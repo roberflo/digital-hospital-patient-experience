@@ -51,6 +51,11 @@ El paciente escribe; el agente **responde**, **consulta** (agenda, recetas emiti
 | 31 | Un solapamiento que informa Hospital sólo deriva si la agenda cuenta otra cita activa en ese horario. | `OverlapIsOnlyEscalatedWhenAnotherActiveAppointmentHoldsTheSlot`. |
 | 32 | Para un paciente con expediente, «Agendar cita» y «Mi receta» del menú se atienden sin modelo: lista de primeros horarios libres y entrega de la última receta firmada. Sin horarios publicados, o si Hospital falla, pasa a una persona. Sin expediente sigue al agente para registrarse. | `AgentInteractionTests.MenuBooksAndDeliversThePrescriptionWithoutTheModel`, `MenuWithNothingToOfferSaysSoAndReachesReception`, `MenuForSomeoneWithoutRecordGoesToTheAgent`. |
 | 33 | Una conversación que el equipo resolvió y nadie tiene asignada vuelve al agente cuando el paciente escribe de nuevo; en espera, pospuesta o con responsable, sigue con las personas. | `InboxWorkflowTests.ResolvedAndUnownedConversationReturnsToTheAgentOnANewMessage` (el test previo de responsable preservado no cambia). |
+| 34 | Sin expediente, «Agendar cita» abre un formulario de siete preguntas, una por mensaje y sin modelo: nombres, apellidos, fecha de nacimiento (como se escribe aquí: 12/03/1990, «12 de marzo de 1990»), sexo registral con botones, y nombre, parentesco y teléfono del contacto de emergencia. Lo que no encaja se vuelve a preguntar; nada se supone. | `AgentIntakeFlowTests` (lectura de fechas, respuestas inválidas, botones). |
+| 35 | El formulario termina en la misma propuesta de registro con «Confirmar»; nada llega a Hospital antes; al terminar no conserva datos. Un menor pasa a recepción. Una pregunta o «salir» lo cierra sin tomarla como respuesta. | `NewClientTapsAgendarRegistersStepByStep…`, `AMinorInTheFormGoesToReception`, `AQuestionInTheMiddleOfTheFormIsNotTakenAsAnAnswer`. |
+| 36 | Al confirmar el registro, los primeros horarios libres llegan en el mismo mensaje como lista, sin pedirlos. | Mismo test; en vivo `AgentLiveJourney.NewClientRegistersAndBooksFromTheMenuWithoutTheModel`. |
+| 37 | Si ningún proveedor responde y aún no se ejecutó nada, el paciente recibe el menú y sigue con el agente, tenga o no expediente. Un saludo recibe el menú en cualquier momento. | `AgentGuardTests.WhenNoProviderAnswersThePatientGetsTheMenu`, `AgentInteractionTests.WhenTheModelIsDownARegisteredPatientStillGetsTheMenu`, `GreetingGetsTheMenuEvenInTheMiddleOfAConversation`. |
+| 38 | Un ofrecimiento («¿te paso con recepción?») no cuenta como derivación anunciada. | `AgentGuardTests.SayingItHandsOffMeansItHandsOff`. |
 
 ## Anti-criterios
 
@@ -137,6 +142,12 @@ Comprobado en vivo con Kapso sobre el número de recepción: mensajes con botone
 - `scripts/live-agent.sh` completo (con modelo): el registro con botón pasó; el siguiente turno cayó por 429 de NIM y el paciente recibió el aviso de derivación. Sin pasada de evals posterior a estos cambios por el límite de NIM.
 
 Defecto de Hospital encontrado y corregido en su repositorio (sin commitear ni desplegar): `AppointmentRepository.FindOverlappingAsync` no filtraba por estado, así que una cita cancelada contaba como solapamiento para siempre. Ahora aplica la misma regla que la disponibilidad (`StillOccupiesTheBook`); regresión `OverlapIgnoresFreedSlotsTests`. Hasta que Hospital se redespliegue, el criterio 31 lo compensa en Recepción.
+
+## Recorrido sin modelo · 2026-10-04
+
+`scripts/live-agent.sh FromTheMenu` contra el Hospital local: saludo → menú → «Agendar cita» → siete preguntas → Confirmar → paciente creado en Hospital y lista de horarios → toca un horario → Confirmar → cita `booked` en Hospital. 2,2 s en total, sin una sola llamada al modelo; la prueba cancela su cita. `scripts/test-backend.sh`: 319 pasan / 0 fallan.
+
+En el número real, 2026-10-04 00:12: un paciente con expediente fue derivado porque NIM estaba limitado por una pasada de evals sobre la misma clave. De ahí salen los criterios 32 y 37 y la regla de no correr evals mientras se atiende.
 
 ## Límites conocidos
 

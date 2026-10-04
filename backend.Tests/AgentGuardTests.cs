@@ -215,6 +215,8 @@ public sealed class AgentGuardTests : IAsyncLifetime
     [InlineData("Como no tengo tu expediente, te derivaré a recepción. Un momento, por favor.", true)]
     [InlineData("Le pasaré con una persona del equipo.", true)]
     [InlineData("No tengo ese dato. ¿Te gustaría que lo derive a recepción?", false)]
+    [InlineData("No tengo ese dato; ¿te paso con recepción?", false)]                  // an offer the patient still has to accept
+    [InlineData("¿Quieres que hablemos de otra cosa? Te paso con recepción.", true)]   // the announcement is its own sentence
     [InlineData("Si necesitas una receta nueva tengo que pasarle a recepción. ¿Le envío la actual?", false)]
     public async Task SayingItHandsOffMeansItHandsOff(string reply, bool handsOff)
     {
@@ -432,7 +434,7 @@ public sealed class AgentGuardTests : IAsyncLifetime
     [Theory]
     [InlineData(HttpStatusCode.ServiceUnavailable)]
     [InlineData(HttpStatusCode.TooManyRequests)] // measured: after sustained traffic the provider answers 429 for minutes
-    public async Task WhenNoProviderAnswersThePatientIsToldAndAPersonTakesOver(HttpStatusCode status)
+    public async Task WhenNoProviderAnswersThePatientGetsTheMenu(HttpStatusCode status)
     {
         var hosts = new List<string>();
         var model = new AgentHarness.Fake(request => { hosts.Add(request.RequestUri!.Host); return Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent("{}", Encoding.UTF8, "application/json") }); });
@@ -440,8 +442,9 @@ public sealed class AgentGuardTests : IAsyncLifetime
         await h.Runtime(model, h.Sender()).Run(h.Job, CancellationToken.None);
 
         Assert.DoesNotContain("api.openai.com", hosts); // no fallback key configured: the second provider is never contacted
-        Assert.Equal("human", (await h.Fresh()).Status);
-        Assert.StartsWith("Pasé tu consulta al equipo del hospital", Assert.Single(h.Sent)); // not silence
+        Assert.Equal("agent", (await h.Fresh()).Status);
+        Assert.StartsWith("En este momento no puedo leer mensajes escritos", Assert.Single(h.Sent)); // not silence: the menu, which needs no model
+        Assert.Single(h.Interactive);
         Assert.Contains(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => a.Kind == "agent_provider");
     }
 }

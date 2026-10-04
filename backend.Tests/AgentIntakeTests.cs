@@ -27,6 +27,7 @@ public sealed class AgentIntakeTests : IAsyncLifetime
                 var response = AgentHarness.Json(answer(created)); response.StatusCode = status; return response;
             }
             if (path == $"/v1/patients/{created}") return AgentHarness.Json(new { patientId = created, givenNames = "Ana Sintética", familyNames = "López Prueba", phone = h.Contact.Phone });
+            if (path == "/v1/agenda/booking-options") return AgentHarness.Json(new { clinicalDayFrom = "", clinicalDayTo = "", maxDaysPerQuery = 31, rollState = "open", professionals = Array.Empty<object>() });
             throw new InvalidOperationException("Unexpected hospital request " + path);
         });
     }

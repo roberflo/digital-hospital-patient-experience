@@ -54,7 +54,21 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         }
         // The model gets the hospital's local clock: after 18:00 in El Salvador the UTC date is already tomorrow.
         var now = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, zone);
+        // A registration form in progress takes the next message as its answer, unless it is a question, a way out, or no longer needed.
+        if (await db.Activities.Where(x => x.ConversationId == conv.Id && x.Kind == "intake" && x.CreatedAt > DateTimeOffset.UtcNow.AddMinutes(-30)).OrderByDescending(x => x.CreatedAt).FirstOrDefaultAsync(ct) is { } form)
+        {
+            if (contact.PatientId is null && !latest.Body.Contains('?') && !latest.Body.Trim().Equals("salir", StringComparison.OrdinalIgnoreCase)) { await IntakeStep(form, latest.Body, ct); return; }
+            form.Kind = "intake_done"; form.Body = "{}"; await db.SaveChangesAsync(ct);
+        }
         if (AgentGuard.SlotChoice(latest.Body) is { } tapped) { await ProposeTapped(tapped, ct); return; }
+        // Without a record, «Agendar cita» starts the registration form: one short question at a time, no model.
+        if (contact.PatientId is null && latest.Body.Trim() is "AGENDAR")
+        {
+            var (start, prompt, _) = Intake.Start();
+            db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "intake", Actor = "Agente", ActorRole = "agent_ai", Body = JsonSerializer.Serialize(start, Json) }); await db.SaveChangesAsync(ct);
+            await conversations.Send(conv.Id, prompt, "agent", "agent:" + job.Id, ct: ct); return;
+        }
+        if (contact.PatientId is null && latest.Body.Trim() is "RECETA") { await Handoff(conv, "El contacto pide su receta y no tiene expediente vinculado.", ct); return; }
         // The two menu requests of a registered patient are complete on their own: they are served here, with no model call,
         // so they keep working while the AI provider is down or rate-limited. Without a record the conversation goes on to the agent.
         if (contact.PatientId is not null && latest.Body.Trim() is "AGENDAR") { await OfferSlots(asked, tenant.EmergencyPhone, ct); return; }
@@ -129,8 +143,8 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             // No provider answered (outage, rate limit, no credit). The patient is told a person will answer instead of being left in silence;
             // anything a tool already did stays recorded in the history for that person.
             db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "agent_provider", Actor = "Sistema", ActorRole = "system", Body = $"Ningún proveedor de IA respondió ({(ex as ClientResultException)?.Status.ToString() ?? ex.GetType().Name}). Conversación pasada a una persona." });
-            // A registered patient can still book and get the prescription from the menu, which needs no model: offer that instead of a person.
-            if (contact.PatientId is not null && calls == 0) { await db.SaveChangesAsync(CancellationToken.None); await conversations.Send(conv.Id, "En este momento no puedo leer mensajes escritos, pero sí puedo ayudarte con estas opciones:", "agent", "agent:" + job.Id, ct: CancellationToken.None, choices: Menu); return; }
+            // Booking, registering and the prescription all work from the menu, which needs no model: offer that instead of a person.
+            if (calls == 0) { await db.SaveChangesAsync(CancellationToken.None); await conversations.Send(conv.Id, "En este momento no puedo leer mensajes escritos, pero sí puedo ayudarte con estas opciones:", "agent", "agent:" + job.Id, ct: CancellationToken.None, choices: Menu); return; }
             await Handoff(conv, "La atención automática no está disponible en este momento.", CancellationToken.None); return;
         }
         fault?.Throw();
@@ -227,19 +241,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         AIFunctionFactory.Create((CancellationToken ct) => SendPrescription(null, ct), "send_latest_prescription", "Enviar la última receta firmada de este paciente cuando la solicita; el servidor elige la firma más reciente"),
         AIFunctionFactory.Create((string prescriptionId, CancellationToken ct) => SendPrescription(Guid.Parse(prescriptionId), ct), "send_prescription", "Entregar PDF firmado solicitado por el paciente"),
         AIFunctionFactory.Create(([Description("create, reschedule o cancel")] string action, string? doctorId = null, string? appointmentId = null, [Description("ISO8601 con zona")] string? startsAt = null, int? durationMinutes = null, CancellationToken ct = default) => Propose(action, doctorId, appointmentId, startsAt, durationMinutes, ct), "propose_action", "Proponer crear, mover o cancelar cita. Requiere confirmación del paciente"),
-        AIFunctionFactory.Create(async (string givenNames, string familyNames, [Description("YYYY-MM-DD")] string birthDate, [Description("female o male")] string sex, string emergencyContactName, [Description("Parentesco con el paciente")] string emergencyContactRelationship, string emergencyContactPhone, CancellationToken ct) =>
-        {
-            if (contact.PatientId is not null) throw new ArgumentException("El contacto ya tiene expediente");
-            if (proposal is not null) throw new ArgumentException("Una propuesta por turno");
-            if (sex is not ("female" or "male")) throw new ArgumentException("Sexo registral inválido");
-            var born = DateOnly.ParseExact(birthDate, "yyyy-MM-dd"); var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, zone).DateTime);
-            if (born > today.AddYears(-18) || born < today.AddYears(-120)) return Result(new { error = "Por WhatsApp sólo se registran personas adultas con fecha de nacimiento válida. Deriva a recepción." });
-            var payload = new JsonObject { ["action"] = "register", ["givenNames"] = Rules.Required(givenNames, 100), ["familyNames"] = Rules.Required(familyNames, 100), ["birthDate"] = birthDate, ["sex"] = sex, ["emergencyName"] = Rules.Required(emergencyContactName), ["emergencyRelationship"] = Rules.Required(emergencyContactRelationship, 60), ["emergencyPhone"] = Rules.Phone(emergencyContactPhone) };
-            var code = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(3));
-            db.Activities.Add(new Activity { TenantId = scope.Id, ContactId = contact.Id, ConversationId = conv.Id, Kind = "proposal:" + code, Actor = "Agente", ActorRole = "agent_ai", Body = payload.ToJsonString(Json) }); await db.SaveChangesAsync(ct);
-            summary = $"Registro: {payload["givenNames"]} {payload["familyNames"]}, nacimiento {born.Day} de {Months[born.Month - 1]} de {born.Year}, sexo {(sex == "female" ? "femenino" : "masculino")}. Contacto de emergencia: {payload["emergencyName"]} ({payload["emergencyRelationship"]}), {payload["emergencyPhone"]}.";
-            proposal = code; second = "Corregir datos"; return Result(new { confirmationRequired = true, code, instruction = "Repite al paciente los datos y pídele responder CONFIRMAR " + code + " para registrarse. Válido 15 minutos." });
-        }, "propose_registration", "Proponer el registro como paciente de quien escribe, cuando no tiene expediente. Requiere confirmación del paciente")
+        AIFunctionFactory.Create((string givenNames, string familyNames, [Description("YYYY-MM-DD")] string birthDate, [Description("female o male")] string sex, string emergencyContactName, [Description("Parentesco con el paciente")] string emergencyContactRelationship, string emergencyContactPhone, CancellationToken ct) => ProposeRegistration(givenNames, familyNames, birthDate, sex, emergencyContactName, emergencyContactRelationship, emergencyContactPhone, ct), "propose_registration", "Proponer el registro como paciente de quien escribe, cuando no tiene expediente. Requiere confirmación del paciente")
     ];
     /// <summary>The free hours of the asked day or, when it has none, of the first later day that does. Fills the tappable list for a registered patient.</summary>
     async Task<JsonElement> Availability(string date, string? doctorId, CancellationToken ct)
@@ -268,14 +270,16 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
     }
 
     /// <summary>«Agendar cita» from the menu: the first free hours, as a list to tap.</summary>
-    async Task OfferSlots(bool asked, string? emergencyPhone, CancellationToken ct)
+    /// <param name="lead">Said first. When it is set (the patient was just registered) an empty agenda is not a reason to hand off.</param>
+    async Task OfferSlots(bool asked, string? emergencyPhone, CancellationToken ct, string lead = "")
     {
-        JsonElement found;
+        JsonElement found = default;
         try { found = await Availability(TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, zone).ToString("yyyy-MM-dd"), null, ct); }
-        catch (Exception ex) when (ex is HttpRequestException or HospitalIntegrationException) { await Handoff(conv, "No se pudo consultar la agenda del hospital.", ct); return; }
+        catch (Exception ex) when (ex is HttpRequestException or HospitalIntegrationException) { if (lead.Length == 0) { await Handoff(conv, "No se pudo consultar la agenda del hospital.", ct); return; } }
+        if (slots.Count == 0 && lead.Length > 0) { await conversations.Send(conv.Id, lead + "¿Para qué día y hora quieres tu cita?", "agent", "agent:" + job.Id, ct: ct); return; }
         if (slots.Count == 0) { await Handoff(conv, "El paciente quiere agendar y no hay horarios publicados en los próximos 14 días.", ct); return; }
         var day = DateOnly.ParseExact(found.GetProperty("date").GetString()!, "yyyy-MM-dd");
-        var text = $"Estos son los primeros horarios libres: {Weekdays[(int)day.DayOfWeek]} {day.Day} de {Months[day.Month - 1]}. Toca uno para agendarlo, o escríbeme qué otro día prefieres.";
+        var text = lead + $"Estos son los primeros horarios libres: {Weekdays[(int)day.DayOfWeek]} {day.Day} de {Months[day.Month - 1]}. Toca uno para agendarlo, o escríbeme qué otro día prefieres.";
         if (askEmergency && !asked) text += $"\n\nNo tengo horarios en las próximas {AgentGuard.UrgentWindowHours} horas. {AgentGuard.EmergencyQuestion} Si lo es, responde EMERGENCIA y te paso con el equipo de inmediato{(emergencyPhone is { Length: > 0 } ? $", o llama al {emergencyPhone}" : "")}.";
         await conversations.Send(conv.Id, text, "agent", "agent:" + job.Id, ct: ct, choices: new(slots, "Ver horarios"));
     }
@@ -289,6 +293,32 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             if (sent.TryGetProperty("available", out var available) && available.ValueKind == JsonValueKind.False) await conversations.Send(conv.Id, "No tienes recetas emitidas disponibles. Si necesitas una, dime «quiero hablar con una persona» y te paso con recepción.", "agent", "agent:" + job.Id, ct: ct);
         }
         catch (Exception ex) when (ex is HttpRequestException or HospitalIntegrationException) { await Handoff(conv, "No se pudo entregar la receta que pidió el paciente.", ct); }
+    }
+    /// <summary>Stores the registration the patient still has to confirm; Hospital is not contacted here.</summary>
+    async Task<JsonElement> ProposeRegistration(string givenNames, string familyNames, string birthDate, string sex, string emergencyContactName, string emergencyContactRelationship, string emergencyContactPhone, CancellationToken ct)
+    {
+        if (contact.PatientId is not null) throw new ArgumentException("El contacto ya tiene expediente");
+        if (proposal is not null) throw new ArgumentException("Una propuesta por turno");
+        if (sex is not ("female" or "male")) throw new ArgumentException("Sexo registral inválido");
+        var born = DateOnly.ParseExact(birthDate, "yyyy-MM-dd"); var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, zone).DateTime);
+        if (born > today.AddYears(-18) || born < today.AddYears(-120)) return Result(new { error = "Por WhatsApp sólo se registran personas adultas con fecha de nacimiento válida. Deriva a recepción." });
+        var payload = new JsonObject { ["action"] = "register", ["givenNames"] = Rules.Required(givenNames, 100), ["familyNames"] = Rules.Required(familyNames, 100), ["birthDate"] = birthDate, ["sex"] = sex, ["emergencyName"] = Rules.Required(emergencyContactName), ["emergencyRelationship"] = Rules.Required(emergencyContactRelationship, 60), ["emergencyPhone"] = Rules.Phone(emergencyContactPhone) };
+        var code = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(3));
+        db.Activities.Add(new Activity { TenantId = scope.Id, ContactId = contact.Id, ConversationId = conv.Id, Kind = "proposal:" + code, Actor = "Agente", ActorRole = "agent_ai", Body = payload.ToJsonString(Json) }); await db.SaveChangesAsync(ct);
+        summary = $"Registro: {payload["givenNames"]} {payload["familyNames"]}, nacimiento {born.Day} de {Months[born.Month - 1]} de {born.Year}, sexo {(sex == "female" ? "femenino" : "masculino")}. Contacto de emergencia: {payload["emergencyName"]} ({payload["emergencyRelationship"]}), {payload["emergencyPhone"]}.";
+        proposal = code; second = "Corregir datos"; return Result(new { confirmationRequired = true, code, instruction = "Repite al paciente los datos y pídele responder CONFIRMAR " + code + " para registrarse. Válido 15 minutos." });
+    }
+
+    /// <summary>One answer of the registration form. The finished form becomes the same proposal the agent would make, and keeps no data behind.</summary>
+    async Task IntakeStep(Activity form, string answer, CancellationToken ct)
+    {
+        var (next, prompt, options) = JsonSerializer.Deserialize<Intake>(form.Body, Json)!.Answer(answer, DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, zone).DateTime));
+        if (next.Minor || next.Complete) { form.Kind = "intake_done"; form.Body = "{}"; } else { form.Body = JsonSerializer.Serialize(next, Json); form.CreatedAt = DateTimeOffset.UtcNow; }
+        await db.SaveChangesAsync(ct);
+        if (next.Minor) { await Handoff(conv, "Registro por WhatsApp de una persona menor de 18 años: requiere tutor legal en recepción.", ct); return; }
+        if (!next.Complete) { await conversations.Send(conv.Id, prompt, "agent", "agent:" + job.Id, ct: ct, choices: options); return; }
+        await ProposeRegistration(next.GivenNames!, next.FamilyNames!, next.BirthDate!, next.Sex!, next.EmergencyName!, next.EmergencyRelationship!, next.EmergencyPhone!, ct);
+        await conversations.Send(conv.Id, $"{summary}\n\nToca Confirmar o responde CONFIRMAR {proposal}. Válido 15 minutos.", "agent", "agent:" + job.Id, ct: ct, choices: Confirmation());
     }
     /// <summary>Stores a proposal the patient still has to confirm; nothing reaches the agenda here.</summary>
     async Task<JsonElement> Propose(string action, string? doctorId, string? appointmentId, string? startsAt, int? durationMinutes, CancellationToken ct)
@@ -368,7 +398,8 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         await hospital.GetVerifiedPatientAsync(scope.Id, patient, contact.Phone, ct);
         contact.PatientId = patient;
         db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "patient_registered", Actor = "Agente", ActorRole = "agent_ai", Body = "Paciente registrado en Hospital por WhatsApp, con confirmación del paciente." }); await db.SaveChangesAsync(ct);
-        await conversations.Send(conv.Id, "Listo, quedaste registrado en el hospital. ¿Para qué día y hora quieres tu cita?", "agent", "confirm:" + job.Id, ct: ct);
+        // The patient came to book: the free hours go out with the confirmation, without being asked for.
+        await OfferSlots(true, null, ct, "Listo, quedaste registrado en el hospital. ");
     }
     static void RequirePatient(Contact c) { if (c.PatientId is null) throw new ArgumentException("Recepción debe vincular el expediente del paciente"); }
     async Task Handoff(Conversation conv, string reason, CancellationToken ct, bool urgent = false)
