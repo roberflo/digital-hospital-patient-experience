@@ -40,7 +40,7 @@ public static class Identity
                 await db.Members.IgnoreQueryFilters().AnyAsync(x=>x.Subject==sub)) return false;
             var hospital = new Tenant { Id=tenant, Name="Hospital · configura tu nombre", AgentEnabled=false };
             db.Tenants.Add(hospital);
-            try { await db.SaveChangesAsync(); }
+            try { await db.SaveChangesAsync(); ctx.Items["tenant-created"] = true; }
             catch (DbUpdateException ex) when(ex.InnerException is Npgsql.PostgresException { SqlState:Npgsql.PostgresErrorCodes.UniqueViolation }) { db.Entry(hospital).State=EntityState.Detached; }
         }
         // Global subject uniqueness prevents a signed user from drifting to a second business.

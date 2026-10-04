@@ -37,11 +37,12 @@ public static class HospitalConnectionEndpoints
             sharedIdentity = ctx.User.FindFirst("iss")?.Value == config["Auth:Authority"] && !string.IsNullOrEmpty(config["Auth:Authority"]),
             hospitalLoginAvailable = !string.IsNullOrEmpty(config["Auth:Authority"]), u.Name, u.Role
         });
-        api.MapPost("/connection/check", async (CrmDb db, TenantScope t, HospitalClient h, CancellationToken ct) =>
+        api.MapPost("/connection/check", async (CrmDb db, TenantScope t, CurrentUser u, HospitalClient h, ILogger<HospitalClient> log, CancellationToken ct) =>
         {
             var zone = await db.Tenants.Where(x => x.Id == t.Id).Select(x => x.TimeZone).SingleAsync(ct);
             var day = HospitalClient.ClinicalDay(DateTimeOffset.UtcNow, zone);
             await h.GetAvailabilityAsync(t.Id, day, day, ct: ct);
+            await HospitalIdentitySync.Run(db, t, u, h, log, ct);
             return Results.Ok(new { connected = true, checkedAt = DateTimeOffset.UtcNow });
         });
         // POST keeps patient search terms out of browser history and proxy request URLs.

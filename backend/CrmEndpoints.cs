@@ -79,15 +79,22 @@ public static class CrmEndpoints
             u.RequireAdmin(); var tenant = await db.Tenants.SingleAsync(x => x.Id == t.Id);
             return new { tenant.Name, tenant.Guide, tenant.TimeZone, tenant.AgentEnabled, tenant.GoogleCalendarId, googleConnected = tenant.GoogleRefreshToken != null, hospitalConfigured = h.IsConfigured(t.Id), kapsoConfigured = !string.IsNullOrEmpty(c["KAPSO_API_KEY"]), aiConfigured = !string.IsNullOrEmpty(c["NVIDIA_API_KEY"]), sendEnabled = c["SEND_ENABLED"] == "true", manualSendEnabled = c["SEND_ENABLED"] == "true" || c["KAPSO_MANUAL_SEND_ENABLED"] == "true", aiModel = c["AI_MODEL"] ?? "nvidia/nemotron-3-super-120b-a12b" };
         });
-        api.MapPut("/settings", async (SettingsInput b, CrmDb db, TenantScope t, CurrentUser u) =>
+        api.MapPut("/settings", async (SettingsInput b, CrmDb db, TenantScope t, CurrentUser u, HospitalClient h) =>
         {
             u.RequireAdmin(); if (b.Guide.Length > 30000) throw new ArgumentException("Guía demasiado extensa");
             try { TimeZoneInfo.FindSystemTimeZoneById(b.TimeZone); } catch (TimeZoneNotFoundException) { throw new ArgumentException("Zona horaria inválida"); }
-            var row = await db.Tenants.SingleAsync(x => x.Id == t.Id); row.Name = Rules.Required(b.Name); row.Guide = b.Guide; row.TimeZone = b.TimeZone; row.AgentEnabled = b.AgentEnabled;
+            var row = await db.Tenants.SingleAsync(x => x.Id == t.Id); ApplySettings(row, b, h.IsConfigured(t.Id));
             Audit(db, t, u, "settings.updated", t.Id); await db.SaveChangesAsync(); return Results.Ok();
         });
         api.MapGet("/audit", async (CrmDb db, CurrentUser u) => { u.RequireAdmin(); return await db.Audits.OrderByDescending(x => x.CreatedAt).Take(200).ToListAsync(); });
         api.MapGet("/jobs", async (CrmDb db, CurrentUser u) => { u.RequireAdmin(); return await db.Jobs.OrderByDescending(x => x.CreatedAt).Take(100).ToListAsync(); });
+    }
+    // A connected hospital's name and zone belong to Hospital; a manual edit would be overwritten at the next sync.
+    public static void ApplySettings(Tenant row, SettingsInput b, bool hospitalConnected)
+    {
+        var name = Rules.Required(b.Name);
+        if (!hospitalConnected) { row.Name = name; row.TimeZone = b.TimeZone; }
+        row.Guide = b.Guide; row.AgentEnabled = b.AgentEnabled;
     }
     static void SetContact(Contact row, ContactInput b, IConfiguration c) { row.Name = Rules.Required(b.Name); row.Phone = Rules.Phone(b.Phone); row.PhoneHash = Rules.PhoneHash(b.Phone, c["PHONE_HASH_KEY"]!); row.Email = b.Email ?? ""; row.Tags = b.Tags ?? ""; if (row.Email.Length > 320 || row.Tags.Length > 500) throw new ArgumentException("Campo demasiado largo"); }
     static void ValidateStage(string stage) { if (stage is not ("new" or "contacted" or "scheduled" or "won" or "lost")) throw new ArgumentException("Etapa inválida"); }

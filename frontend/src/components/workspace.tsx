@@ -2112,13 +2112,28 @@ function SettingsView({ me }: { me: Me }) {
                 <div className="form-grid">
                   <label>
                     Nombre del hospital
-                    <input name="name" defaultValue={data.name} required />
+                    <input
+                      name="name"
+                      defaultValue={data.name}
+                      required
+                      readOnly={data.hospitalConfigured}
+                    />
                   </label>
                   <label>
                     Zona horaria
-                    <input name="timeZone" defaultValue={data.timeZone} required />
+                    <input
+                      name="timeZone"
+                      defaultValue={data.timeZone}
+                      required
+                      readOnly={data.hospitalConfigured}
+                    />
                   </label>
                 </div>
+                {data.hospitalConfigured && (
+                  <p className="hint">
+                    El nombre y la zona horaria vienen de Hospital y se actualizan desde allí.
+                  </p>
+                )}
                 <label>
                   Guía de atención
                   <textarea

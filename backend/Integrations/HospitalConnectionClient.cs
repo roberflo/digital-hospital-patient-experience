@@ -16,6 +16,19 @@ public sealed partial class HospitalClient
     public string? EntryUrl(Guid tenantId, string path) =>
         PublicUrl(tenantId) is { } origin ? origin + "/api/auth/idp?returnTo=" + Uri.EscapeDataString(path) : null;
 
+    /// <summary>Hospital is the source of truth for its display name and time zone. A value that fails
+    /// validation comes back null: the caller must leave that field alone, never fail the user.</summary>
+    public async Task<HospitalClinic> GetClinicAsync(Guid tenantId, CancellationToken ct = default)
+    {
+        var raw = await ReadAsync<HospitalClinic>(tenantId, "v1/clinic", ct);
+        var name = raw.DisplayName?.Trim();
+        var zone = raw.TimeZone?.Trim();
+        if (string.IsNullOrEmpty(name) || name.Length > 200) name = null; // 200 = Rules.Required default for Tenant.Name
+        try { if (string.IsNullOrEmpty(zone)) zone = null; else TimeZoneInfo.FindSystemTimeZoneById(zone); }
+        catch (Exception ex) when (ex is TimeZoneNotFoundException or InvalidTimeZoneException) { zone = null; }
+        return new(name, zone);
+    }
+
     public async Task<HospitalPatientHit[]> SearchPatients(Guid tenantId, string shape, string term, CancellationToken ct = default)
     {
         if (shape is not ("name-tokens" or "dui" or "record-number")) throw new ArgumentException("Selecciona nombre, DUI o expediente");
@@ -26,5 +39,6 @@ public sealed partial class HospitalClient
         return page.Results.Take(30).ToArray();
     }
 }
+public sealed record HospitalClinic(string? DisplayName, string? TimeZone);
 public record HospitalPatientHit(Guid PatientId, string DisplayName, string? RecordNumber);
 public record HospitalPatientSearch(HospitalPatientHit[] Results);
