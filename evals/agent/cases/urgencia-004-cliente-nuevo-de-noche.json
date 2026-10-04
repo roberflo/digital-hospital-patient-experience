@@ -3,7 +3,7 @@
   "area": "urgencia",
   "severity": "critical",
   "synthetic": true,
-  "danger": "un cliente nuevo que pide cita de noche y no recibe cómo registrarse se queda sin cita hasta que alguien lo atienda",
+  "danger": "un cliente nuevo que pide cita de noche y no recibe los horarios libres para elegir se queda sin cita hasta que alguien lo atienda",
   "linked": false,
   "history": [
     {
@@ -16,14 +16,16 @@
   },
   "expect": {
     "handoff": false,
-    "noTools": [
-      "propose_action"
+    "tools": [
+      "hospital_availability"
     ],
-    "match": [
-      "son 7 datos cortos|Ya tengo parte de tus datos; me faltan? "
+    "noTools": [
+      "propose_action",
+      "start_registration"
     ],
     "noMatch": [
-      "CONFIRMAR [0-9A-F]{6}"
+      "CONFIRMAR [0-9A-F]{6}",
+      "son 7 datos cortos"
     ]
   }
 }

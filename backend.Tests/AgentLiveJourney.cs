@@ -52,24 +52,21 @@ public sealed class AgentLiveJourney(ITestOutputHelper output)
         }
         string TapConfirm() => Tap(i => i.GetProperty("action").GetProperty("buttons")[0], "button_reply");
 
-        // 1. Registration.
-        var asked = await Turn(null);
-        Assert.Matches("(?i)nacimiento", asked);
-        var proposal = await Turn($"Me llamo Ana Sintética {family}. Nombres: Ana Sintética. Apellidos: {family}. Nací el 12 de marzo de 1990. Sexo femenino. Mi contacto de emergencia es Carlos Sintético, mi hermano, teléfono 70000001.");
-        Assert.Contains($"*Ana Sintética {family}*\nNacimiento: 12 de marzo de 1990\nSexo: femenino", proposal);
+        // 1. The hour first (agent-slot-first): the agent reads the agenda, the patient taps the first free hour and the form asks for the data.
+        await Turn(null);
+        Assert.Equal("list", h.Interactive[^1].GetProperty("type").GetString());
+        Assert.Contains("son 7 datos cortos", await Turn(Tap(i => i.GetProperty("action").GetProperty("sections")[0].GetProperty("rows")[0], "list_reply")));
+        var offer = ""; foreach (var answer in new[] { "Ana Sintética", family, "12/03/1990", "Femenino", "Carlos Sintético", "Hermano", "7000 0001" }) offer = await Turn(answer);
+        Assert.Contains($"*Ana Sintética {family}*\nNacimiento: 12 de marzo de 1990\nSexo: femenino", offer);
         Assert.Null(h.Contact.PatientId);
-        var registered = await Turn(TapConfirm());
+
+        // 2. One card, one Confirmar: the record and the appointment.
+        var booked = await Turn(TapConfirm());
         await h.Db.Entry(h.Contact).ReloadAsync();
         var patient = Assert.NotNull(h.Contact.PatientId);
-        Assert.Contains("ya te registré", registered);
+        Assert.Contains("ya te registré", booked);
         var record = await hospital.GetVerifiedPatientAsync(tenant, patient, h.Contact.Phone); // Hospital really holds the record, with this phone
         Assert.Equal(family, record.FamilyNames);
-
-        // 2. Booking the first free slot.
-        var offer = await Turn("Quiero la primera cita disponible, con cualquier doctor.");
-        // If the agent listed the free hours, the patient taps the first one; if it proposed directly, there is already a Confirmar button.
-        if (h.Interactive[^1].GetProperty("type").GetString() == "list") offer = await Turn(Tap(i => i.GetProperty("action").GetProperty("sections")[0].GetProperty("rows")[0], "list_reply"));
-        var booked = await Turn(TapConfirm());
         Assert.Contains("quedó agendada", booked);
         Assert.Equal("agent", (await h.Fresh()).Status);
         var summary = Regex.Match(offer, @"\*Cita:\* \w+ (\d+) de (\w+)(?: de (\d{4}))? a las (\d{2}):(\d{2})"); Assert.True(summary.Success, "No server summary in: " + offer);
@@ -175,18 +172,15 @@ public sealed class AgentLiveJourney(ITestOutputHelper output)
 
         await Turn(null);
         Assert.Equal("AGENDAR", AgentHarness.Options(h.Interactive[^1])[0].Id);
-        Assert.Contains("son 7 datos cortos", await Turn("AGENDAR"));
+        await Turn("AGENDAR"); // the hour first (agent-slot-first): the free hours, then the form for the one tapped
+        Assert.Contains("son 7 datos cortos", await Turn(h.Interactive[^1].GetProperty("action").GetProperty("sections")[0].GetProperty("rows")[0].GetProperty("id").GetString()));
         string reply = ""; foreach (var answer in new[] { "Ana Sintética", family, "12/03/1990", "Femenino", "Carlos Sintético", "Hermano", "7000 0001" }) reply = await Turn(answer);
-        Assert.Contains($"*Ana Sintética {family}*", reply);
+        Assert.Contains($"*Ana Sintética {family}*", reply); Assert.Contains("*Cita:*", reply);
 
-        var registered = await Turn(Button(0));
+        var booked = await Turn(Button(0)); // one Confirmar: the record and the appointment
         await h.Db.Entry(h.Contact).ReloadAsync();
         var patient = Assert.NotNull(h.Contact.PatientId);
-        Assert.Contains("ya te registré", registered);
-        var row = h.Interactive[^1].GetProperty("action").GetProperty("sections")[0].GetProperty("rows")[0];
-
-        await Turn(row.GetProperty("id").GetString());
-        var booked = await Turn(Button(0));
+        Assert.Contains("ya te registré", booked);
         Assert.Contains("quedó agendada", booked);
 
         var today = HospitalClient.ClinicalDay(DateTimeOffset.UtcNow, "America/El_Salvador");

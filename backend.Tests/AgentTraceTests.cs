@@ -59,10 +59,14 @@ public sealed class AgentTraceTests : IAsyncLifetime
     [Fact]
     public async Task RegistrationFormInProgressNeverShowsInTheHistory()
     {
-        await Say("AGENDAR"); await Say("Ana Sintética"); await Say("López Prueba");
+        var hour = new DateTimeOffset(DateTime.UtcNow.Date.AddDays(3).AddHours(15), TimeSpan.Zero).ToOffset(TimeSpan.FromHours(-6)).ToString("yyyy-MM-ddTHH:mm:sszzz");
+        await Say($"CITA {hour} {Guid.NewGuid()} 30 Dra. Sintética Rivas");
+        Assert.Contains(hour, Assert.Single(await Trail(), a => a.Kind == "intake").Body); // the form is open and holds the hour
+        await Say("Ana Sintética"); await Say("López Prueba");
 
         var feed = ((Microsoft.AspNetCore.Http.HttpResults.Ok<ActivityFeedPage>)await ActivityFeed.Read(h.Db, h.Scope, null, null, null, null, h.Conversation.Id, null, null, 1, CancellationToken.None)).Value!;
         Assert.DoesNotContain(feed.Items, item => item.Kind.StartsWith("intake") || item.Body.Contains("Sintética") || item.Body.Contains("givenNames"));
+        Assert.DoesNotContain(feed.Items, item => item.Body.Contains(hour[..16])); // nor the hour chosen with it (agent-slot-first INV-T-5)
         Assert.Contains(feed.Items, item => item.Body == "Inicio del registro guiado: completado."); // that it started is history; what was typed is not
     }
 
@@ -77,7 +81,10 @@ public sealed class AgentTraceTests : IAsyncLifetime
             if (path.StartsWith("/v1/patients/")) return Task.FromResult(AgentHarness.Json(new { patientId = patient, givenNames = "Ana Sintética", familyNames = "López Prueba", phone = h.Contact.Phone }));
             return Task.FromResult(AgentHarness.Json(new { clinicalDayFrom = "", clinicalDayTo = "", maxDaysPerQuery = 31, rollState = "open", professionals = Array.Empty<object>() }));
         });
-        foreach (var text in new[] { "AGENDAR", "Ana Sintética", "López Prueba", "12/03/1990", "Femenino", "Carlos Sintético", "Hermano", "7000 0001", "Sí" }) await Say(text, hospital);
+        // Registering without having chosen an hour: the agent opens the form, the rest needs no model.
+        await h.Runtime(h.Model(AgentHarness.ToolCall("start_registration", new { }), AgentHarness.Reply("Ok")), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
+        Assert.Single(await Trail(), a => a.Kind == "intake");
+        foreach (var text in new[] { "Ana Sintética", "López Prueba", "12/03/1990", "Femenino", "Carlos Sintético", "Hermano", "7000 0001", "Sí" }) await Say(text, hospital);
 
         await h.Db.Entry(h.Contact).ReloadAsync();
         Assert.Equal("Ana Sintética López Prueba", h.Contact.Name); // the CRM shows who the person said they are, not the WhatsApp profile name
@@ -102,7 +109,9 @@ public sealed class AgentTraceTests : IAsyncLifetime
     [Fact]
     public async Task TheFormThanksByName()
     {
-        await Say("AGENDAR"); await Say("Ana Sintética");
+        await Say($"CITA {new DateTimeOffset(DateTime.UtcNow.Date.AddDays(3).AddHours(15), TimeSpan.Zero).ToOffset(TimeSpan.FromHours(-6)):yyyy-MM-ddTHH:mm:sszzz} {Guid.NewGuid()} 30 Dra. Sintética Rivas");
+        Assert.Single(await Trail(), a => a.Kind == "intake");
+        await Say("Ana Sintética");
 
         Assert.StartsWith("Gracias, Ana.", h.Sent[^1]);
     }

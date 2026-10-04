@@ -16,7 +16,7 @@ public static partial class WhatsAppContent
         return Text(kapso, "content") ?? (message.TryGetProperty("text", out var text) ? Text(text, "body") : null) ?? "[Archivo recibido]";
     }
     static string? Text(JsonElement value, string name) => value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out var found) && found.ValueKind == JsonValueKind.String ? found.GetString() : null;
-    [GeneratedRegex(@"^(?:CONFIRMAR [0-9A-F]{6}|EMERGENCIA|ACTIVAR RECORDATORIOS|BAJA|AGENDAR|RECETA|PERSONA|MENU|MISCITAS|(?:VERCITA|CANCELAR) [0-9a-fA-F-]{36}|MOVER [0-9a-fA-F-]{36}(?: \S{10,40} [0-9a-fA-F-]{36} \d{1,3}(?: .{1,60})?)?|CITA \S{10,40} [0-9a-fA-F-]{36} \d{1,3}(?: .{1,60})?)$")] private static partial Regex Command();
+    [GeneratedRegex(@"^(?:CONFIRMAR [0-9A-F]{6}|CORREGIR [0-9A-F]{6}|EMERGENCIA|ACTIVAR RECORDATORIOS|BAJA|AGENDAR|RECETA|PERSONA|MENU|MISCITAS|(?:VERCITA|CANCELAR) [0-9a-fA-F-]{36}|MOVER [0-9a-fA-F-]{36}(?: \S{10,40} [0-9a-fA-F-]{36} \d{1,3}(?: .{1,60})?)?|CITA \S{10,40} [0-9a-fA-F-]{36} \d{1,3}(?: .{1,60})?)$")] private static partial Regex Command();
 }
 
 /// <summary>Options the patient can tap instead of typing. Up to three short ones are reply buttons; more, or any with a description, are a list.</summary>

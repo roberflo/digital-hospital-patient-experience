@@ -138,6 +138,19 @@ public sealed class AgentMemoryTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ThePromptSendsANewClientToTheFreeHoursFirst()
+    {
+        // agent-slot-first T-15. That the model obeys is only seen in the evals; that it is told is checked here.
+        await Run(Model(() => AgentHarness.Reply("Ese dato no lo tengo.")));
+
+        var system = Said(seen[0], "system");
+        Assert.Contains("Cliente sin expediente que quiere una cita: consulta hospital_availability como con cualquier paciente", system);
+        Assert.Contains("No le pidas datos antes de que elija horario ni uses propose_action con él", system);
+        Assert.Contains("Usa start_registration solo si pide registrarse sin pedir cita o si ya escribió alguno de sus datos, aunque sea sólo su nombre", system);
+        Assert.DoesNotContain("regístralo, y pídele los datos en esa misma respuesta", system);
+    }
+
+    [Fact]
     public async Task PreferredDoctorAndTimeOfDayComeFirstInTheList()
     {
         Guid usual = Guid.NewGuid(), other = Guid.NewGuid();

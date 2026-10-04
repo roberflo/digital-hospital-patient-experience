@@ -126,7 +126,9 @@ public sealed class AgentVoiceTests : IAsyncLifetime
     [Fact]
     public async Task EveryStepOfRegisteringReadsLikeAChat()
     {
-        await h.Say("patient", "AGENDAR"); await h.Runtime(NoModel, h.Sender()).Run(h.Job, CancellationToken.None);
+        // Registering without having chosen an hour: the agent opens the form, the rest needs no model.
+        await h.Runtime(h.Model(AgentHarness.ToolCall("start_registration", new { }), AgentHarness.Reply("Ok")), h.Sender()).Run(h.Job, CancellationToken.None);
+        Assert.Single(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id && a.Kind == "intake").ToListAsync());
         foreach (var answer in new[] { "Ana Sintética", "López Prueba", "12/03/1990", "Femenino", "Carlos Sintético", "Hermano", "7000 0001" }) { await h.Say("patient", answer); await h.Runtime(NoModel, h.Sender()).Run(h.Job, CancellationToken.None); }
 
         Assert.All(h.Sent, ReadsLikeAChat);

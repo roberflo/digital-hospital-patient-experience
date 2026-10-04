@@ -27,7 +27,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
     Guid activeJobId;
     // State of the turn in progress; the runtime is resolved once per job.
     Conversation conv = null!; Contact contact = null!; Channel channel = null!; Job job = null!; long revision;
-    TimeZoneInfo zone = TimeZoneInfo.Utc; readonly StringBuilder grounding = new(); string? proposal, summary, second; int calls; readonly List<Choice> slots = []; List<Message> session = []; readonly Dictionary<Guid, string> doctors = []; bool askEmergency, foreignId, refill, startIntake, forOther; DateOnly? firstDay; string? offer; string?[] known = []; bool stopped; ExceptionDispatchInfo? fault;
+    TimeZoneInfo zone = TimeZoneInfo.Utc; readonly StringBuilder grounding = new(); string? proposal, summary, second; bool withHour; int calls; readonly List<Choice> slots = []; List<Message> session = []; readonly Dictionary<Guid, string> doctors = []; bool askEmergency, foreignId, refill, startIntake, forOther; DateOnly? firstDay; string? offer; string?[] known = []; bool stopped; ExceptionDispatchInfo? fault; Guid? unverified;
     public async Task Run(Job job, CancellationToken ct)
     {
         activeJobId = job.Id; this.job = job;
@@ -79,35 +79,36 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         {
             await Confirm(conv, contact, latest.Body.Trim()[10..].Trim(), job, ct); return;
         }
+        if (latest.Body.Trim().StartsWith("CORREGIR ", StringComparison.OrdinalIgnoreCase)) { await Correct(latest.Body.Trim()[9..].Trim(), ct); return; }
         // The model gets the hospital's local clock: after 18:00 in El Salvador the UTC date is already tomorrow.
         var now = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, zone);
         // «Sí» right after a proposal is the confirmation: one pending proposal, made in the message the patient is answering.
+        // With anything the agent said after the card (the list of «Otro horario», the menu) «sí» answers that, never the card above it.
         if (AgentGuard.Affirms(latest.Body) && history.Count > 1 && history[^2].Sender != "patient")
         {
             var pending = await db.Activities.Where(x => x.ConversationId == conv.Id && x.Kind.StartsWith("proposal:") && x.CreatedAt > DateTimeOffset.UtcNow.AddMinutes(-15)).Select(x => new { x.Kind, x.CreatedAt }).ToListAsync(ct);
-            if (pending.Count == 1 && pending[0].CreatedAt <= history[^2].CreatedAt.AddSeconds(5) && !history.Any(x => x.Sender != "patient" && x.CreatedAt > history[^2].CreatedAt)) { await Confirm(conv, contact, pending[0].Kind[9..], job, ct); return; }
+            if (pending.Count == 1 && pending[0].CreatedAt <= history[^2].CreatedAt.AddSeconds(5) && !history.Any(x => x.Sender != "patient" && x.CreatedAt > history[^2].CreatedAt)
+                && !history.Any(x => x.Sender != "patient" && x.CreatedAt > pending[0].CreatedAt && x.CreatedAt < history[^2].CreatedAt)) { await Confirm(conv, contact, pending[0].Kind[9..], job, ct); return; }
         }
-        // A registration form in progress takes the next message as its answer, unless it is a question, a way out, or no longer needed.
-        if (await db.Activities.Where(x => x.ConversationId == conv.Id && x.Kind == "intake" && x.CreatedAt > DateTimeOffset.UtcNow.AddMinutes(-30)).OrderByDescending(x => x.CreatedAt).FirstOrDefaultAsync(ct) is { } form)
+        // A registration form in progress takes the next message as its answer, unless it is a question, a way out, a menu command, another hour tapped,
+        // thirty minutes old, or no longer needed. A form that is not answered is deleted, and the hour chosen with it: working state, not history.
+        if (await db.Activities.Where(x => x.ConversationId == conv.Id && x.Kind == "intake").OrderByDescending(x => x.CreatedAt).ToListAsync(ct) is { Count: > 0 } forms)
         {
-            if (contact.PatientId is null && !latest.Body.Contains('?') && !latest.Body.Trim().Equals("salir", StringComparison.OrdinalIgnoreCase)) { await IntakeStep(form, latest.Body, ct); return; }
-            db.Activities.Remove(form); await db.SaveChangesAsync(ct); // working state, not history: nothing of it is kept
+            // ponytail: an hour tapped in the middle of the form starts it over with the new hour and the answers given are lost; keeping them needs new wording for the patient.
+            var answers = forms[0].CreatedAt > DateTimeOffset.UtcNow.AddMinutes(-30) && AgentGuard.SlotChoice(latest.Body) is null && contact.PatientId is null && !latest.Body.Contains('?') && !latest.Body.Trim().Equals("salir", StringComparison.OrdinalIgnoreCase) && !Menu.Options.Any(option => option.Id == latest.Body.Trim());
+            // ponytail: an expired form goes when the patient writes again, not by the clock; a sweep in AgentWorker if that is ever needed (plan P-2).
+            db.Activities.RemoveRange(answers ? forms.Skip(1) : forms);
+            if (answers) { await IntakeStep(forms[0], latest.Body, ct); return; }
+            await db.SaveChangesAsync(ct);
         }
-        if (AgentGuard.SlotChoice(latest.Body) is { } tapped) { await ProposeTapped(tapped, ct); return; }
-        // Without a record, «Agendar cita» starts the registration form: one short question at a time, no model.
-        if (contact.PatientId is null && latest.Body.Trim() is "AGENDAR")
-        {
-            var (start, prompt, _) = Intake.Start(); Trace("start_registration");
-            db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "intake", Actor = "Agente", ActorRole = "agent_ai", Body = JsonSerializer.Serialize(start, Json) }); await db.SaveChangesAsync(ct);
-            await conversations.Send(conv.Id, prompt, "agent", "agent:" + job.Id, ct: ct); return;
-        }
+        if (AgentGuard.SlotChoice(latest.Body) is { } tapped) { await ProposeTapped(tapped, latest.Body.Trim(), ct); return; }
         // The patient's own appointments: see them, change one, cancel one. Each step is a tap and none needs the model.
         if (latest.Body.Trim() is "MISCITAS") { await MyAppointments(ct); return; }
         if (contact.PatientId is not null && AgentGuard.AppointmentChoice(latest.Body) is { } choice) { await AppointmentAction(choice, ct); return; }
         if (contact.PatientId is null && latest.Body.Trim() is "RECETA") { await OfferPerson("El contacto pide su receta y no tiene expediente vinculado.", "Para enviarte recetas, recepción tiene que vincular primero tu expediente.", ct); return; }
-        // The two menu requests of a registered patient are complete on their own: they are served here, with no model call,
-        // so they keep working while the AI provider is down or rate-limited. Without a record the conversation goes on to the agent.
-        if (contact.PatientId is not null && latest.Body.Trim() is "AGENDAR") { await OfferSlots(asked, tenant.EmergencyPhone, ct); return; }
+        // The menu requests are complete on their own: they are served here, with no model call, so they keep working while the AI provider
+        // is down or rate-limited. «Agendar cita» shows the free hours to anyone: without a record, tapping one opens the registration form.
+        if (latest.Body.Trim() is "AGENDAR") { await OfferSlots(asked, tenant.EmergencyPhone, ct); return; }
         if (contact.PatientId is not null && latest.Body.Trim() is "RECETA") { await DeliverLatest(ct); return; }
         // Only a greeting: the menu goes out at once, with no model call.
         if (AgentGuard.IsGreeting(latest.Body)) { await conversations.Send(conv.Id, $"¡Hola{(FirstName(contact.Name) is { } name ? ", " + name : "")}! Soy el asistente de recepción de {tenant.Name}.\n¿En qué te ayudo?", "agent", "agent:" + job.Id, ct: ct, choices: Menu); return; }
@@ -142,8 +143,10 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             Información del hospital (horarios, ubicación, precios, pagos, seguros, preparación de estudios): responde solo con lo que conste en la guía
             o en resultados de herramientas. Si el dato no consta, di que no lo tienes y ofrece pasar la consulta a recepción; nunca lo estimes.
             Escribe texto plano para WhatsApp, sin Markdown. Nunca muestres identificadores internos (IDs de recetas, citas, doctores o pacientes): nombra fecha, hora y doctor.
-            Cliente sin expediente que quiere una cita: regístralo, y pídele los datos en esa misma respuesta. Pide nombres, apellidos, fecha de nacimiento, el sexo que aparece en su documento de identidad (femenino o masculino)
-            y un contacto de emergencia (nombre, parentesco y teléfono). Usa start_registration pasándole los datos que el paciente ya dijo en la conversación, sin suponer ninguno: el sistema pide los que falten uno por uno
+            Cliente sin expediente que quiere una cita: consulta hospital_availability como con cualquier paciente; el sistema adjunta la lista y, cuando toca un horario, le pide sus datos
+            y le envía una sola propuesta con su registro y su cita. No le pidas datos antes de que elija horario ni uses propose_action con él.
+            Usa start_registration solo si pide registrarse sin pedir cita o si ya escribió alguno de sus datos, aunque sea sólo su nombre (nombres, apellidos, fecha de nacimiento, el sexo que aparece en su documento de identidad —femenino o masculino—
+            y un contacto de emergencia con nombre, parentesco y teléfono): pásale los que el paciente ya dijo en la conversación, sin suponer ninguno: el sistema pide los que falten uno por uno
             (no los pidas tú en una lista) y, cuando están todos, le muestra la propuesta; el paciente confirma con el botón o diciendo que sí,
             y después ya puede agendar. Reúne los datos de TODOS los mensajes de la conversación antes de pedir alguno otra vez. No completes ni supongas ningún dato. No registres a menores de 18 años ni a otra persona distinta de quien escribe: deriva.
             Si dice que ya es paciente, o pregunta por citas o recetas que ya tiene, y no hay expediente vinculado, deriva para que recepción lo vincule.
@@ -289,16 +292,60 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "handoff_offer", Actor = "Agente", ActorRole = "agent_ai", Body = reason }); await db.SaveChangesAsync(ct);
         await conversations.Send(conv.Id, message + "\n\n" + AgentGuard.PersonQuestion, "agent", "agent:" + job.Id, ct: ct, choices: new([new("PERSONA", "Hablar con persona"), new("MENU", "Seguir aquí")]));
     }
-    Choices Confirmation() => new([new("CONFIRMAR " + proposal, "Confirmar"), new("otro", second ?? "Otro horario")]);
+    // The card with a registration and its appointment has two ways back, and both are commands served without the model:
+    // the data («Corregir datos») or the hour («Otro horario» is the menu's «Agendar cita»: the list again, and the tap reissues the card).
+    Choices Confirmation() => new(withHour ? [new("CONFIRMAR " + proposal, "Confirmar"), new("CORREGIR " + proposal, "Corregir datos"), new("AGENDAR", "Otro horario")] : [new("CONFIRMAR " + proposal, "Confirmar"), new("otro", second ?? "Otro horario")]);
+    /// <summary>A start the agenda can take: with an explicit offset (a bare local time would be read in the server's zone, not the hospital's) and still ahead.</summary>
+    static DateTimeOffset? Future(string? startsAt) => startsAt is not null && Regex.IsMatch(startsAt, @"(Z|[+-]\d{2}:\d{2})$") && DateTimeOffset.TryParse(startsAt, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var start) && start > DateTimeOffset.UtcNow ? start : null;
     string When(DateTimeOffset start) { var local = TimeZoneInfo.ConvertTime(start, zone); return $"{Weekdays[(int)local.DayOfWeek]} {local.Day} de {Months[local.Month - 1]}{(local.Year == TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, zone).Year ? "" : " de " + local.Year)} a las {local:HH:mm}"; }
 
     /// <summary>The patient tapped a free slot. That is a complete request, so the proposal is created here, without the model.</summary>
-    async Task ProposeTapped((string StartsAt, Guid Doctor, int Minutes, string Name) slot, CancellationToken ct)
+    async Task ProposeTapped((string StartsAt, Guid Doctor, int Minutes, string Name) slot, string raw, CancellationToken ct)
     {
-        if (contact.PatientId is null) { await conversations.Send(conv.Id, "Para agendar ese horario primero necesito registrarte.\nToca *Agendar cita* en el menú o escríbeme «hola» y te guío.", "agent", "agent:" + job.Id, ct: ct); return; }
-        try { await Propose("create", slot.Doctor.ToString(), null, slot.StartsAt, slot.Minutes, ct, slot.Name); Trace("propose_action"); }
+        try
+        {
+            if (contact.PatientId is null)
+            {
+                // Without a record the hour is only kept, with the form that asks for the data. Hospital is not asked anything here:
+                // whether the hour is still free is checked when the patient confirms.
+                var start = Future(slot.StartsAt) ?? throw new ArgumentException("startsAt debe ser una fecha futura ISO8601 con zona");
+                // The same limits Hospital's client enforces when booking: an hour it would refuse is not kept through seven answers.
+                if (slot.Doctor == Guid.Empty || slot.Minutes is < 5 or > 480) throw new ArgumentException("doctor o duración inválidos");
+                // «Otro horario» on the card: the data is already given and reviewed, so the card goes out again with the new hour and the old one stops existing.
+                if (await Cards(ct) is [var card] && Registration(card) is { } data)
+                {
+                    string Field(string name) => data.GetProperty(name).GetString()!;
+                    db.Activities.Remove(card);
+                    await ProposeRegistration(Field("givenNames"), Field("familyNames"), Field("birthDate"), Field("sex"), Field("emergencyName"), Field("emergencyRelationship"), Field("emergencyPhone"), ct, raw); Trace("propose_registration");
+                    await conversations.Send(conv.Id, summary!, "agent", "agent:" + job.Id, ct: ct, choices: Confirmation()); return;
+                }
+                var (state, prompt, _) = Intake.Start(raw, When(start)); Trace("start_registration");
+                db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "intake", Actor = "Agente", ActorRole = "agent_ai", Body = JsonSerializer.Serialize(state, Json) }); await db.SaveChangesAsync(ct);
+                await conversations.Send(conv.Id, prompt, "agent", "agent:" + job.Id, ct: ct); return;
+            }
+            await Propose("create", slot.Doctor.ToString(), null, slot.StartsAt, slot.Minutes, ct, slot.Name); Trace("propose_action");
+        }
         catch (ArgumentException) { await conversations.Send(conv.Id, "Disculpa, ese horario ya no está disponible.\nDime qué día prefieres y vuelvo a consultar la agenda.", "agent", "agent:" + job.Id, ct: ct); return; }
         await conversations.Send(conv.Id, summary!, "agent", "agent:" + job.Id, ct: ct, choices: Confirmation());
+    }
+    /// <summary>The proposals of this conversation that can still be confirmed.</summary>
+    Task<List<Activity>> Cards(CancellationToken ct) => db.Activities.Where(x => x.ConversationId == conv.Id && x.Kind.StartsWith("proposal:") && x.CreatedAt > DateTimeOffset.UtcNow.AddMinutes(-15)).ToListAsync(ct);
+    /// <summary>The data of a registration card, when the proposal is one.</summary>
+    static JsonElement? Registration(Activity card) => JsonSerializer.Deserialize<JsonElement>(card.Body) is var p && p.GetProperty("action").GetString() == "register" ? p : null;
+
+    /// <summary>«Corregir datos» on the card with a registration and its appointment: the card stops existing, with its data, and the form starts over keeping the hour.
+    /// The registration card without an hour keeps its own button, which goes to the agent.</summary>
+    async Task Correct(string code, CancellationToken ct)
+    {
+        if ((await Cards(ct)).FirstOrDefault(x => x.Kind == "proposal:" + code) is not { } card || Registration(card) is not { } p || !p.TryGetProperty("startsAt", out var chosen) || contact.PatientId is not null)
+        { await conversations.Send(conv.Id, "Esa confirmación ya venció o no existe.\nDime qué necesitas y lo preparo de nuevo.", "agent", "agent:" + job.Id, ct: ct); return; }
+        db.Activities.Remove(card);
+        if (Future(chosen.GetString()) is not { } start) { await db.SaveChangesAsync(ct); await conversations.Send(conv.Id, "Disculpa, ese horario ya no está disponible.\nDime qué día prefieres y vuelvo a consultar la agenda.", "agent", "agent:" + job.Id, ct: ct); return; }
+        // The same text a tap on the list carries, so the form keeps the hour exactly as if it had just been tapped.
+        var raw = $"CITA {TimeZoneInfo.ConvertTime(start, zone):yyyy-MM-ddTHH:mm:sszzz} {p.GetProperty("doctorId").GetString()} {p.GetProperty("durationMinutes").GetInt32()} {(p.TryGetProperty("doctorName", out var name) ? name.GetString() : "")}".Trim();
+        var (state, prompt, _) = Intake.Start(raw, When(start)); Trace("start_registration");
+        db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "intake", Actor = "Agente", ActorRole = "agent_ai", Body = JsonSerializer.Serialize(state, Json) }); await db.SaveChangesAsync(ct);
+        await conversations.Send(conv.Id, prompt, "agent", "agent:" + job.Id, ct: ct);
     }
     // Only the closing message is for the patient; text the model wrote next to a tool call is not.
     /// <summary>The instructions without the hospital's guide and the patient's memory: those two may be repeated to the patient, the rules may not.</summary>
@@ -396,7 +443,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             return Result(new { started = true, instruction = "El sistema pregunta al paciente sólo los datos que falten, uno por uno. No escribas nada más." });
         }, "start_registration", "Registrar a quien escribe cuando no tiene expediente. Pasa los datos que el paciente YA dijo, tal cual los dijo, sin completar ninguno; el sistema pide los que falten")
     ];
-    /// <summary>The free hours of the asked day or, when it has none, of the first later day that does. Fills the tappable list for a registered patient.</summary>
+    /// <summary>The free hours of the asked day or, when it has none, of the first later day that does. Fills the tappable list.</summary>
     async Task<JsonElement> Availability(string date, string? doctorId, CancellationToken ct)
     {
         Guid? doctor = Guid.TryParse(channel.DoctorId, out var fixedDoctor) ? fixedDoctor : Guid.TryParse(doctorId, out var id) ? id : null;
@@ -412,14 +459,18 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         free = free.Where(x => DateOnly.FromDateTime(x.Local.DateTime) >= day).ToList();
         if (free.Count == 0) return Result(new { requestedDate = date, available = false, note = "Sin horarios publicados en los 14 días desde esa fecha." });
         var first = free.Min(x => DateOnly.FromDateTime(x.Local.DateTime)); firstDay = first;
-        // A registered patient can tap one of these and get the proposal straight away.
-        var preferences = contact.PatientId is null ? [] : await db.ContactMemories.Where(x => x.ContactId == contact.Id).ToDictionaryAsync(x => x.Key, x => x.Value, ct);
-        if (contact.PatientId is not null) slots.AddRange(free.Where(x => DateOnly.FromDateTime(x.Local.DateTime) == first).OrderBy(x => AgentMemory.Distance(preferences, x.Doctor.ClinicianName, x.Local)).ThenBy(x => x.Slot.StartsAt).Take(10).Select(x =>
+        // A registered patient taps one of these and gets the proposal straight away; without a record the tap opens the registration form.
+        // So someone without a record who asks for another person gets no list: the form would register that person under this phone.
+        var preferences = await db.ContactMemories.Where(x => x.ContactId == contact.Id).ToDictionaryAsync(x => x.Key, x => x.Value, ct);
+        if (contact.PatientId is not null || !forOther) slots.AddRange(free.Where(x => DateOnly.FromDateTime(x.Local.DateTime) == first).OrderBy(x => AgentMemory.Distance(preferences, x.Doctor.ClinicianName, x.Local)).ThenBy(x => x.Slot.StartsAt).Take(10).Select(x =>
             new Choice($"CITA {x.Local:yyyy-MM-ddTHH:mm:sszzz} {x.Doctor.ClinicianId:D} {x.Slot.DurationMinutes} {x.Doctor.ClinicianName}", $"{Weekdays[(int)x.Local.DayOfWeek][..3]} {x.Local.Day} {Months[x.Local.Month - 1][..3]} {x.Local:HH:mm}", x.Doctor.PlaceName.Length > 0 ? $"{x.Doctor.ClinicianName} · {x.Doctor.PlaceName}" : x.Doctor.ClinicianName)));
+        // The model is told when the list was withheld: its instructions say a list always goes with the hours.
+        var note = (first == day ? "" : "La fecha pedida no tiene horarios libres; estos son los del primer día siguiente con agenda. Dilo así al paciente. ")
+            + (contact.PatientId is null && forOther ? "No se adjunta lista: desde este número sólo se agenda a quien escribe. Explícalo; no pidas tocar un horario." : "");
         return Result(new
         {
             requestedDate = date, date = first.ToString("yyyy-MM-dd"), weekday = Weekdays[(int)first.DayOfWeek], isRequestedDate = first == day,
-            note = first == day ? null : "La fecha pedida no tiene horarios libres; estos son los del primer día siguiente con agenda. Dilo así al paciente.",
+            note = note.Length > 0 ? note.Trim() : null,
             doctors = free.Where(x => DateOnly.FromDateTime(x.Local.DateTime) == first).GroupBy(x => x.Doctor).Select(g => new { doctorId = g.Key.ClinicianId, doctor = g.Key.ClinicianName, place = g.Key.PlaceName, slots = g.OrderBy(x => x.Slot.StartsAt).Select(x => new { startsAt = x.Local.ToString("yyyy-MM-ddTHH:mm:sszzz"), time = x.Local.ToString("HH:mm"), until = x.Local.AddMinutes(x.Slot.DurationMinutes).ToString("HH:mm"), durationMinutes = x.Slot.DurationMinutes }) })
         });
     }
@@ -450,7 +501,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         catch (Exception ex) when (ex is HttpRequestException or HospitalIntegrationException) { await OfferPerson("No se pudo entregar la receta que pidió el paciente.", "Disculpa, no pude enviarte la receta en este momento.", ct); }
     }
     /// <summary>Stores the registration the patient still has to confirm; Hospital is not contacted here.</summary>
-    async Task<JsonElement> ProposeRegistration(string givenNames, string familyNames, string birthDate, string sex, string emergencyContactName, string emergencyContactRelationship, string emergencyContactPhone, CancellationToken ct)
+    async Task<JsonElement> ProposeRegistration(string givenNames, string familyNames, string birthDate, string sex, string emergencyContactName, string emergencyContactRelationship, string emergencyContactPhone, CancellationToken ct, string? slot = null)
     {
         if (contact.PatientId is not null) throw new ArgumentException("El contacto ya tiene expediente");
         if (proposal is not null) throw new ArgumentException("Una propuesta por turno");
@@ -458,9 +509,18 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         var born = DateOnly.ParseExact(birthDate, "yyyy-MM-dd"); var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, zone).DateTime);
         if (born > today.AddYears(-18) || born < today.AddYears(-120)) return Result(new { error = "Por WhatsApp sólo se registran personas adultas con fecha de nacimiento válida. Deriva a recepción." });
         var payload = new JsonObject { ["action"] = "register", ["givenNames"] = Rules.Required(givenNames, 100), ["familyNames"] = Rules.Required(familyNames, 100), ["birthDate"] = birthDate, ["sex"] = sex, ["emergencyName"] = Rules.Required(emergencyContactName), ["emergencyRelationship"] = Rules.Required(emergencyContactRelationship, 60), ["emergencyPhone"] = Rules.Phone(emergencyContactPhone) };
+        // The hour tapped before the form travels in the same proposal, with the keys an appointment proposal uses: one card, one Confirmar.
+        // An hour that passed while the form was being filled is left out, and the card is the registration alone.
+        var booking = "";
+        if (slot is not null && AgentGuard.SlotChoice(slot) is { } chosen && Future(chosen.StartsAt) is { } start)
+        {
+            payload["startsAt"] = start.ToString("O"); payload["doctorId"] = (Guid.TryParse(channel.DoctorId, out var channelDoctor) ? channelDoctor : chosen.Doctor).ToString(); payload["durationMinutes"] = chosen.Minutes;
+            if (chosen.Name.Length > 0) payload["doctorName"] = chosen.Name;
+            withHour = true; booking = $"*Cita:* {When(start)}{(chosen.Name.Length > 0 ? $"\n*Con:* {chosen.Name}" : "")}\n\n¿Confirmo tu registro y tu cita?";
+        }
         var code = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(3));
         db.Activities.Add(new Activity { TenantId = scope.Id, ContactId = contact.Id, ConversationId = conv.Id, Kind = "proposal:" + code, Actor = "Agente", ActorRole = "agent_ai", Body = payload.ToJsonString(Json) }); await db.SaveChangesAsync(ct);
-        summary = $"Revisa tus datos:\n\n*{payload["givenNames"]} {payload["familyNames"]}*\nNacimiento: {born.Day} de {Months[born.Month - 1]} de {born.Year}\nSexo: {(sex == "female" ? "femenino" : "masculino")}\nContacto de emergencia: {payload["emergencyName"]} ({payload["emergencyRelationship"]}), {payload["emergencyPhone"]}\n\n¿Están correctos?";
+        summary = $"Revisa tus datos:\n\n*{payload["givenNames"]} {payload["familyNames"]}*\nNacimiento: {born.Day} de {Months[born.Month - 1]} de {born.Year}\nSexo: {(sex == "female" ? "femenino" : "masculino")}\nContacto de emergencia: {payload["emergencyName"]} ({payload["emergencyRelationship"]}), {payload["emergencyPhone"]}\n\n{(booking.Length > 0 ? booking : "¿Están correctos?")}";
         proposal = code; second = "Corregir datos"; return Result(new { confirmationRequired = true, instruction = "El sistema ya envía al paciente sus datos con el botón Confirmar. No escribas nada más." });
     }
 
@@ -473,7 +533,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         await db.SaveChangesAsync(ct);
         if (next.Minor) { await OfferPerson("Registro por WhatsApp de una persona menor de 18 años: requiere tutor legal en recepción.", "Para registrar a una persona menor de 18 años hace falta su tutor,\ny eso se hace con recepción.", ct); return; }
         if (!next.Complete) { await conversations.Send(conv.Id, prompt, "agent", "agent:" + job.Id, ct: ct, choices: options); return; }
-        await ProposeRegistration(next.GivenNames!, next.FamilyNames!, next.BirthDate!, next.Sex!, next.EmergencyName!, next.EmergencyRelationship!, next.EmergencyPhone!, ct);
+        await ProposeRegistration(next.GivenNames!, next.FamilyNames!, next.BirthDate!, next.Sex!, next.EmergencyName!, next.EmergencyRelationship!, next.EmergencyPhone!, ct, next.Slot);
         await conversations.Send(conv.Id, summary!, "agent", "agent:" + job.Id, ct: ct, choices: Confirmation());
     }
     /// <summary>The patient's booked appointments from now on, as Hospital has them. Cancelled ones are not appointments any more.</summary>
@@ -531,6 +591,8 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
     /// <summary>Stores a proposal the patient still has to confirm; nothing reaches the agenda here.</summary>
     async Task<JsonElement> Propose(string action, string? doctorId, string? appointmentId, string? startsAt, int? durationMinutes, CancellationToken ct, string? doctorName = null)
     {
+        // Without a record the appointment comes with the registration, from an hour tapped on the list: the model is told so instead of being sent to reception.
+        if (action == "create" && contact.PatientId is null) return Result(new { error = "Este contacto no tiene expediente: la cita no se propone desde aquí. Consulta hospital_availability y pídele que toque un horario de la lista; el sistema le pide sus datos y le envía una sola propuesta con su registro y su cita. No derives." });
         RequirePatient(contact); await hospital.GetVerifiedPatientAsync(scope.Id, contact.PatientId!.Value, contact.Phone, ct);
         if (action is not ("create" or "reschedule" or "cancel")) throw new ArgumentException("Acción inválida");
         if (proposal is not null) throw new ArgumentException("Una propuesta por turno");
@@ -538,8 +600,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         var payload = new JsonObject { ["action"] = action }; if (doctorId is not null) payload["doctorId"] = doctorId; if (appointmentId is not null) payload["appointmentId"] = appointmentId; if (durationMinutes is not null) payload["durationMinutes"] = durationMinutes;
         if (action != "cancel")
         {
-            // An explicit offset is required: a bare local time would be read in the server's zone, not the hospital's.
-            if (startsAt is null || !System.Text.RegularExpressions.Regex.IsMatch(startsAt, @"(Z|[+-]\d{2}:\d{2})$") || !DateTimeOffset.TryParse(startsAt, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var start) || start <= DateTimeOffset.UtcNow) throw new ArgumentException("startsAt debe ser una fecha futura ISO8601 con zona");
+            var start = Future(startsAt) ?? throw new ArgumentException("startsAt debe ser una fecha futura ISO8601 con zona");
             payload["startsAt"] = start.ToString("O");
             summary = $"*{(action == "reschedule" ? "Nueva fecha" : "Cita")}:* {When(start)}";
         }
@@ -590,16 +651,33 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         if (action != "register") RequirePatient(contact);
         // Consume before the external write; never replay uncertain operations. A registration proposal holds personal data only until it is used.
         proposal.Kind = "proposal_used:" + code; if (action == "register") proposal.Body = """{"action":"register"}"""; await db.SaveChangesAsync(ct);
+        // A registration made after tapping an hour carries the appointment in the same proposal: one decision, one Confirmar.
+        var registered = action == "register"; var booking = action is "create" or "reschedule" || (registered && p.TryGetProperty("startsAt", out _)); string? wanted = null;
         try
         {
-            if (action == "register") { await Register(conv, contact, p, job, ct); return; }
+            Guid doctor = default; DateTimeOffset start = default; var duration = 0; var timeZone = ""; var free = false;
+            if (booking)
+            {
+                doctor = p.GetProperty("doctorId").GetGuid(); start = p.GetProperty("startsAt").GetDateTimeOffset(); duration = p.GetProperty("durationMinutes").GetInt32();
+                wanted = When(start) + (p.TryGetProperty("doctorName", out var asked) ? " con " + asked.GetString() : "");
+                timeZone=await db.Tenants.Where(x=>x.Id==scope.Id).Select(x=>x.TimeZone).SingleAsync(ct);
+                // 1. The hour is checked first and it is only a read: if this fails, nothing has been written. An hour already past counts as taken
+                // (asking Hospital about it would throw), also for someone with a record.
+                free = start > DateTimeOffset.UtcNow && await hospital.IsSlotAvailableAsync(scope.Id,doctor,start,duration,timeZone,ct);
+            }
+            if (registered)
+            {
+                // 2. POST of the patient, 3. verify and link. False means a possible duplicate or a contact already linked: nothing else happens.
+                if (!await Register(conv, contact, p, wanted, job, ct)) return;
+                // The patient confirmed their data, so they are registered even when the hour is gone; the free hours go out with it, without being asked for.
+                if (!booking || !free) { await OfferSlots(true, null, ct, booking ? "Ya te registré. Ese horario se acaba de ocupar.\n" : $"Listo{(FirstName(contact.Name) is { } welcome ? ", " + welcome : "")}, ya te registré.\n"); return; }
+                action = "create"; // 4. the appointment, by the same path as any other: reachable only with the record created and linked in this turn
+            }
+            else if (booking && !free) { await OfferPerson("El horario propuesto se ocupó antes de confirmar.", "Ese horario se acaba de ocupar.\nToca *Seguir aquí* y luego *Agendar cita* para ver otros.", ct); return; }
             Guid? reference = p.TryGetProperty("appointmentId", out var existing) && existing.TryGetGuid(out var known) ? known : null;
             if (action == "cancel") await hospital.CancelAppointmentAsync(scope.Id, contact.PatientId!.Value, contact.Phone, p.GetProperty("appointmentId").GetGuid(), ct);
             else
             {
-                var doctor = p.GetProperty("doctorId").GetGuid(); var start = p.GetProperty("startsAt").GetDateTimeOffset(); var duration = p.GetProperty("durationMinutes").GetInt32();
-                var zone=await db.Tenants.Where(x=>x.Id==scope.Id).Select(x=>x.TimeZone).SingleAsync(ct);
-                if (!await hospital.IsSlotAvailableAsync(scope.Id,doctor,start,duration,zone,ct)) { await OfferPerson("El horario propuesto se ocupó antes de confirmar.", "Ese horario se acaba de ocupar.\nToca *Seguir aquí* y luego *Agendar cita* para ver otros.", ct); return; }
                 if (action == "reschedule") await hospital.RescheduleAppointmentAsync(scope.Id, contact.PatientId!.Value, contact.Phone, p.GetProperty("appointmentId").GetGuid(), doctor, start, duration, ct);
                 else
                 {
@@ -607,7 +685,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
                     // Hospital's overlap probe counts cancelled appointments too, so a slot the agenda shows free can answer «overlaps».
                     // The agenda's own count decides: only another active appointment in the slot is a real overlap for a person to sort out.
                     reference = created.AppointmentId;
-                    if (created.Overlaps && await hospital.SlotOccupancyAsync(scope.Id, doctor, start, zone, ct) is not (0 or 1)) { await Handoff(conv, "Cita registrada con un solapamiento. Recepción debe verificar la disponibilidad.", ct); return; }
+                    if (created.Overlaps && await hospital.SlotOccupancyAsync(scope.Id, doctor, start, timeZone, ct) is not (0 or 1)) { await Handoff(conv, "Cita registrada con un solapamiento. Recepción debe verificar la disponibilidad.", ct); return; }
                 }
             }
             // What was done, with whom, and the reference that finds it in Hospital: the CRM history has to stand on its own.
@@ -615,23 +693,32 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             var done = action == "cancel" ? "Cita cancelada en Hospital a petición del paciente" : $"Cita {(action == "reschedule" ? "reprogramada" : "agendada")} en Hospital: {When(p.GetProperty("startsAt").GetDateTimeOffset())}{with}";
             db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "appointment", Actor = "Agente", ActorRole = "agent_ai", Body = $"{done}. Confirmada por el paciente en WhatsApp.{(reference is null ? "" : $" Referencia Hospital: {reference}.")}" }); await db.SaveChangesAsync(ct);
             var booked = action == "cancel" ? "Listo, tu cita quedó cancelada."
-                : $"Listo, tu cita quedó {(action == "reschedule" ? "reprogramada" : "agendada")}:\n*{When(p.GetProperty("startsAt").GetDateTimeOffset())}*\n\n¡Te esperamos!";
+                : $"Listo{(registered && FirstName(contact.Name) is { } who ? ", " + who : "")}, {(registered ? "ya te registré y " : "")}tu cita quedó {(action == "reschedule" ? "reprogramada" : "agendada")}:\n*{When(p.GetProperty("startsAt").GetDateTimeOffset())}*\n\n¡Te esperamos!";
             await conversations.Send(conv.Id, booked, "agent", "confirm:" + job.Id, ct: ct, choices: action == "cancel" ? null : new([new("ACTIVAR RECORDATORIOS", "Recordarme la cita")]));
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or HospitalIntegrationException) { await Handoff(conv, "La operación de agenda necesita conciliación. Comprueba el hospital antes de repetirla.", CancellationToken.None); }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or HospitalIntegrationException or ArgumentException)
+        {
+            // Nothing is retried. With a registration and an appointment in one proposal the team reads how far it got and which hour was wanted.
+            // ArgumentException is the Hospital client refusing the appointment itself (duration, doctor, an hour that just passed): the card is used, so a person takes over.
+            // A record Hospital created and the agent could not verify is named, so reception reconciles that one instead of registering again.
+            var orphan = unverified is { } id ? $" Hospital creó un expediente que no se pudo verificar ni vincular: revísalo antes de registrar de nuevo. Referencia Hospital: {id}." : "";
+            await Handoff(conv, (registered && wanted is not null ? $"Registro y cita confirmados juntos por WhatsApp: {(contact.PatientId is null ? "el paciente no quedó vinculado" : "el paciente quedó registrado y vinculado")}, y la cita del {wanted} no quedó confirmada. Comprueba el hospital antes de repetir nada."
+                : "La operación de agenda necesita conciliación. Comprueba el hospital antes de repetirla.") + orphan, CancellationToken.None);
+        }
     }
-    async Task Register(Conversation conv, Contact contact, JsonElement p, Job job, CancellationToken ct)
+    /// <summary>Creates the record in Hospital, verifies it answers with this phone and links it. False when nothing was linked: a possible
+    /// duplicate (never forced; reception decides, and reads which hour was wanted) or a contact that already has a record.</summary>
+    async Task<bool> Register(Conversation conv, Contact contact, JsonElement p, string? wanted, Job job, CancellationToken ct)
     {
-        if (contact.PatientId is not null) { await conversations.Send(conv.Id, "Ya tienes expediente en el hospital.\n¿Para qué día quieres tu cita?", "agent", "confirm:" + job.Id, ct: ct); return; }
+        if (contact.PatientId is not null) { await conversations.Send(conv.Id, "Ya tienes expediente en el hospital.\n¿Para qué día quieres tu cita?", "agent", "confirm:" + job.Id, ct: ct); return false; }
         string Field(string name) => p.GetProperty(name).GetString()!;
         var registered = await hospital.RegisterPatientAsync(scope.Id, new HospitalPatientRegistration(Field("givenNames"), Field("familyNames"), DateOnly.ParseExact(Field("birthDate"), "yyyy-MM-dd"), Field("sex"), contact.Phone, Field("emergencyName"), Field("emergencyRelationship"), Field("emergencyPhone")), ct);
-        if (!registered.Created || registered.PatientId is not { } patient) { await OfferPerson("Registro por WhatsApp detenido: Hospital encontró un posible expediente existente. Recepción debe revisarlo y vincularlo.", "Encontré un expediente que podría ser tuyo.\nVincularlo le toca a recepción.", ct); return; }
+        if (!registered.Created || registered.PatientId is not { } patient) { await OfferPerson("Registro por WhatsApp detenido: Hospital encontró un posible expediente existente. Recepción debe revisarlo y vincularlo." + (wanted is null ? "" : $" Quería cita el {wanted}."), "Encontré un expediente que podría ser tuyo.\nVincularlo le toca a recepción.", ct); return false; }
         // Same check as a manual link: the record Hospital created must answer with this conversation's phone.
-        await hospital.GetVerifiedPatientAsync(scope.Id, patient, contact.Phone, ct);
+        unverified = patient; await hospital.GetVerifiedPatientAsync(scope.Id, patient, contact.Phone, ct); unverified = null;
         contact.PatientId = patient; contact.Name = $"{Field("givenNames")} {Field("familyNames")}"; // who the person said they are, confirmed by them
         db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "patient_registered", Actor = "Agente", ActorRole = "agent_ai", Body = $"Paciente registrado en Hospital por WhatsApp, con confirmación del paciente. Referencia Hospital: {patient}." }); await db.SaveChangesAsync(ct);
-        // The patient came to book: the free hours go out with the confirmation, without being asked for.
-        await OfferSlots(true, null, ct, $"Listo{(FirstName(contact.Name) is { } welcome ? ", " + welcome : "")}, ya te registré.\n");
+        return true;
     }
     static void RequirePatient(Contact c) { if (c.PatientId is null) throw new ArgumentException("Recepción debe vincular el expediente del paciente"); }
     async Task Handoff(Conversation conv, string reason, CancellationToken ct, bool urgent = false)

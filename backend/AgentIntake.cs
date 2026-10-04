@@ -3,7 +3,7 @@ namespace Recepcion;
 
 /// <summary>The registration form a new client fills in one answer at a time, with no model (docs/reception-agent.md).
 /// It only reads what was written: an answer that does not fit is asked again, never completed or guessed.</summary>
-public sealed partial record Intake(int Step, string? GivenNames = null, string? FamilyNames = null, string? BirthDate = null, string? Sex = null, string? EmergencyName = null, string? EmergencyRelationship = null, string? EmergencyPhone = null)
+public sealed partial record Intake(int Step, string? GivenNames = null, string? FamilyNames = null, string? BirthDate = null, string? Sex = null, string? EmergencyName = null, string? EmergencyRelationship = null, string? EmergencyPhone = null, string? Slot = null)
 {
     public const int Steps = 7;
     public bool Complete => Step > Steps;
@@ -12,6 +12,10 @@ public sealed partial record Intake(int Step, string? GivenNames = null, string?
     static readonly string[] Months = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
 
     public static (Intake State, string Prompt, Choices? Choices) Start() => Ask(new Intake(1), "Con gusto. Para darte cita necesito registrarte: son 7 datos cortos.\n\n");
+
+    /// <summary>Starts for someone who tapped a free hour first. The tap is kept as it came, as working state of the form: it is not one of the
+    /// patient's seven data and nothing is reserved with it.</summary>
+    public static (Intake State, string Prompt, Choices? Choices) Start(string slot, string when) => Ask(new Intake(1, Slot: slot), $"Para apartar el *{when}* necesito registrarte: son 7 datos cortos.\n\n");
 
     /// <summary>Starts with what the patient already said, wherever it sits in the form, so it is not asked again. Each known answer goes through
     /// the same reading as a typed one: what fits is kept, what is missing or does not fit is asked, in the form's order.

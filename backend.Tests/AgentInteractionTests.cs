@@ -17,6 +17,7 @@ public sealed class AgentInteractionTests : IAsyncLifetime
 
     [Theory]
     [InlineData("button_reply", "CONFIRMAR 1A2B3C", "Confirmar", "CONFIRMAR 1A2B3C")] // our command ids act exactly as if typed
+    [InlineData("button_reply", "CORREGIR 1A2B3C", "Corregir datos", "CORREGIR 1A2B3C")]
     [InlineData("button_reply", "EMERGENCIA", "Sí, es emergencia", "EMERGENCIA")]
     [InlineData("button_reply", "ACTIVAR RECORDATORIOS", "Recordarme la cita", "ACTIVAR RECORDATORIOS")]
     [InlineData("list_reply", "CITA 2026-10-05T09:00:00-06:00 d2c5079c-e5da-4bb5-9029-b1e547ad8683 30 Dra. Sintética", "lun 5 oct 09:00", "CITA 2026-10-05T09:00:00-06:00 d2c5079c-e5da-4bb5-9029-b1e547ad8683 30 Dra. Sintética")]
@@ -90,14 +91,16 @@ public sealed class AgentInteractionTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ContactWithoutRecordGetsNoTappableSlots()
+    public async Task ContactWithoutRecordGetsTappableSlotsToo()
     {
-        // Tapping a slot books for a registered patient; someone without a record is asked to register first, in words.
+        // The hour comes before the registration (agent-slot-first T-2): tapping one opens the form that keeps it (AgentSlotFirstTests).
         var hospital = h.Hospital(availability: Agenda(new DateTimeOffset(DateTime.UtcNow.Date.AddDays(3).AddHours(15), TimeSpan.Zero), Guid.NewGuid()));
 
         await h.Runtime(h.Model(AgentHarness.ToolCall("hospital_availability", new { date = DateTime.UtcNow.AddDays(3).ToString("yyyy-MM-dd") }), AgentHarness.Reply("Hay un horario libre.")), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
 
-        Assert.Empty(h.Interactive);
+        var list = Assert.Single(h.Interactive);
+        Assert.Equal("list", list.GetProperty("type").GetString());
+        Assert.StartsWith("CITA ", list.GetProperty("action").GetProperty("sections")[0].GetProperty("rows")[0].GetProperty("id").GetString());
     }
 
     [Fact]
@@ -220,16 +223,38 @@ public sealed class AgentInteractionTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task MenuForSomeoneWithoutRecordStartsTheRegistrationForm()
+    public async Task MenuForSomeoneWithoutRecordOffersTheFreeHours()
     {
-        // Booking needs a record first. The form asks for it one answer at a time and needs no model (AgentIntakeFlowTests).
+        // The hour comes first (agent-slot-first T-1): the menu shows the free hours to anyone, with no model and without opening the form.
         await h.Say("patient", "AGENDAR");
         var model = h.Model(AgentHarness.Reply("No debe consultarse"));
 
-        await h.Runtime(model, h.Sender()).Run(h.Job, CancellationToken.None);
+        await h.Runtime(model, h.Sender(), h.Hospital(availability: Agenda(new DateTimeOffset(DateTime.UtcNow.Date.AddDays(1).AddHours(15), TimeSpan.Zero), Guid.NewGuid()))).Run(h.Job, CancellationToken.None);
 
         Assert.Equal(0, model.Calls);
-        Assert.Contains("son 7 datos cortos", Assert.Single(h.Sent)); Assert.Contains("¿Cuál es tu nombre?", h.Sent[0]);
+        var list = Assert.Single(h.Interactive);
+        Assert.Equal("list", list.GetProperty("type").GetString());
+        Assert.StartsWith("CITA ", list.GetProperty("action").GetProperty("sections")[0].GetProperty("rows")[0].GetProperty("id").GetString());
+        Assert.StartsWith("Hay espacio el *", Assert.Single(h.Sent)); AgentSlotFirstTests.ClaimsNoHour(h.Sent[0]); // T-12 on the list itself
+        Assert.Empty(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id && a.Kind == "intake").ToListAsync());
+        Assert.Empty(h.HospitalWrites);
+    }
+
+    [Theory]
+    [InlineData(false)] // nothing published
+    [InlineData(true)]  // Hospital does not answer
+    public async Task MenuWithNothingToOfferOffersAPersonWithoutARecordToo(bool down)
+    {
+        await h.Say("patient", "AGENDAR");
+        var noModel = new AgentHarness.Fake(_ => throw new InvalidOperationException("The model must not be consulted"));
+
+        await h.Runtime(noModel, h.Sender(), down ? new AgentHarness.Fake(_ => throw new HttpRequestException("Hospital no responde")) : h.Hospital()).Run(h.Job, CancellationToken.None);
+
+        Assert.Equal("agent", (await h.Fresh()).Status);
+        var trail = await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync();
+        Assert.Contains(trail, a => a.Kind == "handoff_offer"); // the patient is asked, with a button, whether to go to a person
+        Assert.DoesNotContain(trail, a => a.Kind == "intake");
+        Assert.Contains(down ? "no pude consultar la agenda" : "No hay horarios publicados", Assert.Single(h.Sent));
     }
 
     [Fact]

@@ -88,7 +88,10 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
     {
         // The guard lets «emergencia» through only because the question before it says «contacto de emergencia» (AgentRuntime, `registering`).
         var noModel = new AgentHarness.Fake(_ => throw new InvalidOperationException("The model must not be consulted"));
-        foreach (var text in (string[])["AGENDAR", .. Answers[..4], "Emergencia: Carlos Sintético"]) { await h.Say("patient", text); await h.Runtime(noModel, h.Sender()).Run(h.Job, CancellationToken.None); }
+        async Task Say(string text) { await h.Say("patient", text); await h.Runtime(noModel, h.Sender()).Run(h.Job, CancellationToken.None); }
+        await Say($"CITA {new DateTimeOffset(DateTime.UtcNow.Date.AddDays(3).AddHours(15), TimeSpan.Zero).ToOffset(TimeSpan.FromHours(-6)):yyyy-MM-ddTHH:mm:sszzz} {Guid.NewGuid()} 30 Dra. Sintética Rivas"); // the form opens when an hour is tapped
+        Assert.Single(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id && a.Kind == "intake").ToListAsync());
+        foreach (var text in (string[])[.. Answers[..4], "Emergencia: Carlos Sintético"]) await Say(text);
 
         Assert.Equal("agent", (await h.Fresh()).Status);
         Assert.DoesNotContain(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => a.Kind.StartsWith("handoff"));
@@ -96,7 +99,7 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task NewClientTapsAgendarRegistersStepByStepAndSeesTheFreeHoursWithoutTheModel()
+    public async Task NewClientRegistersStepByStepAndSeesTheFreeHours()
     {
         var patient = Guid.NewGuid(); var doctor = Guid.NewGuid(); var start = new DateTimeOffset(DateTime.UtcNow.Date.AddDays(1).AddHours(15), TimeSpan.Zero); var posts = new List<JsonElement>();
         var hospital = new AgentHarness.Fake(async request =>
@@ -110,7 +113,9 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
         var noModel = new AgentHarness.Fake(_ => throw new InvalidOperationException("The model must not be consulted"));
         async Task<string> Say(string text) { await h.Say("patient", text); await h.Runtime(noModel, h.Sender(), hospital).Run(h.Job, CancellationToken.None); return h.Sent[^1]; }
 
-        var first = await Say("AGENDAR");
+        // Someone who asks to register without choosing an hour: the agent opens the form, and from there on no model is needed.
+        await h.Runtime(h.Model(AgentHarness.ToolCall("start_registration", new { }), AgentHarness.Reply("Ok")), h.Sender(), hospital).Run(h.Job, CancellationToken.None); var first = h.Sent[^1];
+        Assert.Single(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id && a.Kind == "intake").ToListAsync());
         Assert.Contains("son 7 datos cortos", first); Assert.Contains("¿Cuál es tu nombre?", first);
         string reply = ""; foreach (var answer in Answers) reply = await Say(answer);
 
@@ -130,7 +135,8 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
     public async Task AQuestionInTheMiddleOfTheFormIsNotTakenAsAnAnswer()
     {
         var model = h.Model(AgentHarness.Reply("No tengo ese dato; ¿te paso con recepción?")); // no hours here: this hospital's guide is empty, and an hour nobody published would be withheld
-        await h.Say("patient", "AGENDAR"); await h.Runtime(model, h.Sender()).Run(h.Job, CancellationToken.None);
+        await h.Say("patient", $"CITA {new DateTimeOffset(DateTime.UtcNow.Date.AddDays(3).AddHours(15), TimeSpan.Zero).ToOffset(TimeSpan.FromHours(-6)):yyyy-MM-ddTHH:mm:sszzz} {Guid.NewGuid()} 30 Dra. Sintética Rivas"); await h.Runtime(model, h.Sender()).Run(h.Job, CancellationToken.None);
+        Assert.Single(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id && a.Kind == "intake").ToListAsync()); // the tapped hour opened the form, with no model
         await h.Say("patient", "¿A qué hora abren los sábados?");
 
         await h.Runtime(model, h.Sender()).Run(h.Job, CancellationToken.None);
@@ -145,10 +151,37 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
     public async Task AMinorInTheFormIsOfferedReception()
     {
         var noModel = new AgentHarness.Fake(_ => throw new InvalidOperationException("The model must not be consulted"));
-        foreach (var text in new[] { "AGENDAR", "Luis Sintético", "Prueba", "03/05/2015" }) { await h.Say("patient", text); await h.Runtime(noModel, h.Sender()).Run(h.Job, CancellationToken.None); }
+        // T-10: the minor is noticed after an hour was chosen. No Hospital double is given: any request to it would throw.
+        var hour = new DateTimeOffset(DateTime.UtcNow.Date.AddDays(3).AddHours(15), TimeSpan.Zero).ToOffset(TimeSpan.FromHours(-6)).ToString("yyyy-MM-ddTHH:mm:sszzz");
+        var writes = new List<string>(); var hospital = new AgentHarness.Fake(request => { writes.Add(request.RequestUri!.AbsolutePath); throw new InvalidOperationException("Unexpected hospital request"); });
+        async Task Say(string text) { await h.Say("patient", text); await h.Runtime(noModel, h.Sender(), hospital).Run(h.Job, CancellationToken.None); }
+        await Say($"CITA {hour} {Guid.NewGuid()} 30 Dra. Sintética Rivas");
+        Assert.Single(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id && a.Kind == "intake").ToListAsync()); // the tap opened the form
+        foreach (var text in new[] { "Luis Sintético", "Prueba", "03/05/2015" }) await Say(text);
 
         Assert.Equal("agent", (await h.Fresh()).Status);
-        Assert.Contains(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => a.Kind == "handoff_offer"); // the patient is asked, with a button, whether to go to a person
+        var trail = await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync();
+        Assert.Contains(trail, a => a.Kind == "handoff_offer"); // the patient is asked, with a button, whether to go to a person
+        Assert.DoesNotContain(trail, a => a.Kind == "intake"); // the form and the hour chosen with it are gone
+        Assert.All(trail, a => Assert.DoesNotContain(hour[..16], a.Body));
+        Assert.Empty(writes); // nothing was asked of Hospital, let alone written
+    }
+
+    [Fact]
+    public async Task ARequestForSomeoneElseGetsNoTappableHoursWithoutARecord()
+    {
+        // Without a record a tapped hour opens the form: a list here would end in registering the father under the sender's phone.
+        await h.Say("patient", "Quiero una cita para mi papá");
+        var start = new DateTimeOffset(DateTime.UtcNow.Date.AddDays(3).AddHours(15), TimeSpan.Zero);
+        var hospital = h.Hospital(availability: new { clinicalDayFrom = "", clinicalDayTo = "", maxDaysPerQuery = 31, rollState = "open", professionals = new[] { new { clinicianId = Guid.NewGuid(), clinicianName = "Dra. Sintética Rivas", placeName = "Consultorio 1", defaultDurationMinutes = 30, days = new[] { new { clinicalDay = "", state = "open", takenSlotCount = 0, utcOffset = "-06:00", slots = new[] { new { slotId = "a", startsAt = start, durationMinutes = 30, takenBy = 0, offered = true } } } } } } });
+        var asked = new List<string>();
+        var model = new AgentHarness.Fake(async request => { asked.Add(await request.Content!.ReadAsStringAsync()); return asked.Count == 1 ? AgentHarness.ToolCall("hospital_availability", new { date = DateTime.UtcNow.AddDays(3).ToString("yyyy-MM-dd") }) : AgentHarness.Reply("Tu papá debe escribir desde su propio número."); });
+
+        await h.Runtime(model, h.Sender(), hospital).Run(h.Job, CancellationToken.None);
+
+        Assert.Equal(2, model.Calls); // the agenda was read
+        Assert.Single(h.Sent); Assert.Empty(h.Interactive);
+        Assert.Contains("No se adjunta lista", asked[1]); Assert.Contains("no pidas tocar un horario", asked[1]); // the model is told the list was withheld, so it does not ask to tap one
     }
 
     [Fact]
