@@ -220,15 +220,16 @@ public sealed class AgentInteractionTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task MenuForSomeoneWithoutRecordGoesToTheAgent()
+    public async Task MenuForSomeoneWithoutRecordStartsTheRegistrationForm()
     {
-        // Booking needs a registration, and collecting it is a conversation: that part is the model's.
+        // Booking needs a record first. The form asks for it one answer at a time and needs no model (AgentIntakeFlowTests).
         await h.Say("patient", "AGENDAR");
-        var model = h.Model(AgentHarness.Reply("Para agendar necesito registrarte."));
+        var model = h.Model(AgentHarness.Reply("No debe consultarse"));
 
         await h.Runtime(model, h.Sender()).Run(h.Job, CancellationToken.None);
 
-        Assert.Equal(1, model.Calls);
+        Assert.Equal(0, model.Calls);
+        Assert.Contains("Paso 1 de 7", Assert.Single(h.Sent));
     }
 
     [Fact]

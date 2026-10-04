@@ -146,4 +146,57 @@ public sealed class AgentLiveJourney(ITestOutputHelper output)
         Assert.StartsWith("cancelled", Assert.Single((await hospital.GetPatientAppointmentRangeAsync(tenant, patient, h.Contact.Phone, today, today.AddDays(20))).GetProperty("rows").EnumerateArray()).GetProperty("status").GetString());
         output.WriteLine("HOSPITAL: cita de prueba cancelada, horario liberado");
     }
+
+    /// <summary>The whole path of a new client with no model at all: menu, registration form, free hours, booking.
+    /// This is what keeps working while the AI provider is rate-limited.</summary>
+    [Fact, Trait("Category", "Live")]
+    public async Task NewClientRegistersAndBooksFromTheMenuWithoutTheModel()
+    {
+        var env = new ConfigurationBuilder().AddEnvironmentVariables().Build();
+        var tenant = Guid.Parse(env["DEV_HOSPITAL_TENANT_ID"] ?? throw new InvalidOperationException("DEV_HOSPITAL_TENANT_ID is required."));
+        var prefix = $"Hospital:Tenants:{tenant:D}:";
+        var settings = HospitalConnectionStore.Defaults(tenant, env).ToDictionary(x => prefix + x.Key, x => x.Value);
+        foreach (var pair in env.GetSection(prefix.TrimEnd(':')).GetChildren()) settings[prefix + pair.Key] = pair.Value;
+        settings[prefix + "AccessToken"] = "";
+        var config = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
+        var suffix = new string(Enumerable.Range(0, 6).Select(_ => (char)('a' + Random.Shared.Next(26))).ToArray());
+        var family = "Menú " + char.ToUpperInvariant(suffix[0]) + suffix[1..];
+        await using var h = new AgentHarness(tenant, "50300" + Random.Shared.Next(100000, 999999)); await h.Start(AgentEvals.Guide, "Hola");
+        using var hospitalHttp = new SocketsHttpHandler(); var hospital = new HospitalClient(new HttpClient(hospitalHttp), config);
+        var noModel = new AgentHarness.Fake(_ => throw new InvalidOperationException("The model must not be consulted"));
+        async Task<string> Turn(string? message)
+        {
+            if (message is not null) await h.Say("patient", message);
+            var before = h.Sent.Count;
+            await h.Runtime(noModel, h.Sender(), hospitalHttp, settings).Run(h.Job, CancellationToken.None);
+            var reply = string.Join("\n", h.Sent.Skip(before));
+            output.WriteLine($"PACIENTE: {message ?? "Hola"}\nAGENTE: {reply}\n");
+            return reply;
+        }
+        string Button(int index) => h.Interactive[^1].GetProperty("action").GetProperty("buttons")[index].GetProperty("reply").GetProperty("id").GetString()!;
+
+        await Turn(null);
+        Assert.Equal("AGENDAR", Button(0));
+        Assert.Contains("Paso 1 de 7", await Turn("AGENDAR"));
+        string reply = ""; foreach (var answer in new[] { "Ana Sintética", family, "12/03/1990", "Femenino", "Carlos Sintético", "Hermano", "7000 0001" }) reply = await Turn(answer);
+        Assert.Contains($"Registro: Ana Sintética {family}", reply);
+
+        var registered = await Turn(Button(0));
+        await h.Db.Entry(h.Contact).ReloadAsync();
+        var patient = Assert.NotNull(h.Contact.PatientId);
+        Assert.Contains("registrado", registered);
+        var row = h.Interactive[^1].GetProperty("action").GetProperty("sections")[0].GetProperty("rows")[0];
+
+        await Turn(row.GetProperty("id").GetString());
+        var booked = await Turn(Button(0));
+        Assert.Contains("confirmó tu cita", booked);
+
+        var today = HospitalClient.ClinicalDay(DateTimeOffset.UtcNow, "America/El_Salvador");
+        var appointment = Assert.Single((await hospital.GetPatientAppointmentRangeAsync(tenant, patient, h.Contact.Phone, today, today.AddDays(20))).GetProperty("rows").EnumerateArray());
+        Assert.Equal("booked", appointment.GetProperty("status").GetString());
+        output.WriteLine($"HOSPITAL: cita {appointment.GetProperty("status").GetString()} con {appointment.GetProperty("clinicianName").GetString()}");
+        await hospital.CancelAppointmentAsync(tenant, patient, h.Contact.Phone, appointment.GetProperty("appointmentId").GetGuid());
+        Assert.StartsWith("cancelled", Assert.Single((await hospital.GetPatientAppointmentRangeAsync(tenant, patient, h.Contact.Phone, today, today.AddDays(20))).GetProperty("rows").EnumerateArray()).GetProperty("status").GetString());
+        output.WriteLine("HOSPITAL: cita de prueba cancelada, horario liberado");
+    }
 }

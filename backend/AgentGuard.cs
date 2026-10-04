@@ -38,7 +38,12 @@ public static partial class AgentGuard
     public static bool Affirms(string body) => Yes().IsMatch(body);
 
     /// <summary>The reply tells the patient they are being transferred. The runtime then transfers them for real.</summary>
-    public static bool ClaimsHandoff(string reply) => Transfer().IsMatch(reply);
+    public static bool ClaimsHandoff(string reply) => Transfer().Matches(reply).Any(match =>
+    {
+        // «¿Te paso con recepción?» is an offer the patient still has to accept, not an announcement.
+        var from = reply.LastIndexOfAny(['.', '!', '?', ';', '\n'], match.Index) + 1; var to = reply.IndexOfAny(['.', '!', '?', ';', '\n'], match.Index + match.Length);
+        return !(reply[from..match.Index].Contains('¿') || (to >= 0 && reply[to] == '?'));
+    });
 
     /// <summary>Checks a model reply before it reaches the patient. <paramref name="grounding"/> is
     /// what the agent may repeat: the guide, this turn's tool results and earlier staff messages.
