@@ -650,6 +650,8 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
 }
 public sealed class AgentWorker(IServiceScopeFactory scopes, ILogger<AgentWorker> log) : BackgroundService
 {
+    public const int AbandonedAfterMinutes = 5;
+    public const string AbandonedNote = "Atención automática interrumpida. Revisa el historial antes de responder.";
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
@@ -658,29 +660,47 @@ public sealed class AgentWorker(IServiceScopeFactory scopes, ILogger<AgentWorker
             {
                 using var root = scopes.CreateScope(); var db = root.ServiceProvider.GetRequiredService<CrmDb>();
                 var tenants = await db.Tenants.Select(x => x.Id).ToListAsync(stoppingToken);
-                foreach (var tid in tenants)
-                {
-                    using var s = scopes.CreateScope(); var scope = s.ServiceProvider.GetRequiredService<TenantScope>(); scope.Id = tid; var d = s.ServiceProvider.GetRequiredService<CrmDb>();
-                    await InboxWorkflow.WakeDue(d,scope,s.ServiceProvider.GetRequiredService<ConversationService>(),stoppingToken);
-                    var abandoned = await d.Jobs.Where(x => x.Status == "running" && x.StartedAt < DateTimeOffset.UtcNow.AddMinutes(-5)).ToListAsync(stoppingToken);
-                    foreach (var stale in abandoned) { stale.Status = "uncertain"; stale.Error = "Worker interrumpido; requiere conciliación."; var c = await d.Conversations.SingleAsync(x => x.Id == stale.ConversationId, stoppingToken); c.Status = "human"; c.Revision++; }
-                    await d.SaveChangesAsync(stoppingToken);
-                    var job = await d.Jobs.Where(x => x.Status == "pending").OrderBy(x => x.CreatedAt).FirstOrDefaultAsync(stoppingToken); if (job is null) continue;
-                    var claimed = await d.Jobs.Where(x => x.Id == job.Id && x.Status == "pending").ExecuteUpdateAsync(x => x.SetProperty(j => j.Status, "running").SetProperty(j => j.StartedAt, DateTimeOffset.UtcNow), stoppingToken); if (claimed == 0) continue;
-                    job.Status = "running"; job.StartedAt = DateTimeOffset.UtcNow;
-                    try { using var deadline = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken); deadline.CancelAfter(TimeSpan.FromMinutes(2)); await s.ServiceProvider.GetRequiredService<AgentRuntime>().Run(job, deadline.Token); job.Status = "done"; }
-                    catch (Exception ex) when (ex is not OperationCanceledException || !stoppingToken.IsCancellationRequested)
-                    {
-                        job.Status = "failed"; job.Error = "Revisión humana requerida: " + ex.GetType().Name;
-                        var c = await d.Conversations.SingleAsync(x => x.Id == job.ConversationId, CancellationToken.None); c.Status = "human"; c.Revision++;
-                        d.Activities.Add(new Activity { TenantId = tid, ConversationId = c.Id, ContactId = c.ContactId, Kind = "error", Actor = "Sistema", ActorRole = "system", Body = "El agente no pudo completar la atención. Revisa historial e integraciones." });
-                        log.LogWarning("Agent job failed {JobId} {ErrorType}", job.Id, ex.GetType().Name);
-                    }
-                    await d.SaveChangesAsync(CancellationToken.None);
-                }
+                foreach (var tid in tenants) { using var s = scopes.CreateScope(); await RunTenant(s.ServiceProvider, tid, log, stoppingToken); }
             }
             catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning("Worker unavailable {ErrorType}", ex.GetType().Name); }
             await Task.Delay(1500, stoppingToken);
         }
     }
+    public static async Task RunTenant(IServiceProvider sp, Guid tid, ILogger log, CancellationToken stoppingToken)
+    {
+        var scope = sp.GetRequiredService<TenantScope>(); scope.Id = tid; var d = sp.GetRequiredService<CrmDb>(); var service = sp.GetRequiredService<ConversationService>();
+        await InboxWorkflow.WakeDue(d,scope,service,stoppingToken);
+        await RetireAbandoned(d, scope, service, stoppingToken);
+        var job = await d.Jobs.Where(x => x.Status == "pending").OrderBy(x => x.CreatedAt).FirstOrDefaultAsync(stoppingToken); if (job is null) return;
+        if (await Claim(d, job.Id, stoppingToken) == 0) return;
+        job.Status = "running"; job.StartedAt = DateTimeOffset.UtcNow;
+        try { using var deadline = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken); deadline.CancelAfter(TimeSpan.FromMinutes(2)); await sp.GetRequiredService<AgentRuntime>().Run(job, deadline.Token); job.Status = "done"; }
+        catch (Exception ex) when (ex is not OperationCanceledException || !stoppingToken.IsCancellationRequested)
+        {
+            job.Status = "failed"; job.Error = "Revisión humana requerida: " + ex.GetType().Name;
+            var c = await d.Conversations.SingleAsync(x => x.Id == job.ConversationId, CancellationToken.None); c.Status = "human"; c.Revision++;
+            d.Activities.Add(new Activity { TenantId = tid, ConversationId = c.Id, ContactId = c.ContactId, Kind = "error", Actor = "Sistema", ActorRole = "system", Body = "El agente no pudo completar la atención. Revisa historial e integraciones." });
+            log.LogWarning("Agent job failed {JobId} {ErrorType}", job.Id, ex.GetType().Name);
+        }
+        await d.SaveChangesAsync(CancellationToken.None);
+    }
+    public static async Task RetireAbandoned(CrmDb d, TenantScope scope, ConversationService service, CancellationToken ct)
+    {
+        var due = await d.Jobs.Where(x => x.Status == "running" && x.StartedAt < DateTimeOffset.UtcNow.AddMinutes(-AbandonedAfterMinutes)).Select(x => new { x.Id, x.ConversationId }).ToListAsync(ct);
+        foreach (var row in due)
+        {
+            using var lease = await service.Lock(row.ConversationId, ct);
+            var stale = await d.Jobs.SingleAsync(x => x.Id == row.Id, ct); await d.Entry(stale).ReloadAsync(ct);
+            if (stale.Status != "running" || !(stale.StartedAt < DateTimeOffset.UtcNow.AddMinutes(-AbandonedAfterMinutes))) continue;
+            stale.Status = "uncertain"; stale.Error = "Worker interrumpido; requiere conciliación.";
+            var c = await d.Conversations.SingleAsync(x => x.Id == stale.ConversationId, ct); await d.Entry(c).ReloadAsync(ct);
+            // agent-jobs-health.plan.md §0 (abierta): si ya la atendía una persona, su Summary se conserva.
+            if (c.Status != "human") c.Summary = AbandonedNote;
+            c.Status = "human"; c.Revision++;
+            d.Activities.Add(InboxWorkflow.Event(scope, c, "Sistema", "handoff", AbandonedNote));
+            await d.SaveChangesAsync(ct);
+        }
+    }
+    public static Task<int> Claim(CrmDb d, Guid jobId, CancellationToken ct) =>
+        d.Jobs.Where(x => x.Id == jobId && x.Status == "pending").ExecuteUpdateAsync(x => x.SetProperty(j => j.Status, "running").SetProperty(j => j.StartedAt, DateTimeOffset.UtcNow), ct);
 }

@@ -7,7 +7,7 @@ using Microsoft.Extensions.Configuration;
 using Recepcion;
 using Recepcion.Integrations;
 using Xunit;
-public sealed class AgentIntegrationTests:IAsyncLifetime {
+public sealed partial class AgentIntegrationTests:IAsyncLifetime {
     CrmDb db=null!;TenantScope scope=new(){Id=Guid.NewGuid()};IConfiguration config=null!;Conversation conversation=null!;Contact contact=null!;Job job=null!;
     DbContextOptions<CrmDb> options=null!;IDataProtectionProvider protection=new EphemeralDataProtectionProvider();
     public async Task InitializeAsync(){
