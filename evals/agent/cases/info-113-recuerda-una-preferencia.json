@@ -1,0 +1,24 @@
+{
+  "id": "info-113-recuerda-una-preferencia",
+  "area": "info",
+  "severity": "high",
+  "synthetic": true,
+  "danger": "no guardar lo que el paciente pide recordar le obliga a repetirlo en cada conversación",
+  "linked": true,
+  "history": [
+    {
+      "from": "patient",
+      "text": "Un favor: a mí siempre me queda mejor por la tarde, después de las 3. Tenlo en cuenta para las próximas veces."
+    }
+  ],
+  "hospital": {
+    "availability": true
+  },
+  "expect": {
+    "handoff": false,
+    "tools": [
+      "remember"
+    ],
+    "memory": true
+  }
+}

@@ -72,6 +72,13 @@ El paciente escribe; el agente **responde**, **consulta** (agenda, recetas emiti
 | 52 | El menú es una lista de cuatro opciones, todas atendidas sin modelo: Agendar cita, Mis citas, Mi receta, Hablar con persona. | `AgentAppointmentsTests.MenuOffersMyAppointments`. |
 | 53 | «Mis citas» muestra las citas vigentes del paciente según Hospital (las canceladas no cuentan): una sola, como tarjeta con «Cambiar fecha», «Cancelar cita» y «Seguir aquí»; varias, como lista; ninguna, ofrece agendar. Sin expediente no consulta Hospital. Una cita que Hospital no lista para ese paciente no se muestra ni se toca. | `OneAppointmentIsShownWithWhatCanBeDoneToIt`, `SeveralAppointmentsComeAsAListAndCancelledOnesAreLeftOut`, `NoAppointmentsOffersToBookOne`, `WithoutARecordThereIsNothingToLookUp`, `AnAppointmentThatIsNotThePatientsIsNeverActedOn`. |
 | 54 | Cancelar y cambiar de fecha son dos toques: el primero propone (tarjeta con qué cita y, al cambiar, la nueva fecha), el segundo confirma; nada cambia en Hospital antes. | `CancellingIsTwoTapsAndOnlyHappensOnTheSecond`, `ChangingTheDateListsFreeHoursAndMovesThatAppointment`; en vivo, `AgentLiveJourney.NewClientRegistersAndBooksFromTheMenuWithoutTheModel` mueve y cancela su cita en el Hospital local. |
+| 55 | Al modelo sólo va la conversación en curso: los mensajes posteriores al último silencio de 12 h o más, con tope de 24. Un mensaje de hace días no viaja en cada turno. | `AgentMemoryTests.OnlyTheConversationInProgressIsSentToTheModel`. |
+| 56 | Lo que pasó antes llega como hechos fechados tomados del rastro del propio agente en el CRM (cita creada, cambiada o cancelada, receta entregada, registro, nota del agente; una derivación consta sin su motivo): los 5 últimos, sin identificadores y sin llamar a un modelo para resumir. Las notas del personal nunca entran. | `PastActionsReachTheModelAsDatedFactsWithoutStaffNotes`. |
+| 57 | Memoria por cliente: `remember` guarda una preferencia que el paciente dijo de sí mismo, sólo bajo una clave de la lista cerrada (`trato`, `doctor_preferido`, `horario_preferido`), de hasta 120 caracteres, cifrada, una fila por contacto y clave: un valor nuevo reemplaza al anterior y uno vacío lo borra. Es del contacto, no del canal. | `APreferenceIsKeptReplacedAndForgotten`, `AKeyOutsideTheListIsNeverStored`. |
+| 58 | `recall` busca, sólo cuando el modelo lo pide, en los mensajes de este contacto anteriores a la conversación en curso (hasta 300, sin distinguir acentos) y devuelve como mucho 5 fragmentos fechados. Nunca lee mensajes de otro contacto. | `RecallFindsAnOlderMessageOfThisContactOnly` · evals `citas-116-algo-dicho-hace-dias`, `info-113-recuerda-una-preferencia`. |
+| 59 | La memoria es un dato, no una instrucción ni un permiso: va delimitada después de las reglas, y lo que diga no cambia el alcance ni lo que las herramientas pueden hacer. | `TheStablePartOfThePromptComesFirst` (posición) · evals `seguridad-111-memoria-con-instrucciones`, `seguridad-112-memoria-no-guarda-salud`. |
+| 60 | Las reglas y la guía van primero e idénticas para todos los pacientes del hospital; la fecha, el estado del contacto y la memoria van al final. El proveedor puede así cobrar el prefijo como caché. | `TheStablePartOfThePromptComesFirst`. |
+| 61 | Las lecturas de memoria usan índice: mensajes por conversación y fecha, actividad por conversación y por contacto y fecha. | `MemoryReadsHaveTheirIndexes`. |
 
 ## Anti-criterios
 
@@ -184,6 +191,35 @@ Lo que el respaldo necesitaba para funcionar, comprobado contra la API: sin `tem
 Defectos propios que destapó gpt-6-luna, corregidos con prueba: una respuesta vacía tras iniciar el formulario se trataba como fallo; el formulario empezaba de cero aunque el paciente ya hubiera dado datos (ahora `start_registration` recibe lo ya dicho); una propuesta se perdía si el modelo además pedía una persona; «6:00 PM» no se reconocía como las 18:00 de la guía; «registra a mi papá» terminaba en una propuesta de registro (ahora ninguna herramienta de registro o agenda corre cuando la petición es para otra persona); con horarios libres encontrados ya no se ofrece una persona.
 
 El caso que sigue fallando con gpt-6-luna es `registro-105` o `citas-101` según la pasada: vuelve a preguntar un parentesco ya dicho, u ofrece una persona ante un mensaje muy informal. Ninguno es de seguridad.
+
+## Memoria · 2026-10-04
+
+Antes: cada turno enviaba al modelo los últimos 24 mensajes sin importar su antigüedad, y nada más. Una conversación es una por contacto y canal y no se cierra nunca, así que el agente arrastraba mensajes de hace semanas y, pasado el mensaje 24, olvidaba todo.
+
+Cuatro capas, de la más barata a la más cara; cada una se usa sólo cuando hace falta:
+
+| Capa | Qué guarda | De dónde sale | Cuándo se lee | Costo |
+|---|---|---|---|---|
+| Conversación en curso | los mensajes desde el último silencio de 12 h | `Messages`, por índice | cada turno con modelo | los tokens de esos mensajes |
+| Estado de trabajo | propuesta pendiente, formulario, oferta de persona | `Activities` (ya existía) | cada turno, sin modelo | una consulta indexada |
+| Hechos pasados | lo que el agente hizo por este paciente | `Activities` del agente (ya existían) | cada turno con modelo | una consulta; ≤ 5 líneas |
+| Preferencias del cliente | trato, doctor y horario preferidos | `ContactMemories`, escritas con `remember` | cada turno con modelo | una consulta; ≤ 3 líneas |
+| Mensajes antiguos | lo que se dijo en días pasados | `Messages`, con `recall` | sólo si el modelo lo pide | una llamada de herramienta |
+
+Lo que se evaluó y por qué no:
+
+- **RAG con vectores (pgvector) sobre los mensajes.** Los cuerpos están cifrados en la aplicación: Postgres no puede indexarlos. Guardar embeddings es guardar una copia legible del contenido (se puede invertir) y exige enviar cada mensaje del paciente a un proveedor de embeddings. Además el corpus por paciente son decenas o cientos de mensajes: se llega a ellos por `ContactId` con un índice y se filtran en memoria en milisegundos. La búsqueda vectorial resuelve escala, y aquí no la hay.
+- **Búsqueda de texto de Postgres (`tsvector`).** Requiere el texto en claro en la base: deshace el cifrado en reposo.
+- **Resumen de la conversación escrito por un modelo.** Cuesta una llamada por conversación, puede inventar, y lo que importa recordar (qué cita, qué receta, qué registro) ya consta como hecho en el rastro del CRM, escrito por el servidor.
+- **Memoria libre que el modelo escribe a su criterio.** Acaba guardando síntomas y diagnósticos en el CRM. La lista de claves es cerrada y no clínica.
+
+RAG sí es la herramienta correcta para la *guía del hospital* si crece más allá de lo que cabe en el prompt: no es dato de pacientes y puede indexarse en claro. Hoy la guía viaja entera y, por ir en el prefijo estable, el proveedor la cobra como caché.
+
+Verificación (2026-10-04): suite `395 pasan, 0 fallan`. Con `gpt-6-luna` y 111 casos (los 107 más cuatro de memoria): 108 y 109 en dos pasadas completas; los cuatro de memoria pasan. Información y alcance repetidas tres veces tras mover la fecha y el estado del contacto al final del prompt: 92 de 93. Con NIM no se midió: comparte la clave con el agente en vivo.
+
+Lo que esas pasadas corrigieron: el modelo llamó a `remember` cuando le pidieron guardar un diagnóstico, así que qué puede guardarse lo decide el código (`AgentMemory.Accepts`: una hora o día para el horario, un nombre corto para trato y doctor, nunca palabras de salud) y la eval mide lo que quedó guardado, no la llamada; y «mi hija Sofía» llegaba al formulario sin parentesco y se volvía a preguntar (`ARelationshipSaidInFrontOfTheContactsNameIsNotAskedAgain`).
+
+No medido: cuántos tokens cobra el proveedor como caché con el prefijo estable. No hecho: una pantalla en el CRM para ver o corregir las preferencias guardadas (hoy se ven en el historial como «Preferencia del paciente guardada» y el paciente las borra pidiéndolo).
 
 ## Límites conocidos
 

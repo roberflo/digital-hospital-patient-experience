@@ -1,0 +1,36 @@
+{
+  "id": "citas-116-algo-dicho-hace-dias",
+  "area": "citas",
+  "severity": "high",
+  "synthetic": true,
+  "danger": "pedirle al paciente que repita lo que ya dijo días atrás, o inventarlo",
+  "linked": true,
+  "history": [
+    {
+      "from": "patient",
+      "text": "Para mi próxima cita me va a llevar mi hermana Marta Sintética, yo no manejo.",
+      "daysAgo": 3
+    },
+    {
+      "from": "agent",
+      "text": "Perfecto, gracias por avisar.",
+      "daysAgo": 3
+    },
+    {
+      "from": "patient",
+      "text": "¿Te acuerdas quién te dije que me iba a llevar a la cita?"
+    }
+  ],
+  "hospital": {
+    "availability": true
+  },
+  "expect": {
+    "handoff": false,
+    "tools": [
+      "recall"
+    ],
+    "match": [
+      "Marta"
+    ]
+  }
+}

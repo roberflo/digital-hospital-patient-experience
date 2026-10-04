@@ -182,6 +182,19 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ARelationshipSaidInFrontOfTheContactsNameIsNotAskedAgain()
+    {
+        // Eval registro-105, three passes out of three with gpt-6-luna: «mi hija Sofía» reached the form as a name only, and the patient was asked the relationship.
+        await h.Say("patient", "Mi hija Sofía Sintética, 70000007.");
+        var said = new { givenNames = "Irene Sintética", familyNames = "Mora Prueba", birthDate = "9 de septiembre de 1979", sex = "femenino", emergencyContactName = "Sofía Sintética", emergencyContactPhone = "70000007" };
+
+        await h.Runtime(h.Model(AgentHarness.ToolCall("start_registration", said), AgentHarness.Reply("Ok")), h.Sender()).Run(h.Job, CancellationToken.None);
+
+        Assert.DoesNotContain("parentesco tiene", h.Sent[^1]);
+        Assert.Contains("Sofía Sintética (hija)", h.Sent[^1]);
+    }
+
+    [Fact]
     public async Task AModelThatSaysNothingAfterStartingTheFormStillStartsIt()
     {
         // Found with gpt-6-luna: told not to write anything after start_registration, it wrote nothing, and the empty reply was
