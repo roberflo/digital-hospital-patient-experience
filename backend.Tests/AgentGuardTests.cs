@@ -490,10 +490,11 @@ public sealed class AgentHarness(Guid? tenant = null, string phone = "5037000000
         await Db.SaveChangesAsync(); await Say("patient", message);
     }
     /// <summary>Appends a message; the job always answers the newest patient message.</summary>
-    public async Task Say(string sender, string body)
+    public async Task Say(string sender, string body, DateTimeOffset? at = null)
     {
         await Task.Delay(3); // messages are ordered by their timestamp, which the database keeps to the microsecond
         var message = new Message { TenantId = Scope.Id, ConversationId = Conversation.Id, ExternalId = "m-" + Guid.NewGuid(), Body = body, Sender = sender }; Db.Add(message);
+        if (at is not null) message.CreatedAt = at.Value;
         if (sender == "patient") { Job = new() { TenantId = Scope.Id, ConversationId = Conversation.Id, Key = "agent:" + message.ExternalId }; Db.Add(Job); }
         await Db.SaveChangesAsync();
     }

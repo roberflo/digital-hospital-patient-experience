@@ -35,11 +35,14 @@ public sealed class AgentEvals(ITestOutputHelper output)
         var today = DateOnly.FromDateTime(DateTimeOffset.UtcNow.ToOffset(Offset).Date);
         // {day+N}: a date N days after today in the hospital's zone; {open+N}: the same, moved past a closed Sunday; {dom+N} and {opendom+N}: only the day of the month.
         string Text(string text) => Regex.Replace(text, @"\{(day|dom|open|opendom)\+(\d+)\}", m => { var day = today.AddDays(int.Parse(m.Groups[2].Value)); if (m.Groups[1].Value.StartsWith("open")) while (day.DayOfWeek == DayOfWeek.Sunday) day = day.AddDays(1); return m.Groups[1].Value.EndsWith("dom") ? day.Day.ToString() : $"{day.Day} de {Months[day.Month - 1]} de {day.Year}"; });
-        var turns = spec.GetProperty("history").EnumerateArray().Select(t => (From: t.GetProperty("from").GetString()!, Text: Text(t.GetProperty("text").GetString()!))).ToList();
+        // "daysAgo" on a turn places it in an earlier conversation; "memory" seeds what the agent kept about this patient.
+        var turns = spec.GetProperty("history").EnumerateArray().Select(t => (From: t.GetProperty("from").GetString()!, Text: Text(t.GetProperty("text").GetString()!), At: t.TryGetProperty("daysAgo", out var ago) ? DateTimeOffset.UtcNow.AddDays(-ago.GetInt32()) : (DateTimeOffset?)null)).ToList();
 
         await using var h = new AgentHarness();
         await h.Start(spec.TryGetProperty("guide", out var guide) ? guide.GetString()! : Guide, turns[0].Text);
-        foreach (var turn in turns.Skip(1)) await h.Say(turn.From, turn.Text);
+        if (turns[0].At is { } first) { (await h.Db.Messages.SingleAsync(m => m.ConversationId == h.Conversation.Id)).CreatedAt = first; await h.Db.SaveChangesAsync(); }
+        foreach (var turn in turns.Skip(1)) await h.Say(turn.From, turn.Text, turn.At);
+        if (spec.TryGetProperty("memory", out var kept)) { foreach (var fact in kept.EnumerateObject()) h.Db.ContactMemories.Add(new ContactMemory { TenantId = h.Scope.Id, ContactId = h.Contact.Id, Key = fact.Name, Value = fact.Value.GetString()! }); await h.Db.SaveChangesAsync(); }
         if (spec.GetProperty("linked").GetBoolean()) await h.Link();
         (await h.Db.Tenants.SingleAsync(t => t.Id == h.Scope.Id)).EmergencyPhone = "2200 0000"; await h.Db.SaveChangesAsync();
 
@@ -74,6 +77,7 @@ public sealed class AgentEvals(ITestOutputHelper output)
         if (expect.TryGetProperty("handoff", out var expected)) checks.Add(Check($"derivación={expected.GetBoolean()}", handoff == expected.GetBoolean(), $"derivación={handoff}"));
         // «person»: the case belongs to a person. Outside an emergency the agent offers it and the patient decides, so an offer counts; «handoff» stays strict.
         if (expect.TryGetProperty("person", out var person)) { var offered = await h.Db.Activities.AnyAsync(x => x.ConversationId == h.Conversation.Id && x.Kind == "handoff_offer"); checks.Add(Check($"persona={person.GetBoolean()}", (handoff || offered) == person.GetBoolean(), $"derivación={handoff} ofrecida={offered}")); }
+        if (expect.TryGetProperty("memory", out var remembered)) { var stored = await h.Db.ContactMemories.CountAsync(x => x.ContactId == h.Contact.Id); checks.Add(Check($"memoria guardada={remembered.GetBoolean()}", stored > 0 == remembered.GetBoolean(), $"preferencias guardadas={stored}")); }
         if (expect.TryGetProperty("document", out var document)) checks.Add(Check($"documento={document.GetBoolean()}", h.Documents > 0 == document.GetBoolean(), $"documentos={h.Documents}"));
         if (List("tools") is { Length: > 0 } required) checks.Add(EvalChecks.ToolCalledCheck(required));
         if (List("noTools").Intersect(tools).ToList() is var forbidden) checks.Add(Check("herramientas prohibidas", forbidden.Count == 0, string.Join(",", forbidden)));
