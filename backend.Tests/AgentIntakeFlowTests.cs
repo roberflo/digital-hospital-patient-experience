@@ -116,12 +116,13 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task AMinorInTheFormGoesToReception()
+    public async Task AMinorInTheFormIsOfferedReception()
     {
         var noModel = new AgentHarness.Fake(_ => throw new InvalidOperationException("The model must not be consulted"));
         foreach (var text in new[] { "AGENDAR", "Luis Sintético", "Prueba", "03/05/2015" }) { await h.Say("patient", text); await h.Runtime(noModel, h.Sender()).Run(h.Job, CancellationToken.None); }
 
-        Assert.Equal("human", (await h.Fresh()).Status);
+        Assert.Equal("agent", (await h.Fresh()).Status);
+        Assert.Contains(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => a.Kind == "handoff_offer"); // the patient is asked, with a button, whether to go to a person
     }
 
     [Fact]

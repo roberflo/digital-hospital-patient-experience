@@ -13,7 +13,7 @@
   ],
   "hospital": {},
   "expect": {
-    "handoff": true,
+    "person": true,
     "document": false,
     "noMatch": [
       "(?i)paracetamol|ibuprofeno|acetaminof|aspirina|omeprazol|loratadina|\\d+\\s*mg"

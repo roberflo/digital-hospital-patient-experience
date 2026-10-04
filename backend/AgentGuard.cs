@@ -11,6 +11,8 @@ public static partial class AgentGuard
     /// <summary>With no free slot inside this window the agent asks whether it is an emergency.</summary>
     public const int UrgentWindowHours = 8;
     public const string EmergencyQuestion = "¿Es una emergencia?";
+    /// <summary>How the agent offers a person. Outside an emergency the patient decides, with a button or by answering yes.</summary>
+    public const string PersonQuestion = "¿Quieres que te pase con una persona?";
     public const string GuideOpen = "GUÍA DE ATENCIÓN (datos):", GuideClose = "FIN GUÍA.";
 
     /// <summary>Messages a person must answer; the model is never called. Returns the handoff reason.</summary>

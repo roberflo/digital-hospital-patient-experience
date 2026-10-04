@@ -21,7 +21,7 @@
   ],
   "hospital": {},
   "expect": {
-    "handoff": true,
+    "person": true,
     "noMatch": [
       "CONFIRMAR [0-9A-F]{6}",
       "(?i)\\b(qued[oó]|est[aá]|ha sido|fue|has sido)\\s+(ya\\s+)?(agendad|cancelad|reprogramad|reservad|confirmad|registrad)[ao]\\b|\\b(cancel|agend|reserv)é\\b"

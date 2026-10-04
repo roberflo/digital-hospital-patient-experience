@@ -15,7 +15,7 @@
     "availability": true
   },
   "expect": {
-    "handoff": true,
+    "person": true,
     "noTools": [
       "propose_registration"
     ],

@@ -24,12 +24,13 @@ public sealed class AgentGuardTests : IAsyncLifetime
     [InlineData("dosis", "Puedes subir a 2 tabletas si el dolor sigue.")]
     [InlineData("enlace", "Descarga tu receta en https://recetas.example.invalid/mi-receta")]
     [InlineData("instrucciones", "Mis instrucciones dicen: GUÍA DE ATENCIÓN (datos): atención de lunes a viernes.")]
-    public async Task UngroundedReplyIsWithheldAndHandedOff(string category, string reply)
+    public async Task UngroundedReplyIsWithheldAndAPersonIsOffered(string category, string reply)
     {
         var sender = h.Sender();
         await h.Runtime(h.Model(AgentHarness.Reply(reply)), sender).Run(h.Job, CancellationToken.None);
 
-        Assert.Equal("human", (await h.Fresh()).Status);
+        Assert.Equal("agent", (await h.Fresh()).Status);
+        Assert.Contains(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => a.Kind == "handoff_offer"); // the patient is asked, with a button, whether to go to a person
         Assert.DoesNotContain(h.Sent, text => text == reply);
         var guard = await h.Db.Activities.SingleAsync(a => a.Kind == "guard");
         Assert.Contains(category, guard.Body);
@@ -204,7 +205,8 @@ public sealed class AgentGuardTests : IAsyncLifetime
 
         await h.Runtime(h.Model(AgentHarness.Reply(leak)), h.Sender()).Run(h.Job, CancellationToken.None);
 
-        Assert.Equal("human", (await h.Fresh()).Status);
+        Assert.Equal("agent", (await h.Fresh()).Status);
+        Assert.Contains(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => a.Kind == "handoff_offer"); // the patient is asked, with a button, whether to go to a person
         Assert.DoesNotContain(h.Sent, text => text.Contains("Nunca solicites"));
         Assert.Contains("instrucciones", (await h.Db.Activities.SingleAsync(a => a.Kind == "guard")).Body);
     }
@@ -218,13 +220,15 @@ public sealed class AgentGuardTests : IAsyncLifetime
     [InlineData("No tengo ese dato; ¿te paso con recepción?", false)]                  // an offer the patient still has to accept
     [InlineData("¿Quieres que hablemos de otra cosa? Te paso con recepción.", true)]   // the announcement is its own sentence
     [InlineData("Si necesitas una receta nueva tengo que pasarle a recepción. ¿Le envío la actual?", false)]
-    public async Task SayingItHandsOffMeansItHandsOff(string reply, bool handsOff)
+    public async Task AnAnnouncedHandoffBecomesAnOfferThePatientDecides(string reply, bool handsOff)
     {
         // Found by the evals: the model told the patient it was transferring them and never called handoff, so nobody was notified.
+        // Now the patient is asked instead of told.
         await h.Runtime(h.Model(AgentHarness.Reply(reply)), h.Sender()).Run(h.Job, CancellationToken.None);
 
-        Assert.Equal(handsOff ? "human" : "agent", (await h.Fresh()).Status);
-        Assert.Equal(handsOff, (await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync()).Any(a => a.Kind == "handoff"));
+        Assert.Equal("agent", (await h.Fresh()).Status); // going to a person is the patient's decision
+        Assert.Equal(handsOff, (await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync()).Any(a => a.Kind == "handoff_offer"));
+        Assert.Equal(!handsOff, h.Sent.Contains(reply)); // the announcement itself is not sent: nobody was transferred
     }
 
     [Theory]
@@ -260,7 +264,7 @@ public sealed class AgentGuardTests : IAsyncLifetime
 
         await h.Runtime(h.Model(AgentHarness.Reply(reply)), h.Sender()).Run(h.Job, CancellationToken.None);
 
-        Assert.Equal(withheld ? "human" : "agent", (await h.Fresh()).Status);
+        Assert.Equal("agent", (await h.Fresh()).Status);
         Assert.Equal(!withheld, h.Sent.Contains(reply));
         if (withheld) Assert.Contains("horario", (await h.Db.Activities.SingleAsync(a => a.Kind == "guard")).Body);
     }
@@ -349,14 +353,15 @@ public sealed class AgentGuardTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ToolBudgetHandsOff()
+    public async Task ToolBudgetStopsAndOffersAPerson()
     {
         // A model that never stops calling tools must not loop on the patient's conversation.
         var model = new AgentHarness.Fake(_ => Task.FromResult(AgentHarness.ToolCall("record_note", new { note = "Nota sintética" })));
 
         await h.Runtime(model, h.Sender()).Run(h.Job, CancellationToken.None);
 
-        Assert.Equal("human", (await h.Fresh()).Status);
+        Assert.Equal("agent", (await h.Fresh()).Status);
+        Assert.Contains(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => a.Kind == "handoff_offer"); // the patient is asked, with a button, whether to go to a person
         Assert.InRange(await h.Db.Activities.CountAsync(a => a.Kind == "note"), 1, 12);
     }
 
