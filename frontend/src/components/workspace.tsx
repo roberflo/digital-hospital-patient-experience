@@ -68,6 +68,7 @@ import { HospitalConnection, PatientLink } from './hospital-connection';
 import { PatientClinical } from './patient-clinical';
 import { SavedInboxViews, ConversationMacros } from './inbox-productivity';
 import { DashboardView } from './dashboard-view';
+import { FirstSteps } from './first-steps';
 import {
   AssignmentControl,
   TeamWorkspace,
@@ -504,6 +505,7 @@ export default function Workspace() {
               {view === 'dashboard' ? (
                 <>
                   <ErrorBox error={statsError} />
+                  <FirstSteps me={me} onNavigate={navigate} />
                   <DashboardView stats={stats} onNavigate={navigate} />
                 </>
               ) : view === 'inbox' ? (
