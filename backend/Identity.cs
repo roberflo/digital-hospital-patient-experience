@@ -39,7 +39,12 @@ public static class Identity
             // HOSPITAL_SELF_ONBOARDING=false returns that to the operator (BOOTSTRAP_TENANT_ID).
             if (config is null || config["HOSPITAL_SELF_ONBOARDING"] == "false" || role != "admin" ||
                 ctx.User.FindFirst("iss")?.Value != config["Auth:Authority"] ||
-                await db.Members.IgnoreQueryFilters().AnyAsync(x=>x.Subject==sub)) return false;
+                await db.Members.IgnoreQueryFilters().AnyAsync(x=>x.Subject==sub))
+            {
+                // Anyone but the Administrador arriving first is told why, not just refused.
+                if (role != "admin") ctx.Items["hospital-pending"] = true;
+                return false;
+            }
             var hospital = new Tenant { Id=tenant, Name="Hospital · configura tu nombre", AgentEnabled=false };
             db.Tenants.Add(hospital);
             try { await db.SaveChangesAsync(); ctx.Items["tenant-created"] = true; }

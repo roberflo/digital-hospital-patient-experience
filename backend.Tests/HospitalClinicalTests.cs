@@ -102,6 +102,24 @@ public sealed class HospitalClinicalTests
         var other = new DefaultHttpContext { User = new ClaimsPrincipal(new ClaimsIdentity(new[] { new Claim("sub", actor.ToString()), new Claim("tenant_id", otherTenant.ToString()), new Claim("realm_access", "{\"roles\":[\"Médicos\"]}") }, "test")) };
         Assert.False(await Identity.Bind(other, verify, new TenantScope(), new CurrentUser()));
     }
+    [Fact]
+    public async Task ANonAdministratorBeforeTheHospitalIsOnboardedIsRefusedAndToldWhy()
+    {
+        var options = new DbContextOptionsBuilder<CrmDb>().UseNpgsql(Environment.GetEnvironmentVariable("TEST_DATABASE") ?? throw new InvalidOperationException("Run scripts/test-backend.sh")).Options;
+        var protection = new EphemeralDataProtectionProvider();
+        var absent = Guid.NewGuid();
+        DefaultHttpContext Caller(string roles) => new() { User = new ClaimsPrincipal(new ClaimsIdentity(new[] { new Claim("sub", Guid.NewGuid().ToString()), new Claim("tenant_id", absent.ToString()), new Claim("realm_access", "{\"roles\":[" + roles + "]}") }, "test")) };
+        await using var db = new CrmDb(options, new TenantScope(), protection);
+        await db.Database.MigrateAsync();
+        var doctor = Caller("\"Médicos\"");
+        Assert.False(await Identity.Bind(doctor, db, new TenantScope(), new CurrentUser()));
+        Assert.True(doctor.Items.ContainsKey("hospital-pending"));
+        // No Recepción role at all is the ordinary refusal, not "ask your Administrador".
+        var nurse = Caller("\"Enfermería\"");
+        Assert.False(await Identity.Bind(nurse, db, new TenantScope(), new CurrentUser()));
+        Assert.False(nurse.Items.ContainsKey("hospital-pending"));
+        Assert.False(await db.Tenants.IgnoreQueryFilters().AnyAsync(t => t.Id == absent));
+    }
     sealed class Handler(Func<HttpRequestMessage,HttpResponseMessage> send) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) => Task.FromResult(send(request));

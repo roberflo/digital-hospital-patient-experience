@@ -60,7 +60,12 @@ app.Use(async (ctx, next) =>
     if (ctx.Request.Path.StartsWithSegments("/api"))
     {
         if (ctx.User.Identity?.IsAuthenticated != true) { ctx.Response.StatusCode = 401; return; }
-        if (!await Identity.Bind(ctx, ctx.RequestServices.GetRequiredService<CrmDb>(), ctx.RequestServices.GetRequiredService<TenantScope>(), ctx.RequestServices.GetRequiredService<CurrentUser>(), config)) { ctx.Response.StatusCode = 403; return; }
+        if (!await Identity.Bind(ctx, ctx.RequestServices.GetRequiredService<CrmDb>(), ctx.RequestServices.GetRequiredService<TenantScope>(), ctx.RequestServices.GetRequiredService<CurrentUser>(), config))
+        {
+            ctx.Response.StatusCode = 403;
+            if (ctx.Items.ContainsKey("hospital-pending")) await ctx.Response.WriteAsJsonAsync(new { title = "Tu hospital aún no está dado de alta en Recepción. Pide al Administrador del hospital que inicie sesión primero.", code = "hospital_not_onboarded" });
+            return;
+        }
         // First sign-in of a hospital: take its real name and zone from Hospital, best effort.
         if (ctx.Items.ContainsKey("tenant-created")) { var sp = ctx.RequestServices; await HospitalIdentitySync.Run(sp.GetRequiredService<CrmDb>(), sp.GetRequiredService<TenantScope>(), sp.GetRequiredService<CurrentUser>(), sp.GetRequiredService<HospitalClient>(), sp.GetRequiredService<ILogger<HospitalClient>>(), ctx.RequestAborted, TimeSpan.FromSeconds(3)); }
     }

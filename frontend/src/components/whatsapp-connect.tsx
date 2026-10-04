@@ -34,7 +34,13 @@ export default function WhatsAppConnect() {
       </div>
       {authError && (
         <p role="alert" className="mt-6 text-red-700">
-          No se pudo validar tu sesión. <Link href="/login">Inicia sesión</Link>.
+          {authError.code === 'hospital_not_onboarded' ? (
+            authError.message
+          ) : (
+            <>
+              No se pudo validar tu sesión. <Link href="/login">Inicia sesión</Link>.
+            </>
+          )}
         </p>
       )}
       {!me && !authError && <p className="mt-6">Comprobando acceso…</p>}

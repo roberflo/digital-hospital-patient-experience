@@ -62,11 +62,14 @@ function Recovery({ children }: { children: ReactNode }) {
           return;
         }
         if (!response.ok) {
+          const refusal = await response.json().catch(() => null);
           if (isSessionPaused())
             setError(
-              response.status === 403
-                ? 'Esta cuenta no tiene acceso al hospital. Entra con tu cuenta anterior o consulta al administrador.'
-                : 'No pudimos comprobar la sesión. Revisa tu conexión e inténtalo de nuevo.',
+              refusal?.code === 'hospital_not_onboarded'
+                ? refusal.title
+                : response.status === 403
+                  ? 'Esta cuenta no tiene acceso al hospital. Entra con tu cuenta anterior o consulta al administrador.'
+                  : 'No pudimos comprobar la sesión. Revisa tu conexión e inténtalo de nuevo.',
             );
           return;
         }
