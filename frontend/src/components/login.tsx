@@ -1,8 +1,25 @@
 'use client';
+import { useEffect, useRef } from 'react';
 import { signIn } from 'next-auth/react';
 import { HeartPulse, ArrowRight, MessageCircle, CalendarCheck, ShieldCheck } from 'lucide-react';
 import { Button } from './ui/button';
-export default function Login({ returnTo = '/' }: { returnTo?: string }) {
+// «Abrir Recepción» from Hospital: step 0 reuses any Keycloak session, step 1 forces credentials,
+// step 2 means the wrong account came back twice, so stop instead of looping.
+export default function Login({
+  returnTo = '/',
+  hospital,
+}: {
+  returnTo?: string;
+  hospital?: { as: string; step: 0 | 1 | 2 };
+}) {
+  const auto = hospital && hospital.step < 2 ? hospital : undefined;
+  const started = useRef(false);
+  useEffect(() => {
+    if (!auto || started.current) return;
+    started.current = true;
+    const callbackUrl = `/login?as=${auto.as}&step=${auto.step + 1}`;
+    void signIn('keycloak', { callbackUrl }, auto.step ? { prompt: 'login' } : undefined);
+  }, [auto]);
   return (
     <main className="login-shell">
       <section className="login-story">
@@ -45,6 +62,13 @@ export default function Login({ returnTo = '/' }: { returnTo?: string }) {
             {returnTo === '/session-restored' ? 'Recupera tu sesión' : 'Bienvenido a recepción'}
           </h2>
           <p>Inicia sesión para continuar con la atención.</p>
+          {auto && <p role="status">Conectando con tu cuenta del hospital…</p>}
+          {hospital?.step === 2 && (
+            <p role="alert">
+              Entraste con una cuenta distinta a la de Hospital. Cierra sesión o continúa con la
+              cuenta del hospital correcto.
+            </p>
+          )}
           <Button
             className="w-full mt-4"
             onClick={() => signIn('keycloak', { callbackUrl: returnTo })}
