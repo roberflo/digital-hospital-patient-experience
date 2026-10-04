@@ -257,6 +257,8 @@ public sealed class AgentGuardTests : IAsyncLifetime
     [InlineData("Consultando disponibilidad para el lunes: 07:00, 07:30 y 08:00.", true)]            // nothing was consulted: invented slots
     [InlineData("Los sábados abrimos de 8:00 a 12:00.", false)]                                      // from the guide
     [InlineData("Los recordatorios llegan a las 09:00 del día anterior y una hora antes.", false)]   // the product's own reminder time
+    [InlineData("We are open Saturdays from 8:00 AM to 12:00 PM, and weekdays until 6:00 PM.", false)] // the guide's 18:00, written the 12-hour way
+    [InlineData("Los sábados cerramos a las 5:00 p. m.", true)]                                       // 17:00 is in no source
     public async Task TimesThatNoSourceGaveAreWithheld(string reply, bool withheld)
     {
         // Found by the evals: with thinking off the model listed appointment slots it never asked the hospital for.
@@ -419,6 +421,31 @@ public sealed class AgentGuardTests : IAsyncLifetime
 
         Assert.Contains("titular", seen[1]);
         Assert.Equal("agent", (await h.Fresh()).Status);
+    }
+
+    [Theory]
+    [InlineData("none")]   // gpt-6-luna only accepts tools in Chat Completions with the effort stated as none
+    [InlineData(null)]
+    public async Task OpenAiGetsNoTemperatureAndTheConfiguredReasoningEffort(string? effort)
+    {
+        // Probed against the API on 2026-10-04: gpt-5-nano answers 400 to temperature 0.2, gpt-6-luna answers 400 to tools without
+        // reasoning_effort. As it was configured, the fallback would have failed exactly when it was needed.
+        var bodies = new List<(string Host, string Body)>();
+        var model = new AgentHarness.Fake(async request =>
+        {
+            bodies.Add((request.RequestUri!.Host, await request.Content!.ReadAsStringAsync()));
+            return request.RequestUri.Host == "api.openai.com" ? AgentHarness.Reply("Respuesta de respaldo") : new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) { Content = new StringContent("{}", Encoding.UTF8, "application/json") };
+        });
+
+        await h.Runtime(model, h.Sender(), extra: new() { ["OPENAI_API_KEY"] = "synthetic-openai", ["OPENAI_MODEL"] = "synthetic-fallback", ["OPENAI_REASONING_EFFORT"] = effort }).Run(h.Job, CancellationToken.None);
+
+        using var openai = JsonDocument.Parse(bodies.Single(b => b.Host == "api.openai.com").Body);
+        Assert.False(openai.RootElement.TryGetProperty("temperature", out _));
+        Assert.Equal(effort, openai.RootElement.TryGetProperty("reasoning_effort", out var sent) ? sent.GetString() : null);
+        using var nim = JsonDocument.Parse(bodies.First(b => b.Host != "api.openai.com").Body);
+        Assert.True(nim.RootElement.TryGetProperty("temperature", out _)); // NIM keeps its low temperature
+        Assert.False(nim.RootElement.TryGetProperty("reasoning_effort", out _));
+        Assert.Contains("Respuesta de respaldo", h.Sent);
     }
 
     [Theory]

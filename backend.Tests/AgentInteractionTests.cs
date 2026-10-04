@@ -261,6 +261,35 @@ public sealed class AgentInteractionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task FreeHoursAreOfferedEvenWhenTheModelSaysNothingAboutThem()
+    {
+        // Found with gpt-6-luna: it read the agenda and then returned no text, and the patient got «no logré responder».
+        await h.Link();
+        var hospital = h.Hospital(availability: Agenda(new DateTimeOffset(DateTime.UtcNow.Date.AddDays(3).AddHours(15), TimeSpan.Zero), Guid.NewGuid()));
+        var silent = AgentHarness.Json(new { choices = new[] { new { message = new { role = "assistant", content = "" } } } });
+
+        await h.Runtime(h.Model(AgentHarness.ToolCall("hospital_availability", new { date = DateTime.UtcNow.AddDays(3).ToString("yyyy-MM-dd") }), silent), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
+
+        Assert.StartsWith("Hay espacio el *", Assert.Single(h.Sent));
+        Assert.Equal("list", Assert.Single(h.Interactive).GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public async Task FreeHoursWinOverAnOfferOfAPerson()
+    {
+        // Found with gpt-6-luna: «kiero una cita xfa», the agenda had hours, and the model still asked for a person. The patient asked for an appointment.
+        await h.Link();
+        var hospital = h.Hospital(availability: Agenda(new DateTimeOffset(DateTime.UtcNow.Date.AddDays(3).AddHours(15), TimeSpan.Zero), Guid.NewGuid()));
+        var model = h.Model(AgentHarness.ToolCall("hospital_availability", new { date = DateTime.UtcNow.AddDays(3).ToString("yyyy-MM-dd") }), AgentHarness.ToolCall("handoff", new { reason = "No entendí el mensaje" }), AgentHarness.Reply(""));
+
+        await h.Runtime(model, h.Sender(), hospital).Run(h.Job, CancellationToken.None);
+
+        Assert.StartsWith("Hay espacio el *", Assert.Single(h.Sent));
+        Assert.Equal("list", Assert.Single(h.Interactive).GetProperty("type").GetString());
+        Assert.Equal("agent", (await h.Fresh()).Status);
+    }
+
+    [Fact]
     public async Task ReplyTooLongForButtonsIsStillSentAsText()
     {
         // WhatsApp caps an interactive body at 1024 characters. Here the emergency buttons would attach; the text is too long to carry them.

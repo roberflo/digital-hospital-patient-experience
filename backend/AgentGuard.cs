@@ -38,6 +38,10 @@ public static partial class AgentGuard
         Appointment().Match(body.Trim()) is { Success: true } m && Guid.TryParse(m.Groups[2].Value, out var appointment)
             ? (m.Groups[1].Value, appointment, m.Groups[3].Success ? m.Groups[3].Value : null, Guid.TryParse(m.Groups[4].Value, out var doctor) ? doctor : null, int.TryParse(m.Groups[5].Value, out var minutes) ? minutes : null, Unsafe().Replace(m.Groups[6].Value, "").Trim()) : null;
 
+    /// <summary>The request is for someone else («registra a mi papá», «una cita a mi hijo»). A record or an appointment made from here
+    /// would belong to that person and be tied to the sender's phone, so neither is offered.</summary>
+    public static bool ForSomeoneElse(string body) => Other().IsMatch(body);
+
     /// <summary>The patient wants a prescription that does not exist yet. Re-sending the previous one would be a refill nobody authorised.</summary>
     public static bool AsksNewPrescription(string body) => Refill().IsMatch(body);
 
@@ -72,7 +76,13 @@ public static partial class AgentGuard
         if (Time().Matches(reply).Any(m => !hours.Contains(Clock(m)))) return "horario";
         return proposed && Done().IsMatch(reply) ? "confirmación" : null;
     }
-    static string Clock(Match time) => int.Parse(time.Groups[1].Value) + ":" + time.Groups[2].Value;
+    /// <summary>A clock time on the 24-hour scale, so «6:00 PM» and the guide's «18:00» are the same hour.</summary>
+    static string Clock(Match time)
+    {
+        var hour = int.Parse(time.Groups[1].Value); var half = time.Groups[3].Value.ToLowerInvariant();
+        if (half == "p" && hour < 12) hour += 12; else if (half == "a" && hour == 12) hour = 0;
+        return hour + ":" + time.Groups[2].Value;
+    }
     static string Compact(string text) => Spaces().Replace(text.ToLowerInvariant(), "");
 
     [GeneratedRegex(@"(?i)\b(hablar|comunicarme|comunicar|contactar)\b.{0,60}\b(doctor|doctora|médico|medico|humano|persona)\b")] private static partial Regex Person();
@@ -86,10 +96,12 @@ public static partial class AgentGuard
     [GeneratedRegex(@"(?i)\b\d+(?:[.,]\d+)?\s*(?:mg|mcg|µg|g|ml|ui|gotas?|tabletas?|pastillas?|c[aá]psulas?|comprimidos?|ampollas?|cucharadas?)\b|\bcada\s+\d+\s*(?:horas?|hrs?|h|d[ií]as?)\b")] private static partial Regex Dose();
     [GeneratedRegex(@"(?i)\b(?:qued[oó]|est[aá]|ha\s+sido|ha\s+quedado|fue)\s+(?:ya\s+)?(?:confirmad|agendad|reprogramad|cancelad|reservad|programad)[ao]\b|\b(?:he|hemos)\s+(?:confirmado|agendado|reprogramado|cancelado|reservado)\b|\b(?:cancel|agend|reprogram|reserv)é\b")] private static partial Regex Done();
     [GeneratedRegex(@"(?i)^\W*(s[ií]|sip|claro|correcto|afirmativo|as[ií] es|ok|okay|dale|de acuerdo|confirmo|conf[ií]rm[ae]la|conf[ií]rmalo|confirmar)\b")] private static partial Regex Yes();
-    [GeneratedRegex(@"\b([01]?\d|2[0-3]):([0-5]\d)\b")] private static partial Regex Time();
+    [GeneratedRegex(@"(?i)\b([01]?\d|2[0-3]):([0-5]\d)(?:\s*([ap])\.?\s?m\b)?")] private static partial Regex Time();
     [GeneratedRegex(@"(?i)^\W*(?:hola|holi|buenas|buen\s+d[ií]a|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|saludos|hi|hello)(?:\W+(?:buenas|buen\s+d[ií]a|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches))?\W*$")] private static partial Regex Greeting();
     [GeneratedRegex(@"^CITA (\S{1,40}) ([0-9a-fA-F-]{36}) (\d{1,3})(?: (.{1,60}))?$")] private static partial Regex Slot();
     [GeneratedRegex(@"^(VERCITA|CANCELAR|MOVER) ([0-9a-fA-F-]{36})(?: (\S{1,40}) ([0-9a-fA-F-]{36}) (\d{1,3})(?: (.{1,60}))?)?$")] private static partial Regex Appointment();
+    // ponytail: the closed list of relatives people actually name; «para una amiga de mi tía» is left to the prompt and the evals.
+    [GeneratedRegex(@"(?i)\b(?:registr|inscrib|ag[eé]nd|cita|apunt|anot)\w*\b.{0,40}?\b(?:a|para|de)\s+(?:mi|mis|nuestr[oa])\s+(?:pap[aá]|mam[aá]|padres?|madre|espos[oa]|marido|mujer|hij[oa]s?|herman[oa]|abuel[oa]|t[ií][oa]|novi[oa]|pareja|suegr[oa]|niet[oa]|sobrin[oa]|amig[oa]|vecin[oa]|jef[ea]|beb[eé]|ni[ñn][oa])\b")] private static partial Regex Other();
     [GeneratedRegex(@"[^\p{L}\p{M} .'-]")] private static partial Regex Unsafe();
     [GeneratedRegex(@"\s+")] private static partial Regex Spaces();
 }

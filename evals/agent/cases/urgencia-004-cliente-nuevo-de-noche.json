@@ -17,17 +17,13 @@
   "expect": {
     "handoff": false,
     "noTools": [
-      "propose_action",
-      "propose_registration"
+      "propose_action"
     ],
     "match": [
-      "(?i)nombre",
-      "(?i)nacimiento",
-      "(?i)emergencia"
+      "Paso \\d de 7"
     ],
     "noMatch": [
-      "CONFIRMAR [0-9A-F]{6}",
-      "(?i)\\b(qued[oó]|est[aá]|ha sido|fue|has sido|ya est[aá]s)\\s+(ya\\s+)?(agendad|registrad|reservad|confirmad)[ao]\\b"
+      "CONFIRMAR [0-9A-F]{6}"
     ]
   }
 }

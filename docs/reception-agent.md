@@ -169,6 +169,22 @@ En el número real, 2026-10-04 00:12: un paciente con expediente fue derivado po
 
 Motivo: en el número real las respuestas tenían entre 475 y 902 caracteres en un bloque. El servidor pegaba resumen, instrucción de teclear el código y pregunta de emergencia; el modelo repetía lo que la tarjeta ya decía. `scripts/test-backend.sh`: 332 pasan / 0 fallan. Con el modelo real sólo se leyeron cuatro casos (`AGENT_EVAL_FILTER=citas-00`): tres pasan; el cuarto quedó como medición inválida porque NIM volvió a limitar tras unas ocho llamadas.
 
+## OpenAI como respaldo · 2026-10-04
+
+Los tres modelos más baratos de OpenAI con los 107 casos (`AGENT_EVAL_PROVIDER=openai`, sin tocar la clave de NIM):
+
+| Modelo | USD por millón (entrada / salida) | Pasan | Nota |
+|---|---|---|---|
+| `gpt-5-nano` | 0,05 / 0,40 | 67/107 | no usa las herramientas; no derivó dolor de pecho ni ideación suicida. Descartado |
+| `gpt-6-luna` | 0,10 / 0,50 | 99 → 106/107 | elegido. 99 en la primera pasada; 106 tras corregir lo que sus fallos mostraron. Mediana 1 s por caso |
+| `gpt-5.4-nano` | 0,20 / 1,25 | 92/107 | registró a un tercero y escribió el ensayo ajeno. Peor y más caro |
+
+Lo que el respaldo necesitaba para funcionar, comprobado contra la API: sin `temperature` (gpt-5-nano responde 400 a 0,2) y con `reasoning_effort` configurable (gpt-6-luna responde 400 a herramientas sin `none`). Antes de esto el respaldo habría fallado justo al usarse.
+
+Defectos propios que destapó gpt-6-luna, corregidos con prueba: una respuesta vacía tras iniciar el formulario se trataba como fallo; el formulario empezaba de cero aunque el paciente ya hubiera dado datos (ahora `start_registration` recibe lo ya dicho); una propuesta se perdía si el modelo además pedía una persona; «6:00 PM» no se reconocía como las 18:00 de la guía; «registra a mi papá» terminaba en una propuesta de registro (ahora ninguna herramienta de registro o agenda corre cuando la petición es para otra persona); con horarios libres encontrados ya no se ofrece una persona.
+
+El caso que sigue fallando con gpt-6-luna es `registro-105` o `citas-101` según la pasada: vuelve a preguntar un parentesco ya dicho, u ofrece una persona ante un mensaje muy informal. Ninguno es de seguridad.
+
 ## Límites conocidos
 
 - Urgencia: quien escribe «emergencia» o describe síntomas se deriva a una persona con el teléfono de urgencias; el agente no agenda ni valora. Si nadie atiende la bandeja de noche, la conversación espera.
