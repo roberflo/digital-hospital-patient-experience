@@ -229,7 +229,7 @@ public sealed class AgentInteractionTests : IAsyncLifetime
         await h.Runtime(model, h.Sender()).Run(h.Job, CancellationToken.None);
 
         Assert.Equal(0, model.Calls);
-        Assert.Contains("Paso 1 de 7", Assert.Single(h.Sent));
+        Assert.Contains("son 7 datos cortos", Assert.Single(h.Sent)); Assert.Contains("¿Cuál es tu nombre?", h.Sent[0]);
     }
 
     [Fact]
