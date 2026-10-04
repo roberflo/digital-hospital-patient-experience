@@ -71,7 +71,7 @@ public sealed class AgentVoiceTests : IAsyncLifetime
     [Fact]
     public async Task ProposalDoesNotCarryTheEmergencyQuestion()
     {
-        await h.Link();
+        await h.Link(); (await h.Db.Tenants.SingleAsync(t => t.Id == h.Scope.Id)).EmergencyPhone = "2200 0000"; await h.Db.SaveChangesAsync();
         var start = new DateTimeOffset(DateTime.UtcNow.Date.AddDays(1).AddHours(15), TimeSpan.Zero);
         var hospital = h.Hospital(availability: new { clinicalDayFrom = "", clinicalDayTo = "", maxDaysPerQuery = 31, rollState = "open", professionals = new[] { new { clinicianId = Guid.NewGuid(), clinicianName = "Dra. Sintética", placeName = "", defaultDurationMinutes = 30, days = new[] { new { clinicalDay = "", state = "open", takenSlotCount = 0, utcOffset = "-06:00", slots = new[] { new { slotId = "a", startsAt = DateTimeOffset.UtcNow.AddHours(30), durationMinutes = 30, takenBy = 0, offered = true } } } } } } });
         var model = h.Model(AgentHarness.ToolCall("hospital_availability", new { date = DateTime.UtcNow.AddHours(-6).ToString("yyyy-MM-dd") }), AgentHarness.ToolCall("propose_action", new { action = "create", doctorId = Guid.NewGuid(), startsAt = start, durationMinutes = 30 }), AgentHarness.Reply("Te propongo esta cita."));
@@ -80,8 +80,9 @@ public sealed class AgentVoiceTests : IAsyncLifetime
 
         var sent = Assert.Single(h.Sent);
         ReadsLikeAChat(sent);
-        Assert.DoesNotContain("emergencia", sent); // one question at a time: «¿la confirmo?» and «¿es una emergencia?» answered with one «sí» would be ambiguous
+        Assert.DoesNotContain("¿Es una emergencia?", sent); // one question at a time: «¿la confirmo?» and «¿es una emergencia?» answered with one «sí» would be ambiguous
         Assert.DoesNotContain("CONFIRMAR", sent);
+        Assert.EndsWith("Si es una emergencia y no puedes esperar, llama al *2200 0000*.", sent); // the hospital's rule still reaches the patient, as a statement
     }
 
     [Theory]
@@ -159,5 +160,18 @@ public sealed class AgentVoiceTests : IAsyncLifetime
         Assert.DoesNotContain("quedó agendada", sent); // what the model wrote about a proposal is never sent, so it cannot claim it is done
         Assert.Equal("agent", (await h.Fresh()).Status);
         Assert.Empty(h.HospitalWrites);
+    }
+
+    [Fact]
+    public async Task AProposalIsNotLostWhenTheAgentAlsoAsksForAPerson()
+    {
+        // Read in the evals: the model proposed the cancellation and then called handoff; the patient got the offer and never saw the card.
+        await h.Link();
+        var model = h.Model(AgentHarness.ToolCall("propose_action", new { action = "cancel", appointmentId = Guid.NewGuid() }), AgentHarness.ToolCall("handoff", new { reason = "No pude repetir la propuesta" }), AgentHarness.Reply("Ok"));
+
+        await h.Runtime(model, h.Sender(), h.Hospital()).Run(h.Job, CancellationToken.None);
+
+        Assert.EndsWith("¿La cancelo?", Assert.Single(h.Sent));
+        Assert.StartsWith("CONFIRMAR ", AgentHarness.Options(h.Interactive[^1])[0].Id);
     }
 }

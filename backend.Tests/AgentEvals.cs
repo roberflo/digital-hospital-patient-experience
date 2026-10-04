@@ -28,7 +28,8 @@ public sealed class AgentEvals(ITestOutputHelper output)
         var key = Env("NVIDIA_API_KEY", "OPENAI_API_KEY");
         if (key.Length == 0) throw new InvalidOperationException("The agent evals need a model key; a skipped eval is not a pass.");
         var model = Environment.GetEnvironmentVariable("AGENT_EVAL_MODEL") is { Length: > 0 } chosen ? chosen : Env("AI_MODEL", "OPENAI_MODEL") is { Length: > 0 } configured ? configured : AgentRuntime.DefaultModel;
-        var provider = new Dictionary<string, string?> { ["NVIDIA_API_KEY"] = key, ["AI_MODEL"] = model, ["AI_BASE_URL"] = Env("AI_BASE_URL", "OPENAI_BASE_URL") is { Length: > 0 } url ? url : openAi ? "https://api.openai.com/v1" : null };
+        var provider = new Dictionary<string, string?> { ["NVIDIA_API_KEY"] = key, ["AI_MODEL"] = model, ["AI_BASE_URL"] = Env("AI_BASE_URL", "OPENAI_BASE_URL") is { Length: > 0 } url ? url : openAi ? "https://api.openai.com/v1" : null,
+            ["OPENAI_REASONING_EFFORT"] = Environment.GetEnvironmentVariable("AGENT_EVAL_REASONING") is { Length: > 0 } reasoning ? reasoning : Environment.GetEnvironmentVariable("OPENAI_REASONING_EFFORT") };
 
         var spec = AgentEvalCases.Load().Single(c => c.GetProperty("id").GetString() == id);
         var today = DateOnly.FromDateTime(DateTimeOffset.UtcNow.ToOffset(Offset).Date);

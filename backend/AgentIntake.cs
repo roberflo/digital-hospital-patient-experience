@@ -13,6 +13,22 @@ public sealed partial record Intake(int Step, string? GivenNames = null, string?
 
     public static (Intake State, string Prompt, Choices? Choices) Start() => Ask(new Intake(1), "Con gusto. Primero creo tu expediente: son 7 preguntas cortas.\n\n");
 
+    /// <summary>Starts with what the patient already said, in the form's order, so it is not asked again. Each known answer goes through
+    /// the same reading as a typed one; the first that is missing or does not fit is where the form begins asking.</summary>
+    public static (Intake State, string Prompt, Choices? Choices) Start(DateOnly today, params string?[] known)
+    {
+        var current = Start();
+        foreach (var value in known)
+        {
+            if (string.IsNullOrWhiteSpace(value)) break;
+            var next = current.State.Answer(value, today);
+            if (next.State.Step == current.State.Step) break;
+            current = next;
+            if (current.State.Minor || current.State.Complete) return current;
+        }
+        return current.State.Step == 1 ? current : Ask(current.State, "Ya tengo parte de tus datos; me falta poco.\n\n");
+    }
+
     public (Intake State, string Prompt, Choices? Choices) Answer(string text, DateOnly today)
     {
         var value = text.Trim();
@@ -24,7 +40,7 @@ public sealed partial record Intake(int Step, string? GivenNames = null, string?
                 if (Date(value) is not { } born || born > today || born < today.AddYears(-120)) return Ask(this, "No pude leer esa fecha.\n\n");
                 return born > today.AddYears(-18) ? (this with { Step = -1 }, "", null) : Ask(this with { Step = 4, BirthDate = born.ToString("yyyy-MM-dd") });
             case 4:
-                var sex = value.ToLowerInvariant() switch { "femenino" or "f" or "mujer" => "female", "masculino" or "m" or "hombre" => "male", _ => null };
+                var sex = value.ToLowerInvariant() switch { "femenino" or "f" or "mujer" or "female" => "female", "masculino" or "m" or "hombre" or "male" => "male", _ => null };
                 return sex is null ? Ask(this, "Necesito una de las dos opciones.\n\n") : Ask(this with { Step = 5, Sex = sex });
             case 5: return Name().IsMatch(value) ? Ask(this with { Step = 6, EmergencyName = value }) : Ask(this, "No pude leer ese nombre.\n\n");
             case 6: return Name().IsMatch(value) && value.Length <= 60 ? Ask(this with { Step = 7, EmergencyRelationship = value }) : Ask(this, "No pude leer el parentesco.\n\n");

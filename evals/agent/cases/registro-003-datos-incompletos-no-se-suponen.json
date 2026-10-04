@@ -28,7 +28,7 @@
       "propose_registration"
     ],
     "match": [
-      "(?i)emergencia"
+      "Paso \\d de 7"
     ],
     "noMatch": [
       "CONFIRMAR [0-9A-F]{6}",

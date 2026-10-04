@@ -135,4 +135,81 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
         Assert.Equal("agent", (await h.Fresh()).Status);
         Assert.Contains(AgentHarness.Options(h.Interactive[^1]), option => option.Id == "AGENDAR");
     }
+
+    [Fact]
+    public void WhatThePatientAlreadySaidIsNotAskedAgain()
+    {
+        // Read in the evals: the patient had given name and birth date, and the form started over at «¿cuáles son tus nombres?».
+        var (state, prompt, choices) = Intake.Start(Today, "Rosa Sintética", "Prueba", "8 de enero de 1985");
+
+        Assert.Equal(4, state.Step);
+        Assert.Equal(("Rosa Sintética", "Prueba", "1985-01-08"), (state.GivenNames, state.FamilyNames, state.BirthDate));
+        Assert.Contains("Paso 4 de 7", prompt); Assert.NotNull(choices);
+    }
+
+    [Fact]
+    public void AKnownAnswerThatDoesNotFitIsAskedNotKept()
+    {
+        var (state, prompt, _) = Intake.Start(Today, "Rosa Sintética", "Prueba", "el año pasado", "female");
+
+        Assert.Equal(3, state.Step); Assert.Null(state.Sex); // nothing after the answer that failed is taken either
+        Assert.Contains("fecha de nacimiento", prompt);
+    }
+
+    [Fact]
+    public async Task AgentHandsTheFormWhatItAlreadyKnows()
+    {
+        var everything = new { givenNames = "Irene Sintética", familyNames = "Mora Prueba", birthDate = "1979-09-09", sex = "female", emergencyContactName = "Sofía Sintética", emergencyContactRelationship = "hija", emergencyContactPhone = "70000007" };
+
+        await h.Runtime(h.Model(AgentHarness.ToolCall("start_registration", everything), AgentHarness.Reply("Ok")), h.Sender()).Run(h.Job, CancellationToken.None);
+
+        // Nothing is missing, so there is nothing to ask: the patient gets the card to confirm.
+        var card = Assert.Single(h.Sent);
+        Assert.Contains("*Irene Sintética Mora Prueba*", card); Assert.EndsWith("¿Están correctos?", card);
+        Assert.Single(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id && a.Kind.StartsWith("proposal:")).ToListAsync());
+    }
+
+    [Fact]
+    public async Task AMinorIsNoticedAsSoonAsTheBirthDateIsKnown()
+    {
+        var minor = new { givenNames = "Diego Sintético", familyNames = "Prueba", birthDate = "2010-01-01", sex = "male" };
+
+        await h.Runtime(h.Model(AgentHarness.ToolCall("start_registration", minor), AgentHarness.Reply("Ok")), h.Sender()).Run(h.Job, CancellationToken.None);
+
+        Assert.Contains("menor de 18", Assert.Single(h.Sent));
+        Assert.Contains(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => a.Kind == "handoff_offer");
+        Assert.DoesNotContain(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => a.Kind == "intake");
+    }
+
+    [Fact]
+    public async Task AModelThatSaysNothingAfterStartingTheFormStillStartsIt()
+    {
+        // Found with gpt-6-luna: told not to write anything after start_registration, it wrote nothing, and the empty reply was
+        // treated as a failure («no logré responder eso»). The earlier tests never saw it: their simulated model always wrote something.
+        var silent = AgentHarness.Json(new { choices = new[] { new { message = new { role = "assistant", content = "" } } } });
+
+        await h.Runtime(h.Model(AgentHarness.ToolCall("start_registration", new { givenNames = "Rosa Sintética" }), silent), h.Sender()).Run(h.Job, CancellationToken.None);
+
+        Assert.Contains("Paso 2 de 7", Assert.Single(h.Sent));
+        Assert.DoesNotContain(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => a.Kind == "handoff_offer");
+    }
+
+    [Theory]
+    [InlineData("Quiero registrar a mi papá para una cita, él no tiene WhatsApp. Se llama Pedro Sintético Prueba.")]
+    [InlineData("Registre a mi esposa: Carla Sintética Prueba, 3 de marzo de 1991.")]
+    [InlineData("Agéndele una cita a mi hijo mañana, por favor.")]
+    public async Task ARequestForSomeoneElseNeverRegistersOrBooksUnderThisPhone(string message)
+    {
+        // Found with gpt-6-luna: «registra a mi papá» ended in a registration card for the father, tied to the sender's number.
+        // His prescriptions would then be delivered to that phone.
+        await h.Say("patient", message);
+        var father = new { givenNames = "Pedro Sintético", familyNames = "Prueba", birthDate = "1950-02-02", sex = "male", emergencyContactName = "Julia Sintética", emergencyContactRelationship = "hija", emergencyContactPhone = "70000003" };
+        var model = h.Model(AgentHarness.ToolCall("start_registration", father), AgentHarness.ToolCall("propose_registration", father), AgentHarness.Reply("Cada persona debe escribir desde su propio número."));
+
+        await h.Runtime(model, h.Sender()).Run(h.Job, CancellationToken.None);
+
+        var trail = await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync();
+        Assert.DoesNotContain(trail, a => a.Kind.StartsWith("proposal:") || a.Kind == "intake");
+        Assert.DoesNotContain(h.Sent, text => text.Contains("Pedro Sintético"));
+    }
 }

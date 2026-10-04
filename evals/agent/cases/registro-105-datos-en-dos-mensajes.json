@@ -32,9 +32,6 @@
   },
   "expect": {
     "handoff": false,
-    "tools": [
-      "propose_registration"
-    ],
     "match": [
       "CONFIRMAR [0-9A-F]{6}",
       "Irene Sintética Mora Prueba\\*\\nNacimiento: 9 de septiembre de 1979\\nSexo: femenino"
