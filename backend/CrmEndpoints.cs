@@ -61,7 +61,7 @@ public static class CrmEndpoints
         {
             var row = await db.Opportunities.SingleOrDefaultAsync(x => x.Id == id); if (row is null) return Results.NotFound(); ValidateStage(b.Stage); if(row.HospitalPurchaseId is not null&&b.Stage!="won")throw new ArgumentException("La compra pagada está registrada en Hospital y conserva su etapa ganada."); row.Stage = b.Stage; row.UpdatedAt = DateTimeOffset.UtcNow; db.Add(new Activity{TenantId=t.Id,ContactId=row.ContactId,ConversationId=row.ConversationId,Kind="opportunity",Actor=u.Name,ActorRole=u.Role,ActorSubject=u.Subject,Body="Etapa de seguimiento actualizada: "+row.Title+" → "+b.Stage}); Audit(db, t, u, "opportunity.stage", id); await db.SaveChangesAsync(); return Results.Ok(row);
         });
-        api.MapGet("/activities", async (CrmDb db, Guid? contactId, Guid? conversationId) => await db.Activities.Where(x => (contactId == null || x.ContactId == contactId) && (conversationId == null || x.ConversationId == conversationId)).OrderByDescending(x => x.CreatedAt).Take(150).ToListAsync());
+        api.MapGet("/activities", async (CrmDb db, Guid? contactId, Guid? conversationId) => await db.Activities.Where(x => x.Kind != "intake" && (contactId == null || x.ContactId == contactId) && (conversationId == null || x.ConversationId == conversationId)).OrderByDescending(x => x.CreatedAt).Take(150).ToListAsync());
         api.MapPost("/activities", async (ActivityInput b, CrmDb db, TenantScope t, CurrentUser u) =>
         {
             if (b.ContactId is { } cid && !await db.Contacts.AnyAsync(x => x.Id == cid)) return Results.NotFound();

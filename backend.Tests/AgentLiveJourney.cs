@@ -61,7 +61,7 @@ public sealed class AgentLiveJourney(ITestOutputHelper output)
         var registered = await Turn(TapConfirm());
         await h.Db.Entry(h.Contact).ReloadAsync();
         var patient = Assert.NotNull(h.Contact.PatientId);
-        Assert.Contains("registrado", registered);
+        Assert.Contains("ya tienes tu expediente", registered);
         var record = await hospital.GetVerifiedPatientAsync(tenant, patient, h.Contact.Phone); // Hospital really holds the record, with this phone
         Assert.Equal(family, record.FamilyNames);
 
@@ -182,7 +182,7 @@ public sealed class AgentLiveJourney(ITestOutputHelper output)
         var registered = await Turn(Button(0));
         await h.Db.Entry(h.Contact).ReloadAsync();
         var patient = Assert.NotNull(h.Contact.PatientId);
-        Assert.Contains("registrado", registered);
+        Assert.Contains("ya tienes tu expediente", registered);
         var row = h.Interactive[^1].GetProperty("action").GetProperty("sections")[0].GetProperty("rows")[0];
 
         await Turn(row.GetProperty("id").GetString());

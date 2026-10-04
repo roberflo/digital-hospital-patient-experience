@@ -19,6 +19,10 @@ public sealed partial class HospitalClient
         }, ct);
         return await ParseAsync<HospitalRegistration>(response, ct);
     }
+    /// <summary>Names the caller for Hospital's audit trail, which stores the request's User-Agent as <c>origin_agent</c>.
+    /// Without it an appointment made by the WhatsApp agent cannot be told from one a person made in the CRM.</summary>
+    public void CallAs(string origin) { http.DefaultRequestHeaders.Remove("User-Agent"); http.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", origin); }
+
     /// <summary>How many active appointments hold a slot, by the agenda's own count; null when the agenda no longer publishes it.</summary>
     public async Task<int?> SlotOccupancyAsync(Guid tenantId, Guid doctor, DateTimeOffset start, string timeZone, CancellationToken ct = default)
     {

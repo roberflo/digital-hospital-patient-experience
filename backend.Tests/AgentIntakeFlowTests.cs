@@ -94,7 +94,7 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
         var registered = await Say(confirm);
 
         Assert.Equal(h.Contact.Phone, Assert.Single(posts).GetProperty("phone").GetString());
-        Assert.Contains("registrado", registered);
+        Assert.Contains("ya tienes tu expediente", registered);
         Assert.Equal("list", h.Interactive[^1].GetProperty("type").GetString()); // the free hours come with the confirmation, unasked
         Assert.Equal("agent", (await h.Fresh()).Status);
         Assert.DoesNotContain(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id && a.Kind.StartsWith("intake")).ToListAsync(), a => a.Body.Contains("Sintética")); // the finished form keeps no personal data
