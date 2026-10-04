@@ -59,12 +59,8 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         // so they keep working while the AI provider is down or rate-limited. Without a record the conversation goes on to the agent.
         if (contact.PatientId is not null && latest.Body.Trim() is "AGENDAR") { await OfferSlots(asked, tenant.EmergencyPhone, ct); return; }
         if (contact.PatientId is not null && latest.Body.Trim() is "RECETA") { await DeliverLatest(ct); return; }
-        // Only a greeting and nobody has answered lately: the menu goes out at once, with no model call.
-        if (AgentGuard.IsGreeting(latest.Body) && !history.Any(x => x.Sender != "patient" && x.CreatedAt > DateTimeOffset.UtcNow.AddHours(-12)))
-        {
-            await conversations.Send(conv.Id, $"¡Hola! Soy el asistente de recepción de {tenant.Name}. ¿En qué te ayudo?", "agent", "agent:" + job.Id, ct: ct,
-                choices: new([new("AGENDAR", "Agendar cita"), new("RECETA", "Mi receta"), new("persona", "Hablar con persona")])); return;
-        }
+        // Only a greeting: the menu goes out at once, with no model call.
+        if (AgentGuard.IsGreeting(latest.Body)) { await conversations.Send(conv.Id, $"¡Hola! Soy el asistente de recepción de {tenant.Name}. ¿En qué te ayudo?", "agent", "agent:" + job.Id, ct: ct, choices: Menu); return; }
         var instructions = $"""
             Eres el asistente de recepción de {tenant.Name}. Responde en español de forma breve y cálida, tratando al paciente de tú, igual que los mensajes del sistema.
             Ahora en el hospital: {Weekdays[(int)now.DayOfWeek]} {now:yyyy-MM-dd HH:mm} (zona {tenant.TimeZone}, UTC{now:zzz}). «Hoy», «mañana» y los días de la semana se cuentan desde esa fecha local, nunca desde UTC.
@@ -133,6 +129,8 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             // No provider answered (outage, rate limit, no credit). The patient is told a person will answer instead of being left in silence;
             // anything a tool already did stays recorded in the history for that person.
             db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "agent_provider", Actor = "Sistema", ActorRole = "system", Body = $"Ningún proveedor de IA respondió ({(ex as ClientResultException)?.Status.ToString() ?? ex.GetType().Name}). Conversación pasada a una persona." });
+            // A registered patient can still book and get the prescription from the menu, which needs no model: offer that instead of a person.
+            if (contact.PatientId is not null && calls == 0) { await db.SaveChangesAsync(CancellationToken.None); await conversations.Send(conv.Id, "En este momento no puedo leer mensajes escritos, pero sí puedo ayudarte con estas opciones:", "agent", "agent:" + job.Id, ct: CancellationToken.None, choices: Menu); return; }
             await Handoff(conv, "La atención automática no está disponible en este momento.", CancellationToken.None); return;
         }
         fault?.Throw();
@@ -164,6 +162,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         if (!await Active(conv.Id, revision, ct)) return;
         await conversations.Send(conv.Id, content.Length > 4000 ? content[..4000] : content, "agent", "agent:" + job.Id, ct: ct, choices: choices);
     }
+    static readonly Choices Menu = new([new("AGENDAR", "Agendar cita"), new("RECETA", "Mi receta"), new("persona", "Hablar con persona")]);
     Choices Confirmation() => new([new("CONFIRMAR " + proposal, "Confirmar"), new("otro", second ?? "Otro horario")]);
     string When(DateTimeOffset start) { var local = TimeZoneInfo.ConvertTime(start, zone); return $"{Weekdays[(int)local.DayOfWeek]} {local.Day} de {Months[local.Month - 1]} de {local.Year} a las {local:HH:mm}"; }
 
