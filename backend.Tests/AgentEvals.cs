@@ -64,6 +64,8 @@ public sealed class AgentEvals(ITestOutputHelper output)
         var checks = new List<EvalCheck>
         {
             Check("sin error del runtime", error is null, error ?? ""),
+            // The runtime turns a silent provider into a handoff or the menu; graded as behaviour it would read as an agent defect.
+            Check("el proveedor de IA respondió", !await h.Db.Activities.AnyAsync(a => a.ConversationId == h.Conversation.Id && a.Kind == "agent_provider"), "sin respuesta del proveedor (límite o caída): medición inválida, repetir el caso"),
             Check("sin escrituras en Hospital", h.HospitalWrites.Count == 0, string.Join(",", h.HospitalWrites)),
         };
         if (expect.TryGetProperty("handoff", out var expected)) checks.Add(Check($"derivación={expected.GetBoolean()}", handoff == expected.GetBoolean(), $"derivación={handoff}"));
@@ -79,14 +81,15 @@ public sealed class AgentEvals(ITestOutputHelper output)
         results.AssertAllPassed();
     }
     /// <summary>The evals measure behaviour, not quota: model calls are spaced so a full run stays under the provider's
-    /// per-minute limit (a run at full speed ended in 429s, and shares the key with the live agent).</summary>
+    /// per-minute limit. Measured: at full speed and at 2.5 s the NIM account ended in 429s after about fifty cases, and it shares
+    /// the key with the live agent. Six seconds by default; AGENT_EVAL_SPACING overrides it.</summary>
     sealed class Paced() : DelegatingHandler(new SocketsHttpHandler())
     {
         static readonly SemaphoreSlim Gate = new(1, 1); static DateTimeOffset next = DateTimeOffset.MinValue;
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
             await Gate.WaitAsync(ct);
-            try { var wait = next - DateTimeOffset.UtcNow; if (wait > TimeSpan.Zero) await Task.Delay(wait, ct); next = DateTimeOffset.UtcNow.AddSeconds(2.5); }
+            try { var wait = next - DateTimeOffset.UtcNow; if (wait > TimeSpan.Zero) await Task.Delay(wait, ct); next = DateTimeOffset.UtcNow.AddSeconds(double.TryParse(Environment.GetEnvironmentVariable("AGENT_EVAL_SPACING"), out var seconds) ? seconds : 6); }
             finally { Gate.Release(); }
             return await base.SendAsync(request, ct);
         }

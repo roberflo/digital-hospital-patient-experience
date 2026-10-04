@@ -232,6 +232,34 @@ public sealed class AgentInteractionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task WhenTheModelIsDownARegisteredPatientStillGetsTheMenu()
+    {
+        // Happened on the real number on 2026-10-04: the AI provider was rate-limited, and a registered patient who only
+        // wanted an appointment was handed to a person at midnight, although booking from the menu needs no model.
+        await h.Link();
+        var down = new AgentHarness.Fake(_ => Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.TooManyRequests) { Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json") }));
+
+        await h.Runtime(down, h.Sender()).Run(h.Job, CancellationToken.None);
+
+        Assert.Equal("agent", (await h.Fresh()).Status);
+        var ids = Buttons(Assert.Single(h.Interactive)).Select(b => b.Id).ToList();
+        Assert.Contains("AGENDAR", ids); Assert.Contains("RECETA", ids);
+        Assert.Contains(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => a.Kind == "agent_provider");
+    }
+
+    [Fact]
+    public async Task GreetingGetsTheMenuEvenInTheMiddleOfAConversation()
+    {
+        await h.Say("agent", "¿Te ayudo con algo más?"); await h.Say("patient", "Hola");
+        var model = h.Model(AgentHarness.Reply("Respuesta del modelo"));
+
+        await h.Runtime(model, h.Sender()).Run(h.Job, CancellationToken.None);
+
+        Assert.Equal(0, model.Calls);
+        Assert.Single(h.Interactive);
+    }
+
+    [Fact]
     public async Task ReplyTooLongForButtonsIsStillSentAsText()
     {
         await h.Link();
