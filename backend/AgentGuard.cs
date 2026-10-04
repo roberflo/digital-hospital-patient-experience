@@ -33,6 +33,11 @@ public static partial class AgentGuard
     public static (string StartsAt, Guid Doctor, int Minutes, string Name)? SlotChoice(string body) =>
         Slot().Match(body.Trim()) is { Success: true } m && Guid.TryParse(m.Groups[2].Value, out var doctor) ? (m.Groups[1].Value, doctor, int.Parse(m.Groups[3].Value), Unsafe().Replace(m.Groups[4].Value, "").Trim()) : null;
 
+    /// <summary>What the patient tapped on one of their own appointments: see it, cancel it, or move it (with the new slot once chosen).</summary>
+    public static (string Verb, Guid Appointment, string? StartsAt, Guid? Doctor, int? Minutes, string Name)? AppointmentChoice(string body) =>
+        Appointment().Match(body.Trim()) is { Success: true } m && Guid.TryParse(m.Groups[2].Value, out var appointment)
+            ? (m.Groups[1].Value, appointment, m.Groups[3].Success ? m.Groups[3].Value : null, Guid.TryParse(m.Groups[4].Value, out var doctor) ? doctor : null, int.TryParse(m.Groups[5].Value, out var minutes) ? minutes : null, Unsafe().Replace(m.Groups[6].Value, "").Trim()) : null;
+
     /// <summary>The patient wants a prescription that does not exist yet. Re-sending the previous one would be a refill nobody authorised.</summary>
     public static bool AsksNewPrescription(string body) => Refill().IsMatch(body);
 
@@ -84,6 +89,7 @@ public static partial class AgentGuard
     [GeneratedRegex(@"\b([01]?\d|2[0-3]):([0-5]\d)\b")] private static partial Regex Time();
     [GeneratedRegex(@"(?i)^\W*(?:hola|holi|buenas|buen\s+d[ií]a|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|saludos|hi|hello)(?:\W+(?:buenas|buen\s+d[ií]a|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches))?\W*$")] private static partial Regex Greeting();
     [GeneratedRegex(@"^CITA (\S{1,40}) ([0-9a-fA-F-]{36}) (\d{1,3})(?: (.{1,60}))?$")] private static partial Regex Slot();
+    [GeneratedRegex(@"^(VERCITA|CANCELAR|MOVER) ([0-9a-fA-F-]{36})(?: (\S{1,40}) ([0-9a-fA-F-]{36}) (\d{1,3})(?: (.{1,60}))?)?$")] private static partial Regex Appointment();
     [GeneratedRegex(@"[^\p{L}\p{M} .'-]")] private static partial Regex Unsafe();
     [GeneratedRegex(@"\s+")] private static partial Regex Spaces();
 }

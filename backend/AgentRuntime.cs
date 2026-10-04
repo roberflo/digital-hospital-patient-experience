@@ -88,6 +88,9 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "intake", Actor = "Agente", ActorRole = "agent_ai", Body = JsonSerializer.Serialize(start, Json) }); await db.SaveChangesAsync(ct);
             await conversations.Send(conv.Id, prompt, "agent", "agent:" + job.Id, ct: ct); return;
         }
+        // The patient's own appointments: see them, change one, cancel one. Each step is a tap and none needs the model.
+        if (latest.Body.Trim() is "MISCITAS") { await MyAppointments(ct); return; }
+        if (contact.PatientId is not null && AgentGuard.AppointmentChoice(latest.Body) is { } choice) { await AppointmentAction(choice, ct); return; }
         if (contact.PatientId is null && latest.Body.Trim() is "RECETA") { await OfferPerson("El contacto pide su receta y no tiene expediente vinculado.", "Para enviarte recetas, recepción tiene que vincular primero tu expediente.", ct); return; }
         // The two menu requests of a registered patient are complete on their own: they are served here, with no model call,
         // so they keep working while the AI provider is down or rate-limited. Without a record the conversation goes on to the agent.
@@ -217,7 +220,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
     void Trace(string action, bool ok = true) => db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "agent_tool", Actor = "Agente", ActorRole = "agent_ai", Body = $"Herramienta: {action}. Resultado: {(ok ? "completado" : "requiere revisión")}." });
     /// <summary>A first name to address the patient by, only when the contact's name looks like a person's.</summary>
     static string? FirstName(string name) => name.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() is { } first && first != "Paciente" && System.Text.RegularExpressions.Regex.IsMatch(first, @"^\p{Lu}\p{Ll}{1,19}$") ? first : null;
-    static readonly Choices Menu = new([new("AGENDAR", "Agendar cita"), new("RECETA", "Mi receta"), new("PERSONA", "Hablar con persona")]);
+    static readonly Choices Menu = new([new("AGENDAR", "Agendar cita", "Ver horarios libres"), new("MISCITAS", "Mis citas", "Consultar, cambiar o cancelar"), new("RECETA", "Mi receta", "Recibir mi última receta"), new("PERSONA", "Hablar con persona", "Pasar con recepción")], "Ver opciones");
 
     /// <summary>The patient decides. The agent says what it could not do and offers a person with a button; the reason is kept for the team,
     /// never shown in the chat.</summary>
@@ -378,6 +381,58 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         await ProposeRegistration(next.GivenNames!, next.FamilyNames!, next.BirthDate!, next.Sex!, next.EmergencyName!, next.EmergencyRelationship!, next.EmergencyPhone!, ct);
         await conversations.Send(conv.Id, summary!, "agent", "agent:" + job.Id, ct: ct, choices: Confirmation());
     }
+    /// <summary>The patient's booked appointments from now on, as Hospital has them. Cancelled ones are not appointments any more.</summary>
+    async Task<List<(Guid Id, DateTimeOffset Start, string Doctor)>> Upcoming(CancellationToken ct)
+    {
+        var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, zone).DateTime);
+        var range = await hospital.GetPatientAppointmentRangeAsync(scope.Id, contact.PatientId!.Value, contact.Phone, today, today.AddDays(30), ct);
+        return range.GetProperty("rows").EnumerateArray().Where(row => row.GetProperty("status").GetString() == "booked" && row.GetProperty("scheduledStart").GetDateTimeOffset() > DateTimeOffset.UtcNow)
+            .Select(row => (row.GetProperty("appointmentId").GetGuid(), row.GetProperty("scheduledStart").GetDateTimeOffset(), row.GetProperty("clinicianName").GetString() ?? "")).OrderBy(row => row.Item2).ToList();
+    }
+    string Short(DateTimeOffset start) { var local = TimeZoneInfo.ConvertTime(start, zone); return $"{Weekdays[(int)local.DayOfWeek][..3]} {local.Day} {Months[local.Month - 1][..3]} {local:HH:mm}"; }
+    Task ShowAppointment((Guid Id, DateTimeOffset Start, string Doctor) appointment, CancellationToken ct) =>
+        conversations.Send(conv.Id, $"*Cita:* {When(appointment.Start)}\n*Con:* {appointment.Doctor}\n\n¿Qué quieres hacer?", "agent", "agent:" + job.Id, ct: ct,
+            choices: new([new($"MOVER {appointment.Id}", "Cambiar fecha"), new($"CANCELAR {appointment.Id}", "Cancelar cita"), new("MENU", "Seguir aquí")]));
+
+    /// <summary>«Mis citas» from the menu.</summary>
+    async Task MyAppointments(CancellationToken ct)
+    {
+        if (contact.PatientId is null) { await conversations.Send(conv.Id, "Aún no tienes expediente con nosotros.\n¿Quieres agendar tu primera cita?", "agent", "agent:" + job.Id, ct: ct, choices: new([new("AGENDAR", "Agendar cita"), new("MENU", "Seguir aquí")])); return; }
+        List<(Guid Id, DateTimeOffset Start, string Doctor)> upcoming;
+        try { upcoming = await Upcoming(ct); Trace("my_appointments"); }
+        catch (Exception ex) when (ex is HttpRequestException or HospitalIntegrationException) { await OfferPerson("No se pudieron consultar las citas del paciente.", "Disculpa, no pude consultar tus citas en este momento.", ct); return; }
+        if (upcoming.Count == 0) { await conversations.Send(conv.Id, "No tienes citas próximas.\n¿Quieres agendar una?", "agent", "agent:" + job.Id, ct: ct, choices: new([new("AGENDAR", "Agendar cita"), new("MENU", "Seguir aquí")])); return; }
+        if (upcoming.Count == 1) { await ShowAppointment(upcoming[0], ct); return; }
+        await conversations.Send(conv.Id, "Estas son tus próximas citas.\nToca una para cambiarla o cancelarla.", "agent", "agent:" + job.Id, ct: ct,
+            choices: new(upcoming.Take(10).Select(a => new Choice($"VERCITA {a.Id}", Short(a.Start), a.Doctor)).ToList(), "Ver citas"));
+    }
+
+    /// <summary>What the patient tapped on one of their appointments. It must be one Hospital lists for this patient; then it is shown,
+    /// or a cancellation or a change is proposed for the patient to confirm.</summary>
+    async Task AppointmentAction((string Verb, Guid Appointment, string? StartsAt, Guid? Doctor, int? Minutes, string Name) choice, CancellationToken ct)
+    {
+        try
+        {
+            var upcoming = await Upcoming(ct);
+            if (!upcoming.Any(a => a.Id == choice.Appointment)) { await conversations.Send(conv.Id, "Disculpa, esa cita ya no aparece en tu agenda.\n¿En qué más te ayudo?", "agent", "agent:" + job.Id, ct: ct, choices: Menu); return; }
+            var appointment = upcoming.First(a => a.Id == choice.Appointment);
+            if (choice.Verb == "VERCITA") { await ShowAppointment(appointment, ct); return; }
+            if (choice.Verb == "MOVER" && choice.StartsAt is null)
+            {
+                var found = await Availability(TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, zone).ToString("yyyy-MM-dd"), null, ct); Trace("hospital_availability");
+                if (slots.Count == 0) { await OfferPerson("El paciente quiere cambiar una cita y no hay horarios publicados en los próximos 14 días.", "No hay horarios publicados en los próximos 14 días.", ct); return; }
+                var day = DateOnly.ParseExact(found.GetProperty("date").GetString()!, "yyyy-MM-dd");
+                await conversations.Send(conv.Id, $"Hay espacio el *{Weekdays[(int)day.DayOfWeek]} {day.Day} de {Months[day.Month - 1]}*.\nToca *Ver horarios* y elige la nueva fecha.", "agent", "agent:" + job.Id, ct: ct,
+                    choices: new(slots.Select(slot => slot with { Id = $"MOVER {choice.Appointment} " + slot.Id["CITA ".Length..] }).ToList(), "Ver horarios")); return;
+            }
+            await (choice.Verb == "CANCELAR" ? Propose("cancel", null, choice.Appointment.ToString(), null, null, ct) : Propose("reschedule", choice.Doctor?.ToString(), choice.Appointment.ToString(), choice.StartsAt, choice.Minutes, ct, choice.Name));
+            Trace("propose_action");
+            await conversations.Send(conv.Id, summary!, "agent", "agent:" + job.Id, ct: ct, choices: Confirmation());
+        }
+        catch (ArgumentException) { await conversations.Send(conv.Id, "Disculpa, ese horario ya no está disponible.\nToca *Mis citas* para intentarlo de nuevo.", "agent", "agent:" + job.Id, ct: ct, choices: Menu); }
+        catch (Exception ex) when (ex is HttpRequestException or HospitalIntegrationException) { await OfferPerson("No se pudo gestionar la cita del paciente en Hospital.", "Disculpa, no pude consultar tu cita en este momento.", ct); }
+    }
+
     /// <summary>Stores a proposal the patient still has to confirm; nothing reaches the agenda here.</summary>
     async Task<JsonElement> Propose(string action, string? doctorId, string? appointmentId, string? startsAt, int? durationMinutes, CancellationToken ct, string? doctorName = null)
     {

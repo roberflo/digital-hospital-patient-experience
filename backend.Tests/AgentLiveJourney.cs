@@ -174,7 +174,7 @@ public sealed class AgentLiveJourney(ITestOutputHelper output)
         string Button(int index) => h.Interactive[^1].GetProperty("action").GetProperty("buttons")[index].GetProperty("reply").GetProperty("id").GetString()!;
 
         await Turn(null);
-        Assert.Equal("AGENDAR", Button(0));
+        Assert.Equal("AGENDAR", AgentHarness.Options(h.Interactive[^1])[0].Id);
         Assert.Contains("Paso 1 de 7", await Turn("AGENDAR"));
         string reply = ""; foreach (var answer in new[] { "Ana Sintética", family, "12/03/1990", "Femenino", "Carlos Sintético", "Hermano", "7000 0001" }) reply = await Turn(answer);
         Assert.Contains($"*Ana Sintética {family}*", reply);
@@ -192,9 +192,23 @@ public sealed class AgentLiveJourney(ITestOutputHelper output)
         var today = HospitalClient.ClinicalDay(DateTimeOffset.UtcNow, "America/El_Salvador");
         var appointment = Assert.Single((await hospital.GetPatientAppointmentRangeAsync(tenant, patient, h.Contact.Phone, today, today.AddDays(20))).GetProperty("rows").EnumerateArray());
         Assert.Equal("booked", appointment.GetProperty("status").GetString());
-        output.WriteLine($"HOSPITAL: cita {appointment.GetProperty("status").GetString()} con {appointment.GetProperty("clinicianName").GetString()}");
-        await hospital.CancelAppointmentAsync(tenant, patient, h.Contact.Phone, appointment.GetProperty("appointmentId").GetGuid());
-        Assert.StartsWith("cancelled", Assert.Single((await hospital.GetPatientAppointmentRangeAsync(tenant, patient, h.Contact.Phone, today, today.AddDays(20))).GetProperty("rows").EnumerateArray()).GetProperty("status").GetString());
-        output.WriteLine("HOSPITAL: cita de prueba cancelada, horario liberado");
+        output.WriteLine($"HOSPITAL: cita {appointment.GetProperty("status").GetString()} con {appointment.GetProperty("clinicianName").GetString()}\n");
+        var id = appointment.GetProperty("appointmentId").GetGuid(); var original = appointment.GetProperty("scheduledStart").GetDateTimeOffset();
+        async Task<System.Text.Json.JsonElement> InHospital() => (await hospital.GetPatientAppointmentRangeAsync(tenant, patient, h.Contact.Phone, today, today.AddDays(20))).GetProperty("rows").EnumerateArray().Single(r => r.GetProperty("appointmentId").GetGuid() == id).Clone();
+
+        // «Mis citas»: the patient moves the appointment and then cancels it, tapping, with no model. It is also how this journey frees its slot.
+        await Turn("MISCITAS");
+        Assert.Equal([$"MOVER {id}", $"CANCELAR {id}", "MENU"], AgentHarness.Options(h.Interactive[^1]).Select(o => o.Id));
+        await Turn($"MOVER {id}");
+        await Turn(AgentHarness.Options(h.Interactive[^1])[0].Id);
+        Assert.Contains("quedó reprogramada", await Turn("Sí"));
+        var moved = await InHospital();
+        Assert.Equal("booked", moved.GetProperty("status").GetString()); Assert.NotEqual(original, moved.GetProperty("scheduledStart").GetDateTimeOffset());
+        output.WriteLine($"HOSPITAL: cita movida a {TimeZoneInfo.ConvertTime(moved.GetProperty("scheduledStart").GetDateTimeOffset(), TimeZoneInfo.FindSystemTimeZoneById("America/El_Salvador")):yyyy-MM-dd HH:mm}\n");
+
+        await Turn($"CANCELAR {id}");
+        Assert.Contains("quedó cancelada", await Turn(Button(0)));
+        Assert.StartsWith("cancelled", (await InHospital()).GetProperty("status").GetString());
+        output.WriteLine("HOSPITAL: cita cancelada por el paciente, horario liberado");
     }
 }

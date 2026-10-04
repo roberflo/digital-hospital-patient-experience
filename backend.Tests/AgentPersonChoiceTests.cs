@@ -55,7 +55,7 @@ public sealed class AgentPersonChoiceTests : IAsyncLifetime
         await h.Runtime(NoModel, h.Sender()).Run(h.Job, CancellationToken.None);
 
         Assert.Equal("agent", (await h.Fresh()).Status);
-        Assert.Contains("AGENDAR", Buttons());
+        Assert.Contains(AgentHarness.Options(h.Interactive[^1]), option => option.Id == "AGENDAR");
     }
 
     [Theory]
