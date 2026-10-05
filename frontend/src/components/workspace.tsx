@@ -1583,10 +1583,15 @@ type Availability = {
     clinicianName: string;
     defaultDurationMinutes: number;
     days: {
+      nextOpenDay?: string | null;
       slots: { startsAt: string; durationMinutes: number; offered: boolean; takenBy: number }[];
     }[];
   }[];
 };
+/** A doctor whose printed name Hospital has not captured yet still has to be choosable. */
+const doctorName = (name: string) => name.trim() || 'Profesional sin nombre';
+const freeSlots = (p: Availability['professionals'][number]) =>
+  p.days.flatMap((d) => d.slots).filter((s) => s.offered && s.takenBy === 0);
 function CalendarView({ search, me }: { search: string; me: Me }) {
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: me.tenant.timeZone }).format(
     new Date(),
@@ -1627,8 +1632,17 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
   );
   const { data: contacts } = useSWR<Contact[]>('/contacts', fetcher);
   const options = availability?.professionals.find((p) => p.clinicianId === doctor);
-  const slots =
-    options?.days.flatMap((d) => d.slots).filter((s) => s.offered && s.takenBy === 0) ?? [];
+  const slots = options ? freeSlots(options) : [];
+  // A day nobody attends (a Sunday) used to look like a broken form: every doctor listed, no hour to pick.
+  const closedDay =
+    !!availability?.professionals.length &&
+    !availability.professionals.some((p) => freeSlots(p).length);
+  const nextOpenDay = closedDay
+    ? availability?.professionals
+        .flatMap((p) => p.days.map((d) => d.nextOpenDay))
+        .filter((d): d is string => !!d)
+        .sort()[0]
+    : undefined;
   const rows = data?.rows.filter(
     (r) =>
       r.displayName.toLowerCase().includes(search.toLowerCase()) ||
@@ -1710,7 +1724,7 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
                 <h3>{r.displayName}</h3>
                 <p>
                   <Stethoscope size={13} />
-                  {r.clinicianName} · {r.placeName}
+                  {doctorName(r.clinicianName)} · {r.placeName}
                 </p>
               </div>
               <span className="tag">
@@ -1830,13 +1844,29 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
                 El hospital no tiene doctores disponibles en el padrón para esta consulta.
               </p>
             )}
+            {closedDay && (
+              <p className="hint" role="status">
+                Ningún doctor tiene horario disponible en esta fecha. Elige otro día.{' '}
+                {nextOpenDay && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setDay(nextOpenDay)}
+                  >
+                    Ir al próximo día con horario
+                  </Button>
+                )}
+              </p>
+            )}
             <label>
               Doctor
               <select value={doctor} onChange={(e) => setDoctor(e.target.value)} required>
                 <option value="">Selecciona un doctor</option>
                 {availability?.professionals.map((p) => (
                   <option value={p.clinicianId} key={p.clinicianId}>
-                    {p.clinicianName}
+                    {doctorName(p.clinicianName)}
+                    {freeSlots(p).length ? '' : ' · sin cupo este día'}
                   </option>
                 ))}
               </select>
