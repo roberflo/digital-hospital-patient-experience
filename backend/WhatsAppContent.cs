@@ -12,7 +12,7 @@ public static partial class WhatsAppContent
         if (message.ValueKind == JsonValueKind.Object && message.TryGetProperty("interactive", out var interactive) && interactive.ValueKind == JsonValueKind.Object)
             foreach (var kind in (string[])["button_reply", "list_reply"])
                 if (interactive.TryGetProperty(kind, out var reply))
-                    return Text(reply, "id") is { } id && Command().IsMatch(id) ? id : Text(reply, "title") ?? "[Archivo recibido]";
+                    return Text(reply, "id")?.Trim() is { } id && Command().IsMatch(id) ? id : Text(reply, "title") ?? "[Archivo recibido]";
         return Text(kapso, "content") ?? (message.TryGetProperty("text", out var text) ? Text(text, "body") : null) ?? "[Archivo recibido]";
     }
     static string? Text(JsonElement value, string name) => value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out var found) && found.ValueKind == JsonValueKind.String ? found.GetString() : null;

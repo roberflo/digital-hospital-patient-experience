@@ -21,6 +21,8 @@ public sealed class AgentInteractionTests : IAsyncLifetime
     [InlineData("button_reply", "EMERGENCIA", "Sí, es emergencia", "EMERGENCIA")]
     [InlineData("button_reply", "ACTIVAR RECORDATORIOS", "Recordarme la cita", "ACTIVAR RECORDATORIOS")]
     [InlineData("list_reply", "CITA 2026-10-05T09:00:00-06:00 d2c5079c-e5da-4bb5-9029-b1e547ad8683 30 Dra. Sintética", "lun 5 oct 09:00", "CITA 2026-10-05T09:00:00-06:00 d2c5079c-e5da-4bb5-9029-b1e547ad8683 30 Dra. Sintética")]
+    // A doctor with no printed name left a trailing space in the id: the tap must still be the command, not its label.
+    [InlineData("list_reply", "CITA 2026-10-05T09:30:00-06:00 d2c5079c-e5da-4bb5-9029-b1e547ad8683 30 ", "lun 5 oct 09:30", "CITA 2026-10-05T09:30:00-06:00 d2c5079c-e5da-4bb5-9029-b1e547ad8683 30")]
     [InlineData("button_reply", "AGENDAR", "Agendar cita", "AGENDAR")]
     [InlineData("button_reply", "RECETA", "Mi receta", "RECETA")]
     [InlineData("button_reply", "otro", "Otro horario", "Otro horario")]                 // any other choice reads as its label
