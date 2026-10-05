@@ -157,15 +157,22 @@ public sealed class AgentMemoryTests : IAsyncLifetime
         static DateTimeOffset At(int hourUtc) => new(DateTime.UtcNow.Date.AddDays(5).AddHours(hourUtc), TimeSpan.Zero); // 15 UTC is 09:00 at the hospital
         object Doctor(Guid id, string name, params int[] hours) => new { clinicianId = id, clinicianName = name, placeName = "", defaultDurationMinutes = 30, days = new[] { new { clinicalDay = "", state = "open", takenSlotCount = 0, utcOffset = "-06:00", slots = hours.Select(hour => new { slotId = "s" + hour, startsAt = At(hour), durationMinutes = 30, takenBy = 0, offered = true }).ToArray() } } };
         var agenda = new { clinicalDayFrom = "", clinicalDayTo = "", maxDaysPerQuery = 31, rollState = "open", professionals = new[] { Doctor(other, "Dr. Otro Sintético", 15, 21), Doctor(usual, "Dra. Sintética Rivas", 16, 22) } };
-        async Task<List<string>> Offered() { await h.Say("patient", "AGENDAR"); await h.Runtime(Model(() => throw new InvalidOperationException("no model")), h.Sender(), h.Hospital(availability: agenda)).Run(h.Job, CancellationToken.None); return AgentHarness.Options(h.Interactive[^1]).Select(o => o.Title[^5..] + " " + (o.Id.Contains(usual.ToString()) ? "usual" : "other")).ToList(); }
+        var day = At(15).ToOffset(TimeSpan.FromHours(-6)).ToString("yyyy-MM-dd");
+        async Task<List<string>> Tapped(string text) { await h.Say("patient", text); await h.Runtime(Model(() => throw new InvalidOperationException("no model")), h.Sender(), h.Hospital(availability: agenda)).Run(h.Job, CancellationToken.None); return AgentHarness.Options(h.Interactive[^1]).Select(o => o.Id).ToList(); }
         await h.Link();
 
-        Assert.Equal(["09:00 other", "10:00 usual", "15:00 other", "16:00 usual"], await Offered());
+        // Two doctors, morning and afternoon: with nothing known the patient is asked who, and nobody comes first.
+        Assert.Equal([$"VER {day} {other} ?", $"VER {day} {usual} ?", $"VER {day} * ?"], await Tapped("AGENDAR"));
 
         h.Db.ContactMemories.AddRange(new ContactMemory { TenantId = h.Scope.Id, ContactId = h.Contact.Id, Key = "horario_preferido", Value = "por la tarde, después de las 3" }, new ContactMemory { TenantId = h.Scope.Id, ContactId = h.Contact.Id, Key = "doctor_preferido", Value = "la doctora Rivas" });
         await h.Db.SaveChangesAsync();
 
-        Assert.Equal(["16:00 usual", "10:00 usual", "15:00 other", "09:00 other"], await Offered());
+        // The doctor they said they prefer is the one they are asked about, by name.
+        Assert.Equal([$"VER {day} {usual} ?", $"VER {day} + ?", $"VER {day} * ?"], await Tapped("AGENDAR"));
+        Assert.Contains("¿La quieres con el mismo doctor, *Dra. Sintética Rivas*?", h.Sent[^1]);
+        // And with her chosen, the part of the day is the next and last question before her hours.
+        Assert.Equal([$"VER {day} {usual} M", $"VER {day} {usual} T"], await Tapped($"VER {day} {usual} ?"));
+        Assert.Equal([$"CITA {At(22).ToOffset(TimeSpan.FromHours(-6)):yyyy-MM-ddTHH:mm:sszzz} {usual} 30 Dra. Sintética Rivas"], await Tapped($"VER {day} {usual} T"));
     }
 
     [Fact]

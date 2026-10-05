@@ -33,6 +33,14 @@ public static partial class AgentGuard
     public static (string StartsAt, Guid Doctor, int Minutes, string Name)? SlotChoice(string body) =>
         Slot().Match(body.Trim()) is { Success: true } m && Guid.TryParse(m.Groups[2].Value, out var doctor) ? (m.Groups[1].Value, doctor, int.Parse(m.Groups[3].Value), Unsafe().Replace(m.Groups[4].Value, "").Trim()) : null;
 
+    /// <summary>A step of the guided booking: the day, then the doctor (an id, «*» any, «+» another, «?» not asked yet)
+    /// and the part of the day («M», «T» or «?»).</summary>
+    public static (string Day, string Doctor, string Band)? GuideChoice(string body) =>
+        Guide().Match(body.Trim()) is { Success: true } m ? (m.Groups[1].Value, m.Groups[2].Value, m.Groups[3].Value) : null;
+
+    /// <summary>The part of the day the patient named in so many words. «Mañana» alone is tomorrow, not the morning.</summary>
+    public static string? SaidBand(string body) => BandTarde().IsMatch(body) ? "T" : BandManana().IsMatch(body) ? "M" : null;
+
     /// <summary>What the patient tapped on one of their own appointments: see it, cancel it, or move it (with the new slot once chosen).</summary>
     public static (string Verb, Guid Appointment, string? StartsAt, Guid? Doctor, int? Minutes, string Name)? AppointmentChoice(string body) =>
         Appointment().Match(body.Trim()) is { Success: true } m && Guid.TryParse(m.Groups[2].Value, out var appointment)
@@ -99,6 +107,9 @@ public static partial class AgentGuard
     [GeneratedRegex(@"(?i)\b([01]?\d|2[0-3]):([0-5]\d)(?:\s*([ap])\.?\s?m\b)?")] private static partial Regex Time();
     [GeneratedRegex(@"(?i)^\W*(?:hola|holi|buenas|buen\s+d[ií]a|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|saludos|hi|hello)(?:\W+(?:buenas|buen\s+d[ií]a|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches))?\W*$")] private static partial Regex Greeting();
     [GeneratedRegex(@"^CITA (\S{1,40}) ([0-9a-fA-F-]{36}) (\d{1,3})(?: (.{1,60}))?$")] private static partial Regex Slot();
+    [GeneratedRegex(@"^VER (\d{4}-\d{2}-\d{2}) ([0-9a-fA-F-]{36}|[*+?]) ([MT?])$")] private static partial Regex Guide();
+    [GeneratedRegex(@"(?i)\b(?:en|por|a)\s+la\s+tarde\b|\bde\s+tarde\b")] private static partial Regex BandTarde();
+    [GeneratedRegex(@"(?i)\b(?:en|por)\s+la\s+ma[ñn]ana\b|\btemprano\b")] private static partial Regex BandManana();
     [GeneratedRegex(@"^(VERCITA|CANCELAR|MOVER) ([0-9a-fA-F-]{36})(?: (\S{1,40}) ([0-9a-fA-F-]{36}) (\d{1,3})(?: (.{1,60}))?)?$")] private static partial Regex Appointment();
     // ponytail: the closed list of relatives people actually name; «para una amiga de mi tía» is left to the prompt and the evals.
     [GeneratedRegex(@"(?i)\b(?:registr|inscrib|ag[eé]nd|cita|apunt|anot)\w*\b.{0,40}?\b(?:a|para|de)\s+(?:mi|mis|nuestr[oa])\s+(?:pap[aá]|mam[aá]|padres?|madre|espos[oa]|marido|mujer|hij[oa]s?|herman[oa]|abuel[oa]|t[ií][oa]|novi[oa]|pareja|suegr[oa]|niet[oa]|sobrin[oa]|amig[oa]|vecin[oa]|jef[ea]|beb[eé]|ni[ñn][oa])\b")] private static partial Regex Other();

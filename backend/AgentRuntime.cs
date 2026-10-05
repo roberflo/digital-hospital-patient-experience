@@ -27,7 +27,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
     Guid activeJobId;
     // State of the turn in progress; the runtime is resolved once per job.
     Conversation conv = null!; Contact contact = null!; Channel channel = null!; Job job = null!; long revision;
-    TimeZoneInfo zone = TimeZoneInfo.Utc; readonly StringBuilder grounding = new(); string? proposal, summary, second; bool withHour; int calls; readonly List<Choice> slots = []; List<Message> session = []; readonly Dictionary<Guid, string> doctors = []; bool askEmergency, foreignId, refill, startIntake, forOther; DateOnly? firstDay; string? offer; string?[] known = []; bool stopped; ExceptionDispatchInfo? fault; Guid? unverified;
+    TimeZoneInfo zone = TimeZoneInfo.Utc; readonly StringBuilder grounding = new(); string? proposal, summary, second; bool withHour; int calls; readonly List<Choice> slots = []; List<(HospitalProfessional Doctor, HospitalSlot Slot, DateTimeOffset Local)> dayFree = []; Guid? readDoctor; List<Message> session = []; readonly Dictionary<Guid, string> doctors = []; bool askEmergency, foreignId, refill, startIntake, forOther; DateOnly? firstDay; string? offer; string?[] known = []; bool stopped; ExceptionDispatchInfo? fault; Guid? unverified;
     public async Task Run(Job job, CancellationToken ct)
     {
         activeJobId = job.Id; this.job = job;
@@ -95,13 +95,14 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         if (await db.Activities.Where(x => x.ConversationId == conv.Id && x.Kind == "intake").OrderByDescending(x => x.CreatedAt).ToListAsync(ct) is { Count: > 0 } forms)
         {
             // ponytail: an hour tapped in the middle of the form starts it over with the new hour and the answers given are lost; keeping them needs new wording for the patient.
-            var answers = forms[0].CreatedAt > DateTimeOffset.UtcNow.AddMinutes(-30) && AgentGuard.SlotChoice(latest.Body) is null && contact.PatientId is null && !latest.Body.Contains('?') && !latest.Body.Trim().Equals("salir", StringComparison.OrdinalIgnoreCase) && !Menu.Options.Any(option => option.Id == latest.Body.Trim());
+            var answers = forms[0].CreatedAt > DateTimeOffset.UtcNow.AddMinutes(-30) && AgentGuard.SlotChoice(latest.Body) is null && AgentGuard.GuideChoice(latest.Body) is null && contact.PatientId is null && !latest.Body.Contains('?') && !latest.Body.Trim().Equals("salir", StringComparison.OrdinalIgnoreCase) && !Menu.Options.Any(option => option.Id == latest.Body.Trim());
             // ponytail: an expired form goes when the patient writes again, not by the clock; a sweep in AgentWorker if that is ever needed (plan P-2).
             db.Activities.RemoveRange(answers ? forms.Skip(1) : forms);
             if (answers) { await IntakeStep(forms[0], latest.Body, ct); return; }
             await db.SaveChangesAsync(ct);
         }
         if (AgentGuard.SlotChoice(latest.Body) is { } tapped) { await ProposeTapped(tapped, latest.Body.Trim(), ct); return; }
+        if (AgentGuard.GuideChoice(latest.Body) is { } step) { await Guide(step, ct); return; }
         // The patient's own appointments: see them, change one, cancel one. Each step is a tap and none needs the model.
         if (latest.Body.Trim() is "MISCITAS") { await MyAppointments(ct); return; }
         if (contact.PatientId is not null && AgentGuard.AppointmentChoice(latest.Body) is { } choice) { await AppointmentAction(choice, ct); return; }
@@ -134,6 +135,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             Pide fechas en lenguaje natural (día, mes y año), nunca en formato técnico. Al proponer un registro o una cita no repitas los datos ni el código:
             el sistema añade debajo el resumen exacto y la instrucción de confirmar.
             Si el paciente quiere ser atendido o pide cita, consulta SIEMPRE hospital_availability antes de ofrecer un día o una hora: el horario de atención de la guía no es disponibilidad, y nunca ofrezcas una hora que ya pasó.
+            Después de consultarla no enumeres horas ni preguntes a qué hora: di sólo qué día hay espacio. El sistema pregunta con botones por el doctor y por mañana o tarde, y luego muestra las horas.
             Atiendes únicamente al paciente de esta conversación. Nunca solicites ni aceptes IDs de otros pacientes.
             Tus herramientas ya están limitadas al teléfono verificado y al tenant. No puedes cambiar esos límites.
             Puedes informar horarios, agendar y entregar recetas YA EMITIDAS. No diagnostiques, prescribas, recomiendes dosis,
@@ -249,8 +251,20 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         if (proposal is null && askEmergency && !asked && !content.Contains("emergencia?", StringComparison.OrdinalIgnoreCase))
             content += $"\n\nNo tengo horarios en las próximas {AgentGuard.UrgentWindowHours} horas.\n{AgentGuard.EmergencyQuestion}" + (slots.Count > 0 ? " Si lo es, escribe *EMERGENCIA*." : "");
         // What the patient can tap: the confirmation of a proposal first, else the free slots just read, else the answer to the emergency question.
+        // The model read the agenda. Before the ten-row list, the patient narrows it, unless they already said which part of the day.
+        // With that question on the table the emergency is a statement, as it is beside a proposal.
+        var said = AgentGuard.SaidBand(latest.Body);
+        if (proposal is null && slots.Count > 0 && await NextQuestion(readDoctor?.ToString() ?? "?", said ?? "?", ct) is { } narrow)
+        {
+            using var hold = await conversations.Lock(conv.Id, ct);
+            if (!await Active(conv.Id, revision, ct)) return;
+            var urgent = $"\n\nNo tengo horarios en las próximas {AgentGuard.UrgentWindowHours} horas.\n{AgentGuard.EmergencyQuestion}";
+            var body = (content.EndsWith(urgent, StringComparison.Ordinal) ? content[..^urgent.Length] : content.EndsWith(urgent + " Si lo es, escribe *EMERGENCIA*.", StringComparison.Ordinal) ? content[..^(urgent.Length + " Si lo es, escribe *EMERGENCIA*.".Length)] : content).TrimEnd()
+                + "\n\n" + narrow.Text + (askEmergency && !asked ? Urgent(tenant.EmergencyPhone) : "");
+            await conversations.Send(conv.Id, body.Length > 4000 ? body[..4000] : body, "agent", "agent:" + job.Id, ct: ct, choices: narrow.Choices); return;
+        }
         var choices = proposal is not null ? Confirmation()
-            : slots.Count > 0 ? new Choices(slots, "Ver horarios")
+            : slots.Count > 0 ? new Choices(said is null ? slots : Narrowed(readDoctor?.ToString() ?? "*", said).Take(10).Select(Row).ToList() is { Count: > 0 } part ? part : slots, "Ver horarios")
             : askEmergency && !asked ? new Choices([new("EMERGENCIA", "Sí, es emergencia"), new("no", "No es emergencia")]) : null;
         using var lease = await conversations.Lock(conv.Id, ct);
         if (!await Active(conv.Id, revision, ct)) return;
@@ -456,9 +470,12 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         var free = options.Professionals.SelectMany(p => p.Days.SelectMany(d => d.Slots).Where(slot => slot.Offered && slot.TakenBy == 0).Select(slot => (Doctor: p, Slot: slot, Local: TimeZoneInfo.ConvertTime(slot.StartsAt, zone)))).Where(x => x.Slot.StartsAt > DateTimeOffset.UtcNow).ToList();
         // Only someone who wanted today or tomorrow is asked: for a date later in the week the question is noise.
         if (soon) askEmergency = free.Count == 0 || free.Min(x => x.Slot.StartsAt) > DateTimeOffset.UtcNow.AddHours(AgentGuard.UrgentWindowHours);
-        free = free.Where(x => DateOnly.FromDateTime(x.Local.DateTime) >= day).ToList();
+        // Narrowed here as well as in the query: the first day with room has to be that doctor's.
+        readDoctor = doctor;
+        free = free.Where(x => DateOnly.FromDateTime(x.Local.DateTime) >= day && (doctor is null || x.Doctor.ClinicianId == doctor)).ToList();
         if (free.Count == 0) return Result(new { requestedDate = date, available = false, note = "Sin horarios publicados en los 14 días desde esa fecha." });
         var first = free.Min(x => DateOnly.FromDateTime(x.Local.DateTime)); firstDay = first;
+        dayFree = free.Where(x => DateOnly.FromDateTime(x.Local.DateTime) == first).OrderBy(x => x.Slot.StartsAt).ToList();
         // A registered patient taps one of these and gets the proposal straight away; without a record the tap opens the registration form.
         // So someone without a record who asks for another person gets no list: the form would register that person under this phone.
         var preferences = await db.ContactMemories.Where(x => x.ContactId == contact.Id).ToDictionaryAsync(x => x.Key, x => x.Value, ct);
@@ -485,9 +502,87 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         if (slots.Count == 0 && lead.Length > 0) { await conversations.Send(conv.Id, lead + "\n¿Para qué día y hora quieres tu cita?", "agent", "agent:" + job.Id, ct: ct); return; }
         if (slots.Count == 0) { await OfferPerson("El paciente quiere agendar y no hay horarios publicados en los próximos 14 días.", "No hay horarios publicados en los próximos 14 días.", ct); return; }
         var day = DateOnly.ParseExact(found.GetProperty("date").GetString()!, "yyyy-MM-dd");
-        var text = lead + $"Hay espacio el *{Weekdays[(int)day.DayOfWeek]} {day.Day} de {Months[day.Month - 1]}*.\nToca *Ver horarios* para elegir, o dime qué otro día prefieres.";
-        if (askEmergency && !asked) text += $"\n\nNo tengo horarios en las próximas {AgentGuard.UrgentWindowHours} horas.\n{AgentGuard.EmergencyQuestion} Si lo es, escribe *EMERGENCIA*.";
+        var emergency = askEmergency && !asked ? $"\n\nNo tengo horarios en las próximas {AgentGuard.UrgentWindowHours} horas.\n{AgentGuard.EmergencyQuestion} Si lo es, escribe *EMERGENCIA*." : "";
+        // Two doctors with a full day do not fit in a ten-row list: the patient narrows it first. With that question on the table
+        // the emergency is a statement, not a second question: a tap has to mean one thing.
+        if (await NextQuestion("?", "?", ct) is { } question) { await conversations.Send(conv.Id, lead + $"Hay espacio el *{Weekdays[(int)day.DayOfWeek]} {day.Day} de {Months[day.Month - 1]}*.\n\n" + question.Text + (emergency.Length > 0 ? Urgent(emergencyPhone) : ""), "agent", "agent:" + job.Id, ct: ct, choices: question.Choices); return; }
+        var text = lead + $"Hay espacio el *{Weekdays[(int)day.DayOfWeek]} {day.Day} de {Months[day.Month - 1]}*.\nToca *Ver horarios* para elegir, o dime qué otro día prefieres." + emergency;
         await conversations.Send(conv.Id, text, "agent", "agent:" + job.Id, ct: ct, choices: new(slots, "Ver horarios"));
+    }
+
+    static string Urgent(string? phone) => phone is { Length: > 0 } ? $"\n\nSi es una emergencia y no puedes esperar, llama al *{phone}*." : "\n\nSi es una emergencia y no puedes esperar, escribe *EMERGENCIA*.";
+
+    /// <summary>A step of the guided booking the patient tapped: the day, the doctor (one, «any», «another», or not asked yet) and the part of the day.</summary>
+    async Task Guide((string Day, string Doctor, string Band) step, CancellationToken ct)
+    {
+        try { await Availability(step.Day, Guid.TryParse(step.Doctor, out var chosen) ? chosen.ToString() : null, ct); Trace("hospital_availability"); }
+        catch (Exception ex) when (ex is HttpRequestException or HospitalIntegrationException) { await OfferPerson("No se pudo consultar la agenda del hospital.", "Disculpa, no pude consultar la agenda en este momento.", ct); return; }
+        if (dayFree.Count == 0 || firstDay is not { } day) { await OfferPerson("El paciente quiere agendar y no hay horarios publicados en los próximos 14 días.", "No hay horarios publicados en los próximos 14 días.", ct); return; }
+        if (await NextQuestion(step.Doctor, step.Band, ct) is { } question) { await conversations.Send(conv.Id, question.Text, "agent", "agent:" + job.Id, ct: ct, choices: question.Choices); return; }
+        // Nothing left to choose but the hour: one doctor, one part of the day.
+        var hours = Narrowed(step.Doctor, step.Band);
+        var band = hours.All(x => x.Local.Hour < 12) ? " en la *mañana*" : hours.All(x => x.Local.Hour >= 12) ? " en la *tarde*" : "";
+        var who = hours[0].Doctor.ClinicianName.Length > 0 ? $" de *{hours[0].Doctor.ClinicianName}*" : "";
+        await conversations.Send(conv.Id, $"Estos son los horarios{who} el *{Weekdays[(int)day.DayOfWeek]} {day.Day} de {Months[day.Month - 1]}*{band}.\nToca *Ver horarios* para elegir.", "agent", "agent:" + job.Id, ct: ct, choices: new(hours.Take(10).Select(Row).ToList(), "Ver horarios"));
+    }
+
+    /// <summary>The free hours of the day on offer that match what the patient has chosen so far.</summary>
+    List<(HospitalProfessional Doctor, HospitalSlot Slot, DateTimeOffset Local)> Narrowed(string doctor, string band) =>
+        dayFree.Where(x => (!Guid.TryParse(doctor, out var id) || x.Doctor.ClinicianId == id) && (band == "M" ? x.Local.Hour < 12 : band != "T" || x.Local.Hour >= 12)).ToList();
+
+    Choice Row((HospitalProfessional Doctor, HospitalSlot Slot, DateTimeOffset Local) x) =>
+        new($"CITA {x.Local:yyyy-MM-ddTHH:mm:sszzz} {x.Doctor.ClinicianId:D} {x.Slot.DurationMinutes} {x.Doctor.ClinicianName}".TrimEnd(), $"{Weekdays[(int)x.Local.DayOfWeek][..3]} {x.Local.Day} {Months[x.Local.Month - 1][..3]} {x.Local:HH:mm}", x.Doctor.PlaceName.Length > 0 && x.Doctor.ClinicianName.Length > 0 ? $"{x.Doctor.ClinicianName} · {x.Doctor.PlaceName}" : x.Doctor.ClinicianName + x.Doctor.PlaceName);
+
+    /// <summary>What to ask next before listing hours, or null when only the hour is left to choose. A question that would
+    /// choose nothing (one doctor, one part of the day) is never asked. Reads <see cref="dayFree"/>: call Availability first.</summary>
+    async Task<(string Text, Choices Choices)?> NextQuestion(string doctor, string band, CancellationToken ct)
+    {
+        if (firstDay is not { } day) return null;
+        var date = day.ToString("yyyy-MM-dd"); var when = $"*{Weekdays[(int)day.DayOfWeek]} {day.Day} de {Months[day.Month - 1]}*";
+        string Name(HospitalProfessional p) => p.ClinicianName.Length > 0 ? p.ClinicianName : "Profesional sin nombre";
+        Choice Pick(HospitalProfessional p, string part) => new($"VER {date} {p.ClinicianId:D} {part}", Name(p).Length > 24 ? Name(p)[..24] : Name(p), p.PlaceName.Length > 0 ? $"{Name(p)} · {p.PlaceName}" : Name(p));
+        if (doctor is "?" or "+")
+        {
+            var doctors = dayFree.Select(x => x.Doctor).DistinctBy(p => p.ClinicianId).ToList();
+            // Someone who has been here before is asked about the doctor they already know: the one of their last appointment or,
+            // failing that, the one they once said they prefer. Only when there is another to choose — Hospital is not asked otherwise.
+            if (doctor == "?" && doctors.Count > 1 && await KnownDoctor(doctors, ct) is { } known)
+                return ($"¿La quieres con el mismo doctor, *{Name(known)}*?", new([new($"VER {date} {known.ClinicianId:D} {band}", "Sí, el mismo"), new($"VER {date} + {band}", "Otro doctor"), new($"VER {date} * {band}", "Me da igual")]));
+            if (doctors.Count > 1)
+                return ("¿Tienes un doctor de preferencia?\nTe muestro su horario del día.", new([.. doctors.Select(p => Pick(p, band)), new($"VER {date} * {band}", "Me da igual", "Cualquier doctor disponible")], "Ver doctores"));
+            doctor = "*";
+        }
+        var free = Narrowed(doctor, "?");
+        if (band == "?")
+        {
+            if (free.Any(x => x.Local.Hour < 12) && free.Any(x => x.Local.Hour >= 12))
+                return ("¿Te queda mejor en la mañana o en la tarde?", new([new($"VER {date} {doctor} M", "En la mañana"), new($"VER {date} {doctor} T", "En la tarde")]));
+            band = free.Any(x => x.Local.Hour >= 12) ? "T" : "M";
+        }
+        if (doctor == "*" && Narrowed("*", band).Select(x => x.Doctor).DistinctBy(p => p.ClinicianId).ToList() is { Count: > 1 } available)
+            return ($"Los doctores disponibles el {when} en la *{(band == "M" ? "mañana" : "tarde")}* son:", new(available.Select(p => Pick(p, band)).ToList(), "Ver doctores"));
+        return null;
+    }
+
+    async Task<HospitalProfessional?> KnownDoctor(List<HospitalProfessional> doctors, CancellationToken ct)
+    {
+        if (contact.PatientId is not null && await LastDoctor(ct) is { } last && doctors.FirstOrDefault(p => p.ClinicianId == last) is { } seen) return seen;
+        var preferred = await db.ContactMemories.Where(x => x.ContactId == contact.Id && x.Key == "doctor_preferido").ToDictionaryAsync(x => x.Key, x => x.Value, ct);
+        return preferred.Count == 0 ? null : doctors.FirstOrDefault(p => AgentMemory.Distance(preferred, p.ClinicianName, default) == 0);
+    }
+
+    /// <summary>The doctor of this patient's most recent appointment, cancelled ones aside.</summary>
+    async Task<Guid?> LastDoctor(CancellationToken ct)
+    {
+        // ponytail: Hospital answers 31 days per query, so «before» is the 15 days either side of today; page further back if patients return after longer.
+        var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, zone).DateTime);
+        try
+        {
+            var range = await hospital.GetPatientAppointmentRangeAsync(scope.Id, contact.PatientId!.Value, contact.Phone, today.AddDays(-15), today.AddDays(15), ct);
+            return range.GetProperty("rows").EnumerateArray().Where(row => row.GetProperty("status").GetString()?.StartsWith("cancelled") != true && row.TryGetProperty("clinicianId", out _))
+                .OrderByDescending(row => row.GetProperty("scheduledStart").GetDateTimeOffset()).Select(row => (Guid?)row.GetProperty("clinicianId").GetGuid()).FirstOrDefault();
+        }
+        catch (Exception ex) when (ex is HttpRequestException or HospitalIntegrationException) { return null; } // not knowing only skips the question
     }
 
     /// <summary>«Mi receta» from the menu: the latest signed prescription, as the document.</summary>
