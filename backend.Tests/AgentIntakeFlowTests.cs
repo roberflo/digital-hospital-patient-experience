@@ -67,7 +67,8 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
     public void SexIsAnsweredWithButtons()
     {
         var (_, prompt, choices) = new Intake(3, "Ana", "López").Answer("12/03/1990", Today);
-        Assert.Equal("¿Qué sexo aparece en tu documento de identidad?\nEs un dato que pide el hospital para registrarte.", prompt);
+        // The date just read is said back in words before the next question.
+        Assert.Equal("Entonces tu fecha de nacimiento es el *12 de marzo de 1990*.\n\n¿Qué sexo aparece en tu documento de identidad?\nEs un dato que pide el hospital para registrarte.", prompt);
         Assert.DoesNotContain("registral", prompt);
         Assert.Equal(["Femenino", "Masculino"], Assert.IsType<Choices>(choices).Options.Select(o => o.Title));
         Assert.Equal(["f", "m"], choices!.Options.Select(o => o.Id));

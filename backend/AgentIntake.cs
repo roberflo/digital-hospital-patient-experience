@@ -43,11 +43,25 @@ public sealed partial record Intake(int Step, string? GivenNames = null, string?
         var value = text.Trim();
         switch (Step)
         {
-            case 1: return Name().IsMatch(value) ? Ask((this with { GivenNames = value }).Next(), $"Gracias, {value.Split(' ')[0]}.\n\n") : Ask(this, "No pude leer tus nombres.\n\n");
-            case 2: return Name().IsMatch(value) ? Ask((this with { FamilyNames = value }).Next()) : Ask(this, "No pude leer tus apellidos.\n\n");
+            case 1:
+                value = LeadIn().Replace(value, "").Trim();
+                if (!Name().IsMatch(value)) return Ask(this, "No pude leer tus nombres.\n\n");
+                // The whole name at once: it is said back, and the patient says which words are the surnames.
+                // «Juan Carlos Pérez» and «Roberto Flores Sintético» have the same shape, so that is never guessed.
+                if (value.Split(' ', StringSplitOptions.RemoveEmptyEntries) is { Length: >= 3 } words && FamilyNames is null)
+                    return (this with { Step = 2, GivenNames = string.Join(' ', words) }, $"Entonces tu nombre completo es *{string.Join(' ', words)}*.\n\n¿Cuáles son tus apellidos?",
+                        // A reply button shows 20 characters: longer surnames are typed, never tapped cut short.
+                        string.Join(' ', words[^2..]).Length <= 20 ? new Choices([new("apellidos2", string.Join(' ', words[^2..])), new("apellidos1", words[^1])]) : null);
+                return Ask((this with { GivenNames = value }).Next(), $"Gracias, {value.Split(' ')[0]}.\n\n");
+            case 2:
+                if (!Name().IsMatch(value)) return Ask(this, "No pude leer tus apellidos.\n\n");
+                // Surnames already written together with the names are not kept twice.
+                var given = GivenNames is { } all && all.Length > value.Length + 1 && all.EndsWith(" " + value, StringComparison.CurrentCultureIgnoreCase) ? all[..^(value.Length + 1)].Trim() : GivenNames;
+                return Ask((this with { GivenNames = given, FamilyNames = value }).Next());
             case 3:
                 if (Date(value) is not { } born || born > today || born < today.AddYears(-120)) return Ask(this, "No pude leer esa fecha.\n\n");
-                return born > today.AddYears(-18) ? (this with { Step = -1 }, "", null) : Ask((this with { BirthDate = born.ToString("yyyy-MM-dd") }).Next());
+                // Said back in words: «03/04/1990» is two different days depending on who reads it.
+                return born > today.AddYears(-18) ? (this with { Step = -1 }, "", null) : Ask((this with { BirthDate = born.ToString("yyyy-MM-dd") }).Next(), $"Entonces tu fecha de nacimiento es el *{born.Day} de {Months[born.Month - 1]} de {born.Year}*.\n\n");
             case 4:
                 var sex = value.ToLowerInvariant() switch { "femenino" or "f" or "mujer" or "female" => "female", "masculino" or "m" or "hombre" or "male" => "male", _ => null };
                 return sex is null ? Ask(this, "Necesito una de las dos opciones.\n\n") : Ask((this with { Sex = sex }).Next());
@@ -72,19 +86,25 @@ public sealed partial record Intake(int Step, string? GivenNames = null, string?
         _ => (state, "", null),
     };
 
-    /// <summary>A birth date the way people write it here: day first («12/03/1990», «12 de marzo de 1990»), or ISO.</summary>
+    /// <summary>A birth date the way people write it here, anywhere in the sentence: day first («12/03/1990», «nací el 12 de marzo de 1990»,
+    /// «12 marzo 1990»), month first in words («marzo 12, 1990»), or ISO. Always four digits of year.</summary>
     static DateOnly? Date(string text)
     {
         int day, month, year;
         if (Iso().Match(text) is { Success: true } iso) (year, month, day) = (int.Parse(iso.Groups[1].Value), int.Parse(iso.Groups[2].Value), int.Parse(iso.Groups[3].Value));
         else if (Numeric().Match(text) is { Success: true } n) (day, month, year) = (int.Parse(n.Groups[1].Value), int.Parse(n.Groups[2].Value), int.Parse(n.Groups[3].Value));
-        else if (Worded().Match(text) is { Success: true } w && Array.IndexOf(Months, w.Groups[2].Value.ToLowerInvariant().Replace("setiembre", "septiembre")) is >= 0 and var index) (day, month, year) = (int.Parse(w.Groups[1].Value), index + 1, int.Parse(w.Groups[3].Value));
+        else if (Worded().Match(text) is { Success: true } w && Month(w.Groups[2].Value) is { } worded) (day, month, year) = (int.Parse(w.Groups[1].Value), worded, int.Parse(w.Groups[3].Value));
+        else if (MonthFirst().Match(text) is { Success: true } mf && Month(mf.Groups[1].Value) is { } first) (day, month, year) = (int.Parse(mf.Groups[2].Value), first, int.Parse(mf.Groups[3].Value));
         else return null;
         return year is >= 1 and <= 9999 && month is >= 1 and <= 12 && day >= 1 && day <= DateTime.DaysInMonth(year, month) ? new DateOnly(year, month, day) : null;
     }
 
+    static int? Month(string word) => Array.IndexOf(Months, word.ToLowerInvariant().Replace("setiembre", "septiembre")) is >= 0 and var index ? index + 1 : null;
+
     [GeneratedRegex(@"^(?=.*\p{L}{2})[\p{L}\p{M} .'-]{2,100}$")] private static partial Regex Name();
-    [GeneratedRegex(@"^\s*(\d{4})-(\d{1,2})-(\d{1,2})\s*$")] private static partial Regex Iso();
-    [GeneratedRegex(@"^\s*(\d{1,2})[/\-. ](\d{1,2})[/\-. ](\d{4})\s*$")] private static partial Regex Numeric();
-    [GeneratedRegex(@"(?i)^\s*(\d{1,2})\s+de\s+(\p{L}+)\s+(?:de|del)\s+(\d{4})\s*$")] private static partial Regex Worded();
+    [GeneratedRegex(@"(?i)^\s*(?:me\s+llamo|mi\s+nombre(?:\s+completo)?\s+es|soy)\s+")] private static partial Regex LeadIn();
+    [GeneratedRegex(@"(?i)(?<![\p{L}\d])(\p{L}{4,10})\s+(\d{1,2})(?:\s*,\s*|\s+(?:de|del)\s+|\s+)(\d{4})(?!\d)")] private static partial Regex MonthFirst();
+    [GeneratedRegex(@"(?<!\d)(\d{4})-(\d{1,2})-(\d{1,2})(?!\d)")] private static partial Regex Iso();
+    [GeneratedRegex(@"(?<!\d)(\d{1,2})[/\-. ](\d{1,2})[/\-. ](\d{4})(?!\d)")] private static partial Regex Numeric();
+    [GeneratedRegex(@"(?i)(?<!\d)(\d{1,2})\s+(?:de\s+)?(\p{L}{4,10})\s+(?:(?:de|del)\s+)?(\d{4})(?!\d)")] private static partial Regex Worded();
 }
