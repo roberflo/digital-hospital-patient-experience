@@ -10,7 +10,7 @@ public sealed class WhatsAppOnboarding(CrmDb db, TenantScope scope, CurrentUser 
     public static readonly string[] Events = ["whatsapp.message.received", "whatsapp.message.sent", "whatsapp.message.delivered", "whatsapp.message.read", "whatsapp.message.failed", "whatsapp.conversation.created", "whatsapp.conversation.ended", "whatsapp.thread.standby"];
     public async Task<SetupResult> Start(CancellationToken ct)
     {
-        user.RequireAdmin();
+        user.RequireAdminOrPlatform();
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         await Lock(ct);
         var tenant = await db.Tenants.SingleAsync(x => x.Id == scope.Id, ct);
@@ -38,12 +38,14 @@ public sealed class WhatsAppOnboarding(CrmDb db, TenantScope scope, CurrentUser 
     }
     public async Task<SyncResult> Sync(CancellationToken ct)
     {
-        user.RequireAdmin();
+        user.RequireAdminOrPlatform();
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         await Lock(ct);
         var tenant = await db.Tenants.SingleAsync(x => x.Id == scope.Id, ct);
         var customer = tenant.KapsoCustomerId ?? config[$"Kapso:Tenants:{scope.Id}:CustomerId"];
-        if (string.IsNullOrEmpty(customer)) return new SyncResult(0, 0, 0, ["Pulsa Agregar mi número para iniciar la conexión."]);
+        // On behalf, every sync leaves a row, also when it adds no number (docs/platform-owner.md AC 13).
+        if (user.Platform) CrmEndpoints.Audit(db, scope, user, "channel.synced", scope.Id);
+        if (string.IsNullOrEmpty(customer)) { await db.SaveChangesAsync(ct); await tx.CommitAsync(ct); return new SyncResult(0, 0, 0, ["Pulsa Agregar mi número para iniciar la conexión."]); }
         await CheckCustomer(customer, ct);
         var connected = new List<JsonElement>();
         for (var page = 1; ; page++)

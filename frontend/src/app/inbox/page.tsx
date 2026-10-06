@@ -8,7 +8,9 @@ export default async function InboxPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  if (!(await getServerSession(authOptions)))
-    redirect(loginUrl(pathWithQuery('/inbox', await searchParams)));
+  const session = await getServerSession(authOptions);
+  if (!session) redirect(loginUrl(pathWithQuery('/inbox', await searchParams)));
+  // El dueño de plataforma solo configura: no abre la bandeja de ninguna recepción.
+  if (session.platform) redirect('/');
   return <KapsoInbox />;
 }

@@ -1,7 +1,8 @@
 import 'server-only';
-import { refreshSession, RefreshSessionError } from './refresh-session';
+import { refreshSession, RefreshSessionError } from './refresh-session.ts';
 import { getToken, encode } from 'next-auth/jwt';
 import { NextRequest, NextResponse } from 'next/server';
+import { actingCookieName, isPlatformOwner, readActing } from './acting.ts';
 const ALLOWED = new Set([
   'me',
   'overview',
@@ -28,17 +29,43 @@ const ALLOWED = new Set([
   'inbox-views',
   'macros',
 ]);
-export async function proxy(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
+export const sameOrigin = (req: NextRequest) =>
+  req.headers.get('origin') === new URL(process.env.NEXTAUTH_URL!).origin;
+type Context = { params: Promise<{ path: string[] }> };
+const refuseActing = (status: number, code: string, title: string) =>
+  NextResponse.json({ title, code }, { status, headers: { 'Cache-Control': 'no-store' } });
+export const proxy = (req: NextRequest, context: Context) => forward(req, context);
+// `acting: false` is for server-internal reads that must never run in the name of a reception.
+export async function forward(req: NextRequest, { params }: Context, acting = true) {
   const { path } = await params;
   if (!ALLOWED.has(path[0]) || path.some((p) => p === '..' || p.includes('/') || p.includes('\\')))
     return new NextResponse(null, { status: 404 });
-  if (!['GET', 'HEAD'].includes(req.method)) {
-    const origin = req.headers.get('origin');
-    if (!origin || origin !== new URL(process.env.NEXTAUTH_URL!).origin)
-      return NextResponse.json({ title: 'Origen inválido' }, { status: 403 });
-  }
+  if (!['GET', 'HEAD'].includes(req.method) && !sameOrigin(req))
+    return NextResponse.json({ title: 'Origen inválido' }, { status: 403 });
   const token = await getToken({ req, secret: process.env.AUTH_SECRET });
   if (!token?.accessToken) return NextResponse.json({ title: 'Inicia sesión' }, { status: 401 });
+  // Dueño de plataforma. La cookie de la elección es de todo el navegador, no de la pestaña: cada
+  // petición dice en X-Acting-Expected qué recepción pintó su pantalla, y solo se actúa si es la
+  // sellada para su `sub`. Si no, no se llama a la API. Antes del refresco: nada que conservar.
+  const expected = req.headers.get('x-acting-expected');
+  const platform = isPlatformOwner(token.accessToken);
+  let actingTenant: string | undefined;
+  if (expected && !platform)
+    return refuseActing(409, 'acting_changed', 'La sesión de esta pestaña cambió.');
+  if (acting && platform && path.join('/') !== 'platform/tenants') {
+    if (!expected)
+      return refuseActing(403, 'acting_expected_required', 'Elige una recepción para continuar.');
+    const chosen = await readActing(req.cookies.get(actingCookieName())?.value, token.sub);
+    if (!chosen)
+      return refuseActing(
+        409,
+        'acting_expired',
+        'Tu elección caducó; elige la recepción de nuevo.',
+      );
+    if (chosen.tenantId.toLowerCase() !== expected.toLowerCase())
+      return refuseActing(409, 'acting_changed', 'Cambió de recepción en otra pestaña.');
+    actingTenant = chosen.tenantId;
+  }
   let refreshed = false;
   if ((token.accessExpires ?? 0) < Date.now() + 15000) {
     if (!token.refreshToken)
@@ -64,7 +91,10 @@ export async function proxy(req: NextRequest, { params }: { params: Promise<{ pa
       );
     }
   }
+  // Built from scratch: neither an X-Acting-Tenant sent by the browser nor X-Acting-Expected
+  // reaches the API. The tenant comes only from the sealed cookie checked above.
   const headers = new Headers({ Authorization: `Bearer ${token.accessToken}` });
+  if (actingTenant) headers.set('X-Acting-Tenant', actingTenant);
   for (const name of ['content-type', 'idempotency-key']) {
     const v = req.headers.get(name);
     if (v) headers.set(name, v);

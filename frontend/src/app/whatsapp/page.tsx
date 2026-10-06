@@ -8,7 +8,9 @@ export default async function WhatsAppPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  if (!(await getServerSession(authOptions)))
-    redirect(loginUrl(pathWithQuery('/whatsapp', await searchParams)));
+  const session = await getServerSession(authOptions);
+  if (!session) redirect(loginUrl(pathWithQuery('/whatsapp', await searchParams)));
+  // Esta vista lee /me y enlaza a la bandeja; el dueño de plataforma conecta WhatsApp desde «/».
+  if (session.platform) redirect('/');
   return <WhatsAppConnect />;
 }

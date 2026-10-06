@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { CheckCircle2, HeartPulse } from 'lucide-react';
-import { SESSION_CHANNEL } from '@/lib/session-client';
+import { platformSubject, SESSION_CHANNEL } from '@/lib/session-client';
 import { loginUrl } from '@/lib/login-return';
 import { Button } from './ui/button';
 export default function SessionRestored() {
@@ -10,9 +10,12 @@ export default function SessionRestored() {
     let alive = true;
     fetch('/api/crm/me', { cache: 'no-store', signal: AbortSignal.timeout(8000) })
       .then(async (response) => {
-        if (!response.ok) throw new Error();
-        const me = await response.json();
-        if (!me.subject || !me.tenant?.id) throw new Error();
+        // The platform owner is denied /me by design: its live session is the proof.
+        if (response.status === 403 ? !(await platformSubject()) : !response.ok) throw new Error();
+        if (response.ok) {
+          const me = await response.json();
+          if (!me.subject || !me.tenant?.id) throw new Error();
+        }
         if (!alive) return;
         setState('ready');
         if (typeof BroadcastChannel !== 'undefined') {

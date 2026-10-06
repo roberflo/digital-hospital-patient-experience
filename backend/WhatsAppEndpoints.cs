@@ -64,7 +64,8 @@ public static class WhatsAppEndpoints
             db.Activities.Add(new Activity { TenantId = t.Id, ContactId = conv.ContactId, ConversationId = id, Actor = u.Name, ActorRole = u.Role, ActorSubject = u.Subject, Kind = "handoff", Body = b.Status == "agent" ? "Atención automática reanudada." : b.Status == "closed" ? "Conversación cerrada." : "Atención humana solicitada. Revisa mensajes y acciones anteriores." });
             CrmEndpoints.Audit(db, t, u, "conversation." + b.Status, id); await db.SaveChangesAsync(); return Results.Ok(conv);
         });
-        api.MapGet("/channels", async (CrmDb db) => await db.Channels.ToListAsync());
+        // The four below, and only they, are what the platform owner operates here; POST /channels takes a caller-supplied number and stays closed to it.
+        api.MapGet("/channels", async (CrmDb db) => await db.Channels.ToListAsync()).WithMetadata(new PlatformOperable());
         api.MapPost("/channels", async (ChannelInput b, CrmDb db, CurrentUser u, TenantScope t, KapsoClient k, IConfiguration c) =>
         {
             u.RequireAdmin(); Rules.Required(b.PhoneNumberId, 50); var raw = await k.Platform(HttpMethod.Get, "whatsapp/phone_numbers/" + Uri.EscapeDataString(b.PhoneNumberId));
@@ -79,10 +80,23 @@ public static class WhatsAppEndpoints
             if (b.Coexistence && !coexistence) throw new ArgumentException("Kapso todavía no reporta coexistencia activa para este número");
             var row = new Channel { TenantId = t.Id, Name = Rules.Required(b.Name), PhoneNumberId = b.PhoneNumberId, DoctorId = b.DoctorId, Coexistence = coexistence, Enabled = false, KapsoCustomerId = customer }; db.Add(row); CrmEndpoints.Audit(db, t, u, "channel.created", row.Id); await db.SaveChangesAsync(); return Results.Ok(row);
         });
-        api.MapPatch("/channels/{id:guid}", async (Guid id, ChannelState b, CrmDb db, CurrentUser u, TenantScope t) => { u.RequireAdmin(); var row = await db.Channels.SingleOrDefaultAsync(x => x.Id == id); if (row is null) return Results.NotFound(); row.Enabled = b.Enabled; CrmEndpoints.Audit(db, t, u, "channel.enabled", id); await db.SaveChangesAsync(); return Results.Ok(row); });
-        api.MapPost("/channels/onboarding", async (WhatsAppOnboarding onboarding, CancellationToken ct) => await onboarding.Start(ct));
-        api.MapPost("/channels/sync", async (WhatsAppOnboarding onboarding, CancellationToken ct) => await onboarding.Sync(ct));
+        api.MapPatch("/channels/{id:guid}", SetEnabled).WithMetadata(new PlatformOperable());
+        api.MapPost("/channels/onboarding", async (WhatsAppOnboarding onboarding, CancellationToken ct) => await onboarding.Start(ct)).WithMetadata(new PlatformOperable());
+        api.MapPost("/channels/sync", async (WhatsAppOnboarding onboarding, CancellationToken ct) => await onboarding.Sync(ct)).WithMetadata(new PlatformOperable());
         app.MapPost("/webhooks/kapso", Receive);
+    }
+    public static async Task<IResult> SetEnabled(Guid id, ChannelState b, CrmDb db, CurrentUser u, TenantScope t)
+    {
+        u.RequireAdminOrPlatform(); var row = await db.Channels.SingleOrDefaultAsync(x => x.Id == id); if (row is null) return Results.NotFound();
+        // On behalf, a number is never switched on if that would start automatic sends: Channel.Enabled gates both the
+        // agent's replies and the appointment reminders that go out on the reminder number. Pausing is always allowed.
+        if (u.Platform && b.Enabled)
+        {
+            var auto = await db.Tenants.Where(x => x.Id == t.Id).Select(x => new { x.AgentEnabled, Reminders = x.RemindersEnabled && x.ReminderChannelId == id }).SingleAsync();
+            if (auto.AgentEnabled) return Results.Conflict(new { title = "El agente de esta recepción está activo: habilitar el número lo haría contestar. Puede habilitarlo el Administrador del hospital.", code = "agent_enabled" });
+            if (auto.Reminders) return Results.Conflict(new { title = "Los recordatorios de citas de esta recepción salen por este número: habilitarlo los reanudaría. Puede habilitarlo el Administrador del hospital.", code = "reminders_enabled" });
+        }
+        row.Enabled = b.Enabled; CrmEndpoints.Audit(db, t, u, u.Platform && !b.Enabled ? "channel.paused" : "channel.enabled", id); await db.SaveChangesAsync(); return Results.Ok(row);
     }
     static async Task<IResult> Receive(HttpContext ctx, CrmDb db, TenantScope scope, IConfiguration config)
     {

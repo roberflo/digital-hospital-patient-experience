@@ -7,18 +7,30 @@ public sealed class CurrentUser
 {
     public string Subject { get; set; } = ""; public string Role { get; set; } = ""; public string Name { get; set; } = "";
     public bool Admin => Role == "admin";
+    /// <summary>The platform owner acting for a reception (docs/platform-owner.md). Never an admin.</summary>
+    public bool Platform => Role == "platform";
     public void RequireAdmin() { if (!Admin) throw new AccessDeniedException(); }
+    /// <summary>Only the routes the platform owner may operate use this; everything else keeps RequireAdmin.</summary>
+    public void RequireAdminOrPlatform() { if (!Admin && !Platform) throw new AccessDeniedException(); }
 }
 public sealed class AccessDeniedException : Exception;
 public static class Identity
 {
+    /// <summary>The realm roles of a token; a malformed `realm_access` yields none.</summary>
+    public static List<string> Roles(ClaimsPrincipal user)
+    {
+        var roles = new List<string>();
+        var realm = user.FindFirst("realm_access")?.Value;
+        if (realm is not null) { try { using var j = JsonDocument.Parse(realm); if (j.RootElement.ValueKind == JsonValueKind.Object && j.RootElement.TryGetProperty("roles", out var a) && a.ValueKind == JsonValueKind.Array) roles.AddRange(a.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!)); } catch (JsonException) { } }
+        return roles;
+    }
     public static string? MapRole(ClaimsPrincipal user)
     {
         // Hospital's Keycloak realm is the only issuer, and its seven PRD §3 roles the only vocabulary.
         // Enfermería has no Recepción workspace: it maps to nothing and is denied.
-        var roles = new List<string>();
-        var realm = user.FindFirst("realm_access")?.Value;
-        if (realm is not null) { try { using var j = JsonDocument.Parse(realm); if (j.RootElement.ValueKind == JsonValueKind.Object && j.RootElement.TryGetProperty("roles", out var a) && a.ValueKind == JsonValueKind.Array) roles.AddRange(a.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!)); } catch (JsonException) { return null; } }
+        var roles = Roles(user);
+        // The platform owner is never a teammate of any hospital, even holding Administrador too (INV-R3).
+        if (roles.Contains(PlatformOwner.Role)) return null;
         // Hospital's per-tenant service accounts hold Recepción + reception-agent: a machine is never a teammate.
         if (roles.Contains("reception-agent") || user.FindFirst("preferred_username")?.Value.StartsWith("service-account-", StringComparison.Ordinal) == true) return null;
         if (roles.Contains("Administrador")) return "admin";

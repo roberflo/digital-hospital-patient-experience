@@ -45,7 +45,7 @@ KC_RECEPCION_SERVICE_CLIENT_SECRET=<secreto>             # clientes recepcion-se
 KC_RECEPCION_SERVICE_TENANTS=<uuid> <uuid>               # un hospital por UUID
 ```
 
-`recepcion-web` es confidencial, authorization code + PKCE, sin acceso directo por contraseña ni cuenta de servicio, y sólo puede afirmar los siete roles de Hospital. El access token incluye audiencia `hospital-api`, `sub`, `tenant_id` y `realm_access.roles`.
+`recepcion-web` es confidencial, authorization code + PKCE, sin acceso directo por contraseña ni cuenta de servicio, y sólo puede afirmar los siete roles de Hospital más `platform-owner`. El access token incluye audiencia `hospital-api`, `sub`, `realm_access.roles` y, salvo para el dueño de plataforma, `tenant_id`.
 
 | Rol en Keycloak (realm `hospital`) | En Recepción | Puede |
 |---|---|---|
@@ -54,10 +54,13 @@ KC_RECEPCION_SERVICE_TENANTS=<uuid> <uuid>               # un hospital por UUID
 | `Médicos`, `Odontólogos`, `Nutricionistas` | Doctor | Sus conversaciones asignadas y, con su propia identidad, el expediente del paciente vinculado. |
 | `Enfermería` | — | Sin acceso a Recepción. |
 | `reception-agent` | — | Capacidad de la cuenta de servicio, nunca de una persona. |
+| `platform-owner` (sin `tenant_id`) | Dueño de plataforma | Sólo configurar, en nombre de la recepción que elige: conexión con Hospital y WhatsApp (generar el enlace, sincronizar, pausar un número y habilitarlo si el agente de esa recepción está apagado). Sin bandeja, contactos, pacientes, rutas clínicas, ajustes ni activar el agente. No es miembro de ningún hospital. |
 
-No existen otros roles ni equivalencias: un token sin uno de los seis que dan acceso recibe 403. Los usuarios se materializan al iniciar sesión; un `sub` ya vinculado a un hospital no puede cambiar a otro con un token diferente. Los roles se administran en Keycloak; Recepción sólo permite desactivar el acceso de un miembro.
+No existen otros roles ni equivalencias: un token sin uno de los seis que dan acceso, y que no sea de plataforma, recibe 403. Los usuarios se materializan al iniciar sesión; un `sub` ya vinculado a un hospital no puede cambiar a otro con un token diferente. Los roles se administran en Keycloak; Recepción sólo permite desactivar el acceso de un miembro.
 
-El espacio de cada hospital lo abre su Administrador al entrar por primera vez (`HOSPITAL_SELF_ONBOARDING=true`) o el operador con `BOOTSTRAP_TENANT_ID` / `BOOTSTRAP_TENANT_NAME`. No hay selector de empresas; cada usuario pertenece a una sola.
+El espacio de cada hospital lo abre su Administrador al entrar por primera vez (`HOSPITAL_SELF_ONBOARDING=true`) o el operador con `BOOTSTRAP_TENANT_ID` / `BOOTSTRAP_TENANT_NAME`. Cada usuario de hospital pertenece a una sola empresa y no ve selector.
+
+El único selector es el del dueño de plataforma ([platform-owner.md](platform-owner.md)): al entrar elige una recepción de `GET /api/platform/tenants` y la web muestra «Actuando en nombre de ‹recepción›» con «Cambiar». La elección se guarda en la cookie `recepcion.acting` (`__Secure-recepcion.acting` bajo https): HttpOnly, SameSite=Lax, doce horas, cifrada con `AUTH_SECRET` y ligada al `sub` de quien eligió; nunca en `localStorage` ni en la URL. Sólo el proxy del servidor web la convierte en la cabecera `X-Acting-Tenant`, tras validar el id contra la lista leída en servidor; una cabecera enviada por el navegador no se reenvía, y la API la rechaza en un token que no sea de plataforma. Como la cookie es de todo el navegador y no de una pestaña, cada petición de la vista dice qué recepción tiene pintada (`X-Acting-Expected`, que el proxy consume y no reenvía): si no es la sellada, el proxy responde 409 sin llamar a la API y la pestaña deja de operar («Cambió de recepción en otra pestaña»). El dueño no abre el espacio de un hospital: eso sigue siendo del Administrador o de `BOOTSTRAP_TENANT_ID`. No requiere variables nuevas en Recepción; el rol lo emite el job `keycloak-config` de Hospital (`KC_PLATFORM_OWNERS`). Cada acto en nombre queda en `Audit` con la recepción objetivo y el actor `platform:<sub>`. Si a la instalación le falta `KAPSO_API_KEY`, `KAPSO_WEBHOOK_URL` o `KAPSO_WEBHOOK_SECRET`, la vista lo nombra como tarea del operador y no ofrece conectar.
 
 Desplegar el [puente de recetas](../integrations/hospital/README.md) y configurar el `azp` y `sub` reales antes de habilitar entrega clínica. El bot usa `reception-agent` y, para agenda, `Recepción`; nunca necesita un rol médico. La revisión y smoke del bridge con stores reales siguen siendo requisito previo a su habilitación.
 

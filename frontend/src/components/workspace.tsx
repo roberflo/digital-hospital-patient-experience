@@ -2,7 +2,7 @@
 import { GoogleCalendarConnection } from './google-calendar-connection';
 import { useEffect, useState, useRef, type FormEvent, type ReactNode } from 'react';
 import useSWR, { useSWRConfig } from 'swr';
-import { signOut } from 'next-auth/react';
+import { endSession } from '@/lib/session-client';
 import {
   HeartPulse,
   LayoutDashboard,
@@ -397,21 +397,7 @@ export default function Workspace() {
                 {me?.role === 'agent' ? 'Recepcionista' : (labels[me?.role ?? ''] ?? '')}
               </small>
             </div>
-            <button
-              aria-label="Cerrar sesión"
-              onClick={async () => {
-                // Any failure still ends the local session and lands on /login.
-                let url = '/login';
-                try {
-                  const end = await fetch('/api/session/end').then((r) => r.json());
-                  if (typeof end?.url === 'string') url = end.url;
-                } catch {}
-                try {
-                  await signOut({ redirect: false });
-                } catch {}
-                window.location.href = url;
-              }}
-            >
+            <button aria-label="Cerrar sesión" onClick={endSession}>
               <LogOut size={17} />
             </button>
           </div>

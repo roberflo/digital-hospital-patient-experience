@@ -7,9 +7,14 @@ public static class ChannelDiagnostics
 {
     public static void MapChannelDiagnostics(this WebApplication app)
     {
-        app.MapPost("/api/channels/{id:guid}/diagnostics",async(Guid id,CrmDb db,CurrentUser user,KapsoClient kapso,IConfiguration config)=>{
-            user.RequireAdmin();var row=await db.Channels.SingleOrDefaultAsync(x=>x.Id==id);if(row is null)return Results.NotFound();
+        app.MapPost("/api/channels/{id:guid}/diagnostics",Run).RequireAuthorization().WithMetadata(new PlatformOperable());
+    }
+    public static async Task<IResult> Run(Guid id,CrmDb db,CurrentUser user,KapsoClient kapso,IConfiguration config)
+    {
+            user.RequireAdminOrPlatform();var row=await db.Channels.SingleOrDefaultAsync(x=>x.Id==id);if(row is null)return Results.NotFound();
             if(row.PhoneNumberId=="demo")return Results.BadRequest(new{title="Canal sintético: registra un número Kapso para comprobar su conexión"});
+            // On behalf, reading the provider is an act: traced before the reads, so a provider failure does not erase it.
+            if(user.Platform){db.Audits.Add(new Audit{TenantId=row.TenantId,Actor=user.Subject,Action="channel.diagnosed",Resource=id.ToString()});await db.SaveChangesAsync();}
             var path="whatsapp/phone_numbers/"+Uri.EscapeDataString(row.PhoneNumberId);
             var number=Data(await kapso.Platform(HttpMethod.Get,path));
             var health=Data(await kapso.Platform(HttpMethod.Get,path+"/health"));
@@ -25,7 +30,6 @@ public static class ChannelDiagnostics
             return Results.Ok(new{checkedAt=DateTimeOffset.UtcNow,kind=Text(number,"kind"),coexistence=Bool(number,"is_coexistence"),providerStatus=Text(health,"status"),checks,
                 activeWebhooks=hooks.Count(x=>Bool(x,"active")),webhookUrlConfigured=!string.IsNullOrEmpty(expected),crmWebhookFound=configured,receivesMessages=receives,signatureMatches,row.LastWebhookAt,row.Enabled,
                 sendEnabled=config["SEND_ENABLED"]=="true",manualSendEnabled=kapso.CanSend(true),ready=Text(health,"status")=="healthy"&&row.Enabled&&kapso.CanSend(true)&&receives&&signatureMatches});
-        }).RequireAuthorization();
     }
     static JsonElement Data(JsonElement value)=>value.TryGetProperty("data",out var data)?data:value;
     static string? Text(JsonElement value,string key)=>value.ValueKind==JsonValueKind.Object&&value.TryGetProperty(key,out var v)&&v.ValueKind==JsonValueKind.String?v.GetString():null;

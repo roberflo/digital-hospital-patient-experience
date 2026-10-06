@@ -9,6 +9,7 @@ import { Button } from './ui/button';
 import { loginUrl } from '@/lib/login-return';
 import {
   expireSession,
+  platformSubject,
   isSessionPaused,
   resumeSession,
   SESSION_CHANNEL,
@@ -61,7 +62,12 @@ function Recovery({ children }: { children: ReactNode }) {
           expireSession();
           return;
         }
-        if (!response.ok) {
+        // The platform owner is denied /me by design: its identity is its own `sub`. From here it
+        // follows the same rules as anyone — same identity resumes in place (a link generated in
+        // memory survives), a different one gets a clean page.
+        const platform = response.status === 403 ? await platformSubject() : null;
+        if (!alive) return;
+        if (!response.ok && !platform) {
           const refusal = await response.json().catch(() => null);
           if (isSessionPaused())
             setError(
@@ -73,7 +79,7 @@ function Recovery({ children }: { children: ReactNode }) {
             );
           return;
         }
-        const next = identityKey(await response.json());
+        const next = platform ? 'platform:' + platform : identityKey(await response.json());
         if (!next) throw new Error('Identity missing');
         if (isSessionPaused() && !identity.current) {
           window.location.reload();

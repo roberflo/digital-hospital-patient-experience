@@ -1,11 +1,19 @@
 import 'server-only';
 import { NextRequest, NextResponse } from 'next/server';
-import { proxy } from './crm-proxy';
-import { InboxError } from './kapso';
+import { getToken } from 'next-auth/jwt';
+import { forward } from './crm-proxy.ts';
+import { isPlatformOwner } from './acting.ts';
+import { InboxError } from './kapso.ts';
 // Reuse the BFF's refresh + cookie chunking; the API validates membership on every request.
 export async function authorizeInbox(req: NextRequest) {
+  // El dueño de plataforma solo configura (docs/platform-owner.md, decisión 2). En nombre de una
+  // recepción, GET /api/channels le respondería 200 y lo que sigue lee Kapso con la clave del
+  // servidor: se niega aquí, y la comprobación de abajo nunca viaja con X-Acting-Tenant.
+  const token = await getToken({ req, secret: process.env.AUTH_SECRET });
+  if (isPlatformOwner(token?.accessToken))
+    throw new InboxError(403, 'El dueño de plataforma no abre la bandeja de una recepción.');
   const check = new NextRequest(new URL('/api/crm/channels', req.url), { headers: req.headers });
-  const response = await proxy(check, { params: Promise.resolve({ path: ['channels'] }) });
+  const response = await forward(check, { params: Promise.resolve({ path: ['channels'] }) }, false);
   if (!response.ok)
     throw new InboxError(
       response.status,

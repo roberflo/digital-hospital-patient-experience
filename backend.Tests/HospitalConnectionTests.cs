@@ -78,6 +78,24 @@ public class HospitalConnectionTests
         await Assert.ThrowsAsync<ArgumentException>(()=>client.SearchPatients(tenant,"phone","123456789"));
         Assert.Equal(1,handler.Calls);
     }
+    // docs/platform-owner.md AC 12: the platform owner reads the setup and may save the connection of the
+    // reception it acts for. The full save (Hospital accepts, row audited) is in PlatformOwnerTests.
+    [Theory][InlineData("admin")][InlineData("platform")]
+    public async Task AdministratorAndPlatformOwnerPassTheConnectionGuards(string role)
+    {
+        var user=new CurrentUser{Role=role,Subject=role=="platform"?"platform:owner-sub":"admin"};
+        var setup=Assert.IsAssignableFrom<Microsoft.AspNetCore.Http.IValueHttpResult>(HospitalConnectionEndpoints.Setup(user,Config()));
+        Assert.Contains("hospital-api.example.com",JsonSerializer.Serialize(setup.Value));
+        // Past the guard, an untrusted destination is still refused before any credential is sent or anything is stored.
+        await Assert.ThrowsAsync<ArgumentException>(()=>HospitalConnectionEndpoints.Save(new("http://169.254.169.254","https://hospital.example.com","recepcion","synthetic-secret"),user,new TenantScope{Id=Guid.NewGuid()},null!,Config(),null!,null!,default));
+    }
+    [Theory][InlineData("agent")][InlineData("doctor")][InlineData("")]
+    public async Task OtherRolesCannotReadTheSetupOrSaveTheConnection(string role)
+    {
+        var user=new CurrentUser{Role=role,Subject="someone"};
+        Assert.Throws<AccessDeniedException>(()=>HospitalConnectionEndpoints.Setup(user,Config()));
+        await Assert.ThrowsAsync<AccessDeniedException>(()=>HospitalConnectionEndpoints.Save(new("http://hospital-api:8080","https://hospital.example.com","recepcion","synthetic-secret"),user,new TenantScope{Id=Guid.NewGuid()},null!,Config(),null!,null!,default));
+    }
     sealed class Handler(Func<HttpRequestMessage,HttpResponseMessage> response):HttpMessageHandler
     {
         public int Calls;

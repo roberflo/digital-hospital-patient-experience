@@ -18,7 +18,9 @@ type Connection = {
   name: string;
   role: string;
 };
-export function HospitalConnection() {
+// `platform`: el dueño de plataforma ve el estado de la conexión de la recepción elegida, sin lo
+// que es del hospital (agenda, contactos, equipo, cambio de cuenta).
+export function HospitalConnection({ platform = false }: { platform?: boolean }) {
   const { data, error, mutate } = useSWR<Connection>('/hospital/connection', fetcher);
   // A real read verifies availability; configured credentials alone never mean connected.
   const {
@@ -41,42 +43,48 @@ export function HospitalConnection() {
     <section className="content-card hospital-connection">
       <div className="card-toolbar">
         <h2>
-          <HeartPulse size={20} /> Mi hospital
+          <HeartPulse size={20} /> {platform ? 'Conexión con Hospital' : 'Mi hospital'}
         </h2>
       </div>
       <div className="hospital-connection-body">
         {error && (
           <p role="alert">
-            No pudimos cargar tu hospital.{' '}
+            {platform
+              ? 'No pudimos leer la conexión de esta recepción.'
+              : 'No pudimos cargar tu hospital.'}{' '}
             <Button variant="outline" onClick={() => mutate()}>
               Reintentar
             </Button>
           </p>
         )}
-        {!data && !error && <p>Cargando tu hospital…</p>}
+        {!data && !error && <p>{platform ? 'Leyendo la conexión…' : 'Cargando tu hospital…'}</p>}
         {data && (
           <>
             <div className="hospital-overview">
               <div>
                 <h3>{data.hospital.name}</h3>
-                <p>
-                  {data.sharedIdentity
-                    ? `Has entrado como ${data.name}. Tu cuenta conserva los permisos del hospital.`
-                    : 'Estás en un espacio de prueba. Para trabajar con tu equipo, usa tu cuenta del hospital.'}
-                </p>
+                {!platform && (
+                  <p>
+                    {data.sharedIdentity
+                      ? `Has entrado como ${data.name}. Tu cuenta conserva los permisos del hospital.`
+                      : 'Estás en un espacio de prueba. Para trabajar con tu equipo, usa tu cuenta del hospital.'}
+                  </p>
+                )}
               </div>
               <span role="status" className={`hospital-status ${connected ? 'is-connected' : ''}`}>
                 {connected ? <CheckCircle2 size={16} /> : <HeartPulse size={16} />}
                 {connected
                   ? 'Hospital conectado'
                   : isValidating
-                    ? 'Conectando con tu hospital…'
+                    ? platform
+                      ? 'Comprobando la conexión…'
+                      : 'Conectando con tu hospital…'
                     : data.configured
                       ? 'Conexión interrumpida'
                       : 'Pendiente de conexión'}
               </span>
             </div>
-            {!data.sharedIdentity && data.hospitalLoginAvailable && (
+            {!platform && !data.sharedIdentity && data.hospitalLoginAvailable && (
               <div className="hospital-access-callout">
                 <h4>Una cuenta para ambas aplicaciones</h4>
                 <p>
@@ -88,7 +96,13 @@ export function HospitalConnection() {
                 </Button>
               </div>
             )}
-            {data.sharedIdentity && !data.configured && (
+            {platform && !data.configured && (
+              <p className="hospital-access-callout">
+                A esta recepción le falta el acceso a su hospital. Es una tarea del operador de la
+                instalación: no hay credenciales que introducir aquí.
+              </p>
+            )}
+            {!platform && data.sharedIdentity && !data.configured && (
               <p className="hospital-access-callout">
                 Tu cuenta ya está vinculada. Falta habilitar el acceso de Recepción a este hospital;
                 pide al administrador de la plataforma que lo complete. No necesitas introducir
@@ -98,51 +112,56 @@ export function HospitalConnection() {
             {healthError && (
               <div role="alert" className="hospital-access-callout">
                 <p>
-                  No pudimos comunicarnos con Hospital. Tu cuenta y tus datos siguen vinculados.
+                  No pudimos comunicarnos con Hospital.
+                  {!platform && ' Tu cuenta y tus datos siguen vinculados.'}
                 </p>
                 <Button variant="outline" disabled={isValidating} onClick={() => check()}>
                   <RefreshCw /> Volver a intentar
                 </Button>
               </div>
             )}
-            <div className="hospital-actions">
-              {connected && (
-                <Button asChild>
-                  <a href="/?view=calendar">
-                    Abrir agenda <ArrowUpRight />
+            {!platform && (
+              <>
+                <div className="hospital-actions">
+                  {connected && (
+                    <Button asChild>
+                      <a href="/?view=calendar">
+                        Abrir agenda <ArrowUpRight />
+                      </a>
+                    </Button>
+                  )}
+                  {data.hospitalUrl && (
+                    <Button asChild variant="outline">
+                      <a href={data.hospitalUrl} target="_blank" rel="noreferrer">
+                        Abrir Hospital <ArrowUpRight size={15} />
+                      </a>
+                    </Button>
+                  )}
+                </div>
+                <div className="hospital-next-steps">
+                  <a href="/?view=contacts">
+                    <strong>Vincular pacientes</strong>
+                    <span>Busca el expediente desde un contacto para consultar sus citas.</span>
+                    <span aria-hidden="true">→</span>
                   </a>
-                </Button>
-              )}
-              {data.hospitalUrl && (
-                <Button asChild variant="outline">
-                  <a href={data.hospitalUrl} target="_blank" rel="noreferrer">
-                    Abrir Hospital <ArrowUpRight size={15} />
+                  <a href="/?view=team">
+                    <strong>Trabajar con tu equipo</strong>
+                    <span>Tus compañeros entran con su cuenta del Hospital y aparecen aquí.</span>
+                    <span aria-hidden="true">→</span>
                   </a>
-                </Button>
-              )}
-            </div>
-            <div className="hospital-next-steps">
-              <a href="/?view=contacts">
-                <strong>Vincular pacientes</strong>
-                <span>Busca el expediente desde un contacto para consultar sus citas.</span>
-                <span aria-hidden="true">→</span>
-              </a>
-              <a href="/?view=team">
-                <strong>Trabajar con tu equipo</strong>
-                <span>Tus compañeros entran con su cuenta del Hospital y aparecen aquí.</span>
-                <span aria-hidden="true">→</span>
-              </a>
-            </div>
-            {data.sharedIdentity && data.hospitalLoginAvailable && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() =>
-                  signIn('keycloak', { callbackUrl: '/?view=hospital' }, { prompt: 'login' })
-                }
-              >
-                Usar otra cuenta del hospital
-              </Button>
+                </div>
+                {data.sharedIdentity && data.hospitalLoginAvailable && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() =>
+                      signIn('keycloak', { callbackUrl: '/?view=hospital' }, { prompt: 'login' })
+                    }
+                  >
+                    Usar otra cuenta del hospital
+                  </Button>
+                )}
+              </>
             )}
             <p className="hint">
               Los pacientes, las citas y las conversaciones permanecen en su hospital.
