@@ -512,6 +512,17 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
 
     static string Urgent(string? phone) => phone is { Length: > 0 } ? $"\n\nSi es una emergencia y no puedes esperar, llama al *{phone}*." : "\n\nSi es una emergencia y no puedes esperar, escribe *EMERGENCIA*.";
 
+    /// <summary>Whether the hour of one of this patient's appointments has already come.</summary>
+    async Task<bool> HasPassed(Guid appointment, CancellationToken ct)
+    {
+        // ponytail: Hospital answers 31 days per query, so this sees the last 30; an older appointment is not caught here. The rule belongs in Hospital's own cancel.
+        var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, zone).DateTime);
+        var range = await hospital.GetPatientAppointmentRangeAsync(scope.Id, contact.PatientId!.Value, contact.Phone, today.AddDays(-30), today, ct);
+        // Only what Hospital says has passed is refused: an answer that cannot be read leaves the decision to Hospital's own cancel.
+        return range.ValueKind == JsonValueKind.Object && range.TryGetProperty("rows", out var rows) && rows.ValueKind == JsonValueKind.Array
+            && rows.EnumerateArray().Any(row => row.TryGetProperty("appointmentId", out var id) && id.TryGetGuid(out var one) && one == appointment && row.TryGetProperty("scheduledStart", out var at) && at.TryGetDateTimeOffset(out var start) && start <= DateTimeOffset.UtcNow);
+    }
+
     /// <summary>A step of the guided booking the patient tapped: the day, the doctor (one, «any», «another», or not asked yet) and the part of the day.</summary>
     async Task Guide((string Day, string Doctor, string Band) step, CancellationToken ct)
     {
@@ -703,10 +714,12 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         // The card names the appointment and the doctor. An existing appointment is looked up so a cancellation says which one it is;
         // if Hospital cannot say, the proposal still goes out without those lines.
         var who = doctorName is { Length: > 0 } ? doctorName : Guid.TryParse(payload["doctorId"]?.GetValue<string>(), out var listed) && doctors.TryGetValue(listed, out var known) ? known : null;
+        var passed = false;
         if (Guid.TryParse(appointmentId, out var existing))
             try
             {
                 var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, zone).DateTime);
+                passed = await HasPassed(existing, ct);
                 var range = await hospital.GetPatientAppointmentRangeAsync(scope.Id, contact.PatientId!.Value, contact.Phone, today, today.AddDays(30), ct);
                 foreach (var row in range.GetProperty("rows").EnumerateArray().Where(row => row.GetProperty("appointmentId").GetGuid() == existing))
                 {
@@ -715,6 +728,8 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
                 }
             }
             catch (Exception ex) when (ex is HttpRequestException or HospitalIntegrationException or KeyNotFoundException or InvalidOperationException or FormatException) { }
+        // An hour that has passed is not cancelled or moved: what happened to it is whether the patient came, and Hospital records that.
+        if (passed) { summary = null; return Result(new { error = "Esa cita ya pasó: no se puede cancelar ni cambiar. Díselo así al paciente y ofrécele agendar una nueva. No derives." }); }
         if (who is not null) payload["doctorName"] = who;
         summary = (summary ?? "Cancelar tu cita") + (who is null ? "" : $"\n*Con:* {who}") + "\n\n" + (action switch { "cancel" => "¿La cancelo?", "reschedule" => "¿La cambio?", _ => "¿La confirmo?" });
         db.Activities.Add(new Activity { TenantId = scope.Id, ContactId = contact.Id, ConversationId = conv.Id, Kind = "proposal:" + code, Actor = "Agente", ActorRole = "agent_ai", Body = payload.ToJsonString() }); await db.SaveChangesAsync(ct);
@@ -770,6 +785,11 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             }
             else if (booking && !free) { await OfferPerson("El horario propuesto se ocupó antes de confirmar.", "Ese horario se acaba de ocupar.\nToca *Seguir aquí* y luego *Agendar cita* para ver otros.", ct); return; }
             Guid? reference = p.TryGetProperty("appointmentId", out var existing) && existing.TryGetGuid(out var known) ? known : null;
+            if (action is "cancel" or "reschedule" && reference is { } target && await HasPassed(target, ct))
+            {
+                await conversations.Send(conv.Id, $"Esa cita ya pasó, así que no se puede {(action == "cancel" ? "cancelar" : "cambiar")}.\n¿Quieres agendar una nueva?", "agent", "confirm:" + job.Id, ct: ct, choices: new([new("AGENDAR", "Agendar cita"), new("MENU", "Seguir aquí")]));
+                return;
+            }
             if (action == "cancel") await hospital.CancelAppointmentAsync(scope.Id, contact.PatientId!.Value, contact.Phone, p.GetProperty("appointmentId").GetGuid(), ct);
             else
             {

@@ -76,6 +76,38 @@ public sealed class AgentAppointmentsTests : IAsyncLifetime
         Assert.Contains(appointment.ToString(), (await h.Db.Activities.SingleAsync(a => a.ConversationId == h.Conversation.Id && a.Kind == "appointment")).Body);
     }
 
+    object Past(Guid id) => new { appointmentId = id, clinicianId = doctor, clinicianName = "Dra. Sintética Rivas", scheduledStart = DateTimeOffset.UtcNow.AddHours(-2), durationMinutes = 30, status = "booked" };
+
+    [Theory]
+    [InlineData("cancel")]
+    [InlineData("reschedule")]
+    public async Task AnAppointmentWhoseHourHasPassedIsNeitherCancelledNorMoved(string action)
+    {
+        // Found in production: «cancela todas menos la del jueves» cancelled, at 14:58, the appointment of 08:00 that same day.
+        // What happened to an hour that has passed is whether the patient came, and that is not the patient's to rewrite.
+        await h.Link(); var appointment = Guid.NewGuid(); var hospital = h.Hospital(appointments: [Past(appointment)]);
+        await h.Say("patient", "Cancela mi cita de la mañana");
+
+        await h.Runtime(h.Model(AgentHarness.ToolCall("propose_action", new { action, appointmentId = appointment, doctorId = doctor, startsAt = In(4, 16), durationMinutes = 30 }), AgentHarness.Reply("Esa cita ya pasó, así que no se puede cambiar ni cancelar.")), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
+
+        Assert.Empty(h.HospitalWrites);
+        Assert.DoesNotContain(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => a.Kind.StartsWith("proposal:"));
+        Assert.DoesNotContain(h.Sent, text => text.Contains("¿La cancelo?") || text.Contains("¿La cambio?"));
+    }
+
+    [Fact]
+    public async Task ACancellationConfirmedAfterTheHourHasPassedDoesNotHappen()
+    {
+        // The card was sent while the appointment was still ahead; the patient taps «Confirmar» once it has started.
+        await h.Link(); var appointment = Guid.NewGuid();
+        await Say($"CANCELAR {appointment}", h.Hospital(appointments: [Booked(appointment, 3)]));
+
+        var late = await Say(Options()[0].Id, h.Hospital(appointments: [Past(appointment)]));
+
+        Assert.Empty(h.HospitalWrites);
+        Assert.Contains("ya pasó", late);
+    }
+
     [Fact]
     public async Task ChangingTheDateListsFreeHoursAndMovesThatAppointment()
     {
