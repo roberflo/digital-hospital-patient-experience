@@ -297,7 +297,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         }
         var text = "Tu consulta sigue con el equipo del hospital.\nTodavía no han podido responderte; lo harán por aquí en horario de atención."
             + (emergencyPhone is { Length: > 0 } ? $"\n\nSi es una emergencia, llama al *{emergencyPhone}*." : "") + (contact.PatientId is null ? "" : "\n\nMientras tanto, con esto sí te ayudo yo:");
-        await conversations.Send(conv.Id, text, "agent", "agent:" + job.Id, ct: ct, choices: contact.PatientId is null ? null : new([new("AGENDAR", "Agendar cita"), new("MISCITAS", "Mis citas"), new("RECETA", "Mi receta")]));
+        await conversations.Send(conv.Id, text, "agent", "agent:" + job.Id, ct: ct, choices: contact.PatientId is null ? Choices.Call(emergencyPhone, config["FRONTEND_URL"]) : new([new("AGENDAR", "Agendar cita"), new("MISCITAS", "Mis citas"), new("RECETA", "Mi receta")]));
     }
     /// <summary>The patient decides. The agent says what it could not do and offers a person with a button; the reason is kept for the team,
     /// never shown in the chat.</summary>
@@ -847,7 +847,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         // An emergency leads with what to do now; anything else says who answers and when. Both carry the hospital's number.
         await conversations.Send(conv.Id, urgent
             ? $"Si es una emergencia, {(call is null ? "ve a emergencias ahora" : $"llama ya al *{call}* o ve a emergencias")}.\n\nYa avisé al equipo del hospital para que te atienda por aquí."
-            : "Le pasé tu consulta al equipo del hospital.\nTe responden por aquí en horario de atención." + (call is null ? "" : $"\n\nSi es una emergencia, llama al *{call}*."), "agent", "handoff:" + activeJobId, ct: ct);
+            : "Le pasé tu consulta al equipo del hospital.\nTe responden por aquí en horario de atención." + (call is null ? "" : $"\n\nSi es una emergencia, llama al *{call}*."), "agent", "handoff:" + activeJobId, ct: ct, choices: Choices.Call(call, config["FRONTEND_URL"]));
     }
 }
 public sealed class AgentWorker(IServiceScopeFactory scopes, ILogger<AgentWorker> log) : BackgroundService

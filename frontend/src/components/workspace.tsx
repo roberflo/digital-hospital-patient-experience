@@ -2213,7 +2213,8 @@ function SettingsView({ me }: { me: Me }) {
                   />
                 </label>
                 <p className="hint">
-                  El agente lo envía al paciente cada vez que deriva una conversación a tu equipo.
+                  El agente lo envía al paciente cada vez que deriva una conversación a tu equipo,
+                  con un botón para llamar. Puede ser un número corto, como 132 o 911.
                 </p>
                 <label className="toggle-row">
                   <div>

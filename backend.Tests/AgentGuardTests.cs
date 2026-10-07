@@ -342,6 +342,36 @@ public sealed class AgentGuardTests : IAsyncLifetime
         Assert.Contains("2200 0000", sent); Assert.Contains("emergencia", sent);
     }
 
+    [Theory]
+    [InlineData("Creo que tomé una sobredosis")]
+    [InlineData("Quiero hablar con una persona, por favor")]
+    public async Task HandoffThatNamesTheEmergencyNumberCarriesAButtonThatCallsIt(string message)
+    {
+        // The number was only text: in the worst minute the patient had to read it, remember it and dial it.
+        var tenant = await h.Db.Tenants.SingleAsync(t => t.Id == h.Scope.Id); tenant.EmergencyPhone = "2200 0000"; await h.Db.SaveChangesAsync();
+        await h.Say("patient", message);
+
+        await h.Runtime(h.Model(AgentHarness.Reply("No debe consultarse el modelo")), h.Sender(), extra: new() { ["FRONTEND_URL"] = "https://crm.example.test" }).Run(h.Job, CancellationToken.None);
+
+        var button = Assert.Single(h.Interactive);
+        Assert.Equal("cta_url", button.GetProperty("type").GetString());
+        var call = button.GetProperty("action").GetProperty("parameters");
+        Assert.Equal("Llamar al 2200 0000", call.GetProperty("display_text").GetString());
+        Assert.Equal("https://crm.example.test/llamar/22000000", call.GetProperty("url").GetString()); // WhatsApp refuses tel: in a button; this page opens the dialer
+        Assert.Contains("2200 0000", Assert.Single(h.Sent)); // the text still carries the number, for a client that shows no button
+    }
+
+    [Fact]
+    public async Task HandoffHasNoCallButtonWhenThereIsNowhereToSendTheTap()
+    {
+        // No emergency number, or no public address for the page behind the button: plain text, never a dead button.
+        await h.Say("patient", "Creo que tomé una sobredosis");
+
+        await h.Runtime(h.Model(AgentHarness.Reply("No debe consultarse el modelo")), h.Sender(), extra: new() { ["FRONTEND_URL"] = "https://crm.example.test" }).Run(h.Job, CancellationToken.None);
+
+        Assert.Empty(h.Interactive); Assert.Contains("ve a emergencias ahora", Assert.Single(h.Sent));
+    }
+
     [Fact]
     public async Task SecondProposalInOneTurnIsRejected()
     {

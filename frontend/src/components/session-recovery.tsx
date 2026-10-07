@@ -23,7 +23,8 @@ function identityKey(value: Identity | undefined) {
 }
 function Recovery({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const publicPage = pathname === '/login' || pathname === '/session-restored';
+  const publicPage =
+    pathname === '/login' || pathname === '/session-restored' || pathname.startsWith('/llamar/');
   const { mutate } = useSWRConfig();
   const [expired, setExpired] = useState(false);
   const [checking, setChecking] = useState(false);

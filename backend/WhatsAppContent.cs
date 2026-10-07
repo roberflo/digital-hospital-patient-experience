@@ -20,11 +20,22 @@ public static partial class WhatsAppContent
 }
 
 /// <summary>Options the patient can tap instead of typing. Up to three short ones are reply buttons; more, or any with a description, are a list.</summary>
-public sealed record Choices(IReadOnlyList<Choice> Options, string Button = "Ver opciones")
+public sealed record Choices(IReadOnlyList<Choice> Options, string Button = "Ver opciones", Choice? Link = null)
 {
+    /// <summary>A button that calls <paramref name="phone"/>. WhatsApp only takes https in a button, so it opens this product's
+    /// <c>/llamar</c> page, which opens the dialer. Null with no number or no public address: never a button that leads nowhere.</summary>
+    public static Choices? Call(string? phone, string? frontendUrl)
+    {
+        var digits = string.Concat((phone ?? "").Where(c => char.IsAsciiDigit(c) || c == '+'));
+        if (digits.Length < 3 || !Uri.TryCreate(frontendUrl, UriKind.Absolute, out var origin) || origin.Scheme != "https") return null;
+        var title = "Llamar al " + phone!.Trim();
+        return new([], Link: new(origin.GetLeftPart(UriPartial.Authority) + "/llamar/" + Uri.EscapeDataString(digits), title.Length > 20 ? "Llamar ahora" : title));
+    }
     /// <summary>WhatsApp caps an interactive body at 1024 characters; longer text goes out plain.</summary>
     public const int MaxBody = 1024;
-    public object ToWhatsApp(string body) => Options.Count <= 3 && Options.All(option => option.Description is null)
+    public object ToWhatsApp(string body) => Link is not null
+        ? new { type = "cta_url", body = new { text = body }, action = new { name = "cta_url", parameters = new { display_text = Link.Title, url = Link.Id } } }
+        : Options.Count <= 3 && Options.All(option => option.Description is null)
         ? new { type = "button", body = new { text = body }, action = new { buttons = Options.Select(option => new { type = "reply", reply = new { id = option.Id, title = Cut(option.Title, 20) } }) } }
         : new { type = "list", body = new { text = body }, action = new { button = Cut(Button, 20), sections = new[] { new { title = "Opciones", rows = Options.Take(10).Select(option => new Dictionary<string, string> { ["id"] = option.Id, ["title"] = Cut(option.Title, 24), ["description"] = Cut(option.Description ?? "", 72) }) } } } };
     static string Cut(string text, int max) => text.Length > max ? text[..max] : text;
