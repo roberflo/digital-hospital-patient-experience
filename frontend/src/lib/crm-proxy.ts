@@ -32,6 +32,9 @@ const ALLOWED = new Set([
 export const sameOrigin = (req: NextRequest) =>
   req.headers.get('origin') === new URL(process.env.NEXTAUTH_URL!).origin;
 type Context = { params: Promise<{ path: string[] }> };
+// Rutas de plataforma sin recepción elegida: la lista de recepciones (y abrir una, REC-3) y los
+// hospitales que aún no la tienen. Nunca llevan X-Acting-Tenant.
+const TENANTLESS = new Set(['platform/tenants', 'platform/hospitals']);
 const refuseActing = (status: number, code: string, title: string) =>
   NextResponse.json({ title, code }, { status, headers: { 'Cache-Control': 'no-store' } });
 export const proxy = (req: NextRequest, context: Context) => forward(req, context);
@@ -52,7 +55,7 @@ export async function forward(req: NextRequest, { params }: Context, acting = tr
   let actingTenant: string | undefined;
   if (expected && !platform)
     return refuseActing(409, 'acting_changed', 'La sesión de esta pestaña cambió.');
-  if (acting && platform && path.join('/') !== 'platform/tenants') {
+  if (acting && platform && !TENANTLESS.has(path.join('/'))) {
     if (!expected)
       return refuseActing(403, 'acting_expected_required', 'Elige una recepción para continuar.');
     const chosen = await readActing(req.cookies.get(actingCookieName())?.value, token.sub);

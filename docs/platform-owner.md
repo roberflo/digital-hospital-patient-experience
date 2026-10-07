@@ -54,3 +54,22 @@ Mapear plataforma a `admin`; insertar un `Member` para el dueño; crear el `Tena
 - **Asumida**: las llamadas a Hospital en nombre usan la cuenta `recepcion-service-<tenant>`, como hoy.
 - **Asumida**: el enlace de conexión de WhatsApp lo abre el dueño del número de Meta en el hospital; el dueño de plataforma lo genera y sincroniza.
 - **Asumida**: «configurar el teléfono» es WhatsApp/Kapso; el teléfono de emergencia del inquilino queda fuera.
+
+## REC-3 — abrir la recepción de un hospital en nombre (2026-10-06)
+
+Petición del propietario: que un hospital creado desde la plataforma quede con Recepción sin esperar a que su Administrador entre primero. **Enmienda INV-R1**: el dueño de plataforma sigue sin ser nunca un `Member`, pero **sí puede abrir el espacio** (`Tenant`) de un hospital que existe en Hospital. La cuenta de servicio de ese hospital la crea el reconciliador del repo Hospital (`plataforma-recepcion-de-un-hospital-nuevo.spec.md`).
+
+Contrato:
+- `GET /api/platform/hospitals` (plataforma, sin cabecera) → `{ hospitals: [{ id, name, hasReception }] }`: los hospitales que Hospital lista para el dueño (`GET /v1/platform/hospitals`, con el propio token del dueño — es una ruta administrativa de plataforma, no clínica), marcados con si ya tienen recepción. Hospital ilegible → 502.
+- `POST /api/platform/tenants` `{ hospitalId }` (plataforma, sin cabecera) → 201 `{ id, name }`.
+
+| AC | Criterio | Cómo se prueba |
+|---|---|---|
+| 17 | `GET /api/platform/hospitals` devuelve los hospitales de Hospital con `hasReception`; otro rol → 403; Hospital caído → 502, nunca lista vacía | Prueba nueva con el doble de Hospital |
+| 18 | `POST /api/platform/tenants` abre el espacio solo si la cuenta de servicio de ese hospital obtiene token y lee su nombre y zona en Hospital (el mismo camino que la comprobación de conexión); el `Tenant` nace con ese nombre; no crea ningún `Member` | Prueba nueva: `Tenants` +1, `Members` sin cambio |
+| 19 | Cuenta de servicio todavía no lista → 409 `service_account_pending` y no se crea nada; ya abierta → 409 `already_open`; `hospitalId` que Hospital no reconoce o no-UUID → 404; el cuerpo no acepta nombre | Una prueba por caso |
+| 20 | El acto escribe `Audit` `tenant.opened` con `TenantId` = el hospital y `Actor` = `platform:<sub>` | Prueba nueva |
+| 21 | Las dos rutas entran en la lista de operables del barrido; ninguna otra | El barrido |
+| 22 | Web: el selector ofrece «Abrir la recepción de un hospital» con los que aún no la tienen (búsqueda); al abrirla queda elegida. `service_account_pending` se dice en palabras («La cuenta de servicio de este hospital se está creando; vuelva a intentarlo en un minuto») con reintento | Pruebas de servidor para la ruta Next si hay lógica; recorrido en vivo |
+
+Sigue cerrado para el dueño: activar el agente, habilitar un número con el agente o sus recordatorios activos, y todo lo de pacientes.

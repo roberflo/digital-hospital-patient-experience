@@ -156,6 +156,53 @@ test('platform session sends the sealed choice and nothing the browser says', as
   assert.equal(calls[2].headers.get('x-acting-tenant'), null);
 });
 
+// REC-3: opening a hospital's reception happens before any reception is chosen.
+test('listing hospitals and opening a reception need no chosen reception and never carry one', async (t) => {
+  const calls = upstream(t, { hospitals: [] });
+  const session = await sessionCookie(owner, platformAccess);
+  // From the selector (no choice), and also with a leftover choice in the cookie.
+  for (const cookies of [[session], [session, await actingCookie(owner)]]) {
+    const list = await proxy(
+      request('/api/crm/platform/hospitals', cookies),
+      ctx('platform', 'hospitals'),
+    );
+    assert.equal(list.status, 200);
+    const open = await proxy(
+      request('/api/crm/platform/tenants', cookies, {
+        method: 'POST',
+        headers: { origin, 'content-type': 'application/json', 'X-Acting-Tenant': B },
+        body: JSON.stringify({ hospitalId: A }),
+      }),
+      ctx('platform', 'tenants'),
+    );
+    assert.equal(open.status, 200);
+  }
+  assert.deepEqual(
+    calls.map((c) => c.url),
+    [
+      'http://api.test/api/platform/hospitals',
+      'http://api.test/api/platform/tenants',
+      'http://api.test/api/platform/hospitals',
+      'http://api.test/api/platform/tenants',
+    ],
+  );
+  for (const call of calls) assert.equal(call.headers.get('x-acting-tenant'), null);
+  // The exemption is those two paths, not everything under /platform.
+  const scoped = await proxy(
+    request('/api/crm/platform/installation', [session, await actingCookie(owner)]),
+    ctx('platform', 'installation'),
+  );
+  assert.equal(scoped.status, 403);
+  assert.equal(calls.length, 4);
+  // A hospital session gets nothing special: the request goes as its own, the API refuses it.
+  await proxy(
+    request('/api/crm/platform/hospitals', [await sessionCookie(admin, hospitalAccess)]),
+    ctx('platform', 'hospitals'),
+  );
+  assert.equal(calls[4].headers.get('authorization'), `Bearer ${hospitalAccess}`);
+  assert.equal(calls[4].headers.get('x-acting-tenant'), null);
+});
+
 // Two tabs share the cookie. The tab that painted «en nombre de A» must never act on B.
 test('a request acts only for the reception its screen painted; otherwise the API is not called', async (t) => {
   const calls = upstream(t, []);

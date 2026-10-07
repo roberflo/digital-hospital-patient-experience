@@ -169,3 +169,31 @@
     transition: none;
   }
 }
+
+/* REC-3: hospital without a reception, with what the API said about opening it. */
+.openRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 21px;
+  font-size: 14px;
+}
+.openRow > div {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.openRow p {
+  margin-top: 4px;
+  color: var(--sub);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.openRow p[role='alert'] {
+  color: #a4501a;
+}
+@media (max-width: 760px) {
+  .openRow {
+    padding: 12px 15px;
+  }
+}

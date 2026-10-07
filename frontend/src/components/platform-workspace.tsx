@@ -3,7 +3,7 @@
 // en su nombre, revisa la conexión con Hospital y conecta WhatsApp. Sin bandeja, contactos ni
 // ajustes. La elección vive en una cookie del servidor: aquí nunca se guarda ni viaja en la URL.
 import { useEffect, useState } from 'react';
-import useSWR from 'swr';
+import useSWR, { useSWRConfig } from 'swr';
 import {
   ArrowLeftRight,
   Building2,
@@ -15,6 +15,7 @@ import {
   Menu,
   MessageCircle,
   Pause,
+  Plus,
   Play,
   RefreshCw,
   Search,
@@ -40,6 +41,7 @@ import styles from './platform-workspace.module.css';
 
 type ActingFor = { tenantId: string; name: string };
 type Tenant = { id: string; name: string; hospitalConfigured: boolean; whatsAppConnected: boolean };
+type Hospital = { id: string; name: string; hasReception: boolean };
 
 // The choice is sealed by the server. A full load afterwards drops every cached read and any
 // half-finished connection link, so nothing from one reception can be shown under another.
@@ -116,8 +118,8 @@ function ReceptionPicker() {
           </span>
           <h3>Aún no hay recepciones</h3>
           <p>
-            Una recepción aparece aquí cuando el Administrador de un hospital abre su espacio por
-            primera vez.
+            Una recepción aparece aquí cuando la abres para un hospital, más abajo, o cuando su
+            Administrador entra por primera vez.
           </p>
         </div>
       ) : (
@@ -177,6 +179,183 @@ function ReceptionPicker() {
               ))}
             </ul>
           )}
+        </>
+      )}
+    </section>
+  );
+}
+
+// REC-3: abrir la recepción de un hospital que aún no la tiene. Al abrirla queda elegida.
+// Lo que la API contó de un hospital al intentar abrirlo; el texto libre es un fallo sin código.
+type OpenNote = 'pending' | 'already' | 'unknown' | (string & {});
+const openNotes: Record<string, string> = {
+  pending:
+    'La cuenta de servicio de este hospital se está creando; vuelve a intentarlo en un minuto.',
+  already: 'Esta recepción ya está abierta.',
+  unknown: 'Hospital no reconocido.',
+};
+function ReceptionOpener() {
+  const { mutate: refresh } = useSWRConfig();
+  const [open, setOpen] = useState(false);
+  // Lazy: Hospital is only asked once this section is opened, and not again on every focus.
+  const { data, error, mutate, isValidating } = useSWR<{ hospitals: Hospital[] }>(
+    open ? '/platform/hospitals' : null,
+    fetcher,
+    { revalidateOnFocus: false, shouldRetryOnError: false },
+  );
+  const [query, setQuery] = useState('');
+  const [busy, setBusy] = useState<string | null>(null);
+  const [notes, setNotes] = useState<Record<string, OpenNote>>({});
+  const unreadable = !!error || (!!data && !Array.isArray(data.hospitals));
+  // A hospital found already open stays listed so it can be chosen from its own row.
+  const pending = unreadable
+    ? undefined
+    : data?.hospitals.filter((h) => !h.hasReception || notes[h.id] === 'already');
+  const matches = pending?.filter((h) => plain(h.name).includes(plain(query.trim()))) ?? [];
+  // Homonyms (dev data has hundreds of «Hospital sin nombre») are told apart by the start of
+  // their id, so the owner opens the one they mean.
+  const repeated = new Set(
+    (pending ?? []).map((h) => h.name).filter((name, i, all) => all.indexOf(name) !== i),
+  );
+  const note = (id: string, value: OpenNote = '') => setNotes((all) => ({ ...all, [id]: value }));
+  async function act(hospital: Hospital) {
+    setBusy(hospital.id);
+    try {
+      // A reception carries its hospital's id; a fresh one is chosen by the id the API returned.
+      let reception = hospital.id;
+      if (notes[hospital.id] !== 'already') {
+        note(hospital.id);
+        let failure: OpenNote = '';
+        try {
+          reception = (
+            await api<{ id: string }>('/platform/tenants', 'POST', { hospitalId: hospital.id })
+          ).id;
+        } catch (e) {
+          const { status, code, message } = e as { status?: number; code?: string } & Error;
+          failure =
+            code === 'already_open'
+              ? 'already'
+              : code === 'service_account_pending'
+                ? 'pending'
+                : status === 404
+                  ? 'unknown'
+                  : message || 'No se pudo abrir la recepción.';
+        }
+        // Open now, or someone else opened it: it belongs in the list above either way, and if
+        // choosing it fails below it can still be chosen from this row.
+        if (!failure || failure === 'already') {
+          note(hospital.id, 'already');
+          void refresh('/platform/tenants');
+        } else note(hospital.id, failure);
+        // Found already open: offered, not chosen on the owner's behalf.
+        if (failure) return;
+      }
+      // Leaves the page on success.
+      await setActing(reception);
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+  return (
+    <section className="content-card" aria-labelledby="open-reception-title">
+      <div className="card-toolbar">
+        <h2 id="open-reception-title">
+          <Plus size={18} /> Abrir la recepción de un hospital
+        </h2>
+        <div className="button-group">
+          {open && pending && pending.length > 0 && (
+            <div className="search-input">
+              <Search size={16} />
+              <input
+                aria-label="Buscar hospital por nombre"
+                placeholder="Buscar por nombre…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                autoComplete="off"
+              />
+            </div>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            aria-expanded={open}
+            onClick={() => setOpen((value) => !value)}
+          >
+            {open ? 'Ocultar' : 'Ver hospitales sin recepción'}
+          </Button>
+        </div>
+      </div>
+      {!open ? (
+        <p className={styles.state}>
+          Para un hospital que ya existe en Hospital y todavía no tiene Recepción. Al abrirla queda
+          elegida para configurarla.
+        </p>
+      ) : unreadable ? (
+        <div className={styles.state} role="alert">
+          <p>
+            No pudimos leer los hospitales desde Hospital. La lectura falló: no significa que todos
+            tengan ya recepción.
+          </p>
+          <Button variant="outline" size="sm" disabled={isValidating} onClick={() => mutate()}>
+            <RefreshCw /> Reintentar
+          </Button>
+        </div>
+      ) : !pending ? (
+        <div className="loading">
+          <Loader2 className="animate-spin" size={20} /> Leyendo los hospitales…
+        </div>
+      ) : pending.length === 0 ? (
+        <p className={styles.state}>Todos los hospitales ya tienen recepción.</p>
+      ) : matches.length === 0 ? (
+        <p className={styles.state}>Ningún hospital coincide con «{query.trim()}».</p>
+      ) : (
+        <>
+          <p className={styles.count} role="status">
+            {matches.length === pending.length
+              ? `${pending.length} sin recepción`
+              : `${matches.length} de ${pending.length} sin recepción`}
+            {matches.length > SHOWN && ` · se muestran ${SHOWN}; escribe el nombre para afinar`}
+          </p>
+          <ul className={styles.list}>
+            {matches.slice(0, SHOWN).map((h) => {
+              const said = notes[h.id] || undefined;
+              const label = repeated.has(h.name) ? `${h.name} (${h.id.slice(0, 8)})` : h.name;
+              return (
+                <li key={h.id} className={styles.openRow}>
+                  <span className="hospital-mark">
+                    <Building2 size={18} />
+                  </span>
+                  <div>
+                    <strong>{h.name}</strong>
+                    {repeated.has(h.name) && <small> · {h.id.slice(0, 8)}</small>}
+                    {said && (
+                      <p role={said === 'already' ? 'status' : 'alert'}>
+                        {openNotes[said] ?? said}
+                      </p>
+                    )}
+                  </div>
+                  {said !== 'unknown' && (
+                    <Button
+                      variant={said ? 'outline' : 'default'}
+                      size="sm"
+                      disabled={!!busy}
+                      aria-label={`${said === 'already' ? 'Elegir' : said ? 'Reintentar' : 'Abrir'}: ${label}`}
+                      onClick={() => act(h)}
+                    >
+                      {busy === h.id ? (
+                        <Loader2 className="animate-spin" />
+                      ) : said && said !== 'already' ? (
+                        <RefreshCw />
+                      ) : null}
+                      {said === 'already' ? 'Elegir' : said ? 'Reintentar' : 'Abrir'}
+                    </Button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
         </>
       )}
     </section>
@@ -530,7 +709,10 @@ export default function PlatformWorkspace({
               <WhatsAppSection />
             </>
           ) : (
-            <ReceptionPicker />
+            <>
+              <ReceptionPicker />
+              <ReceptionOpener />
+            </>
           )}
         </div>
       </main>
