@@ -28,8 +28,9 @@ public sealed record Choices(IReadOnlyList<Choice> Options, string Button = "Ver
     {
         var digits = string.Concat((phone ?? "").Where(c => char.IsAsciiDigit(c) || c == '+'));
         if (digits.Length < 3 || !Uri.TryCreate(frontendUrl, UriKind.Absolute, out var origin) || origin.Scheme != "https") return null;
-        var title = "Llamar al " + phone!.Trim();
-        return new([], Link: new(origin.GetLeftPart(UriPartial.Authority) + "/llamar/" + Uri.EscapeDataString(digits), title.Length > 20 ? "Llamar ahora" : title));
+        // WhatsApp cuts a button at 20 characters: the number stays on it whenever it fits.
+        var title = new[] { "Llamar al " + phone!.Trim(), "Llamar " + phone.Trim() }.FirstOrDefault(text => text.Length <= 20) ?? "Llamar ahora";
+        return new([], Link: new(origin.GetLeftPart(UriPartial.Authority) + "/llamar/" + Uri.EscapeDataString(digits), title));
     }
     /// <summary>WhatsApp caps an interactive body at 1024 characters; longer text goes out plain.</summary>
     public const int MaxBody = 1024;

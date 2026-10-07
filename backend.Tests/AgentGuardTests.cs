@@ -361,6 +361,16 @@ public sealed class AgentGuardTests : IAsyncLifetime
         Assert.Contains("2200 0000", Assert.Single(h.Sent)); // the text still carries the number, for a client that shows no button
     }
 
+    [Theory]
+    [InlineData("132", "Llamar al 132", "132")]
+    [InlineData("+50376000057", "Llamar +50376000057", "%2B50376000057")] // «Llamar al …» is 22 characters; WhatsApp cuts a button at 20
+    [InlineData("+503 7600-0057-12345", "Llamar ahora", "%2B5037600005712345")]
+    public void TheCallButtonNamesTheNumberWheneverItFits(string phone, string title, string path)
+    {
+        var link = Choices.Call(phone, "https://crm.example.test")!.Link!;
+        Assert.Equal(title, link.Title); Assert.Equal("https://crm.example.test/llamar/" + path, link.Id);
+    }
+
     [Fact]
     public async Task HandoffHasNoCallButtonWhenThereIsNowhereToSendTheTap()
     {

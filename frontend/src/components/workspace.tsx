@@ -2208,7 +2208,7 @@ function SettingsView({ me }: { me: Me }) {
                     name="emergencyPhone"
                     type="tel"
                     defaultValue={data.emergencyPhone ?? ''}
-                    placeholder="Ej. 2200 0000"
+                    placeholder="Ej. 132 o +503 2200 0000"
                     maxLength={20}
                   />
                 </label>
