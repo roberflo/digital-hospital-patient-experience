@@ -243,6 +243,7 @@ public sealed class AgentGuardTests : IAsyncLifetime
     [Fact]
     public async Task EmergencyQuestionIsAskedOnce()
     {
+        (await h.Db.Tenants.SingleAsync(t => t.Id == h.Scope.Id)).EmergencyPhone = "2200 0000"; await h.Db.SaveChangesAsync(); // asked only by a hospital that set up its emergency number
         var hospital = h.Hospital(availability: new { clinicalDayFrom = "", clinicalDayTo = "", maxDaysPerQuery = 31, rollState = "open", professionals = Array.Empty<object>() });
         var model = h.Model(AgentHarness.ToolCall("hospital_availability", new { date = DateTime.UtcNow.AddHours(-6).ToString("yyyy-MM-dd") }), AgentHarness.Reply("No hay horarios hoy. ¿Es una emergencia? Si no, puedo buscar otro día."));
 

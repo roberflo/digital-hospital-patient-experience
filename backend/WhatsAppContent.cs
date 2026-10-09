@@ -32,6 +32,12 @@ public sealed record Choices(IReadOnlyList<Choice> Options, string Button = "Ver
         var title = new[] { "Llamar al " + phone!.Trim(), "Llamar " + phone.Trim() }.FirstOrDefault(text => text.Length <= 20) ?? "Llamar ahora";
         return new([], Link: new(origin.GetLeftPart(UriPartial.Authority) + "/llamar/" + Uri.EscapeDataString(digits), title));
     }
+    /// <summary>A button that opens a WhatsApp chat with <paramref name="phone"/>. Null unless it is written with its country code.</summary>
+    public static Choices? WhatsApp(string? phone)
+    {
+        var digits = string.Concat((phone ?? "").Where(char.IsAsciiDigit));
+        return (phone ?? "").TrimStart().StartsWith('+') && digits.Length is >= 8 and <= 15 ? new([], Link: new("https://wa.me/" + digits, "Escribir a WhatsApp")) : null;
+    }
     /// <summary>WhatsApp caps an interactive body at 1024 characters; longer text goes out plain.</summary>
     public const int MaxBody = 1024;
     public object ToWhatsApp(string body) => Link is not null

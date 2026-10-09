@@ -17,6 +17,8 @@ public sealed class Tenant
     public string TimeZone { get; set; } = "America/El_Salvador";
     /// <summary>The number the agent gives a patient it hands off; shown as written by the hospital.</summary>
     public string? EmergencyPhone { get; set; }
+    /// <summary>The hospital says that number answers WhatsApp: an emergency also gets a button to write to it.</summary>
+    public bool EmergencyWhatsApp { get; set; }
     public bool RemindersEnabled { get; set; }
     public Guid? ReminderChannelId { get; set; }
     public string ReminderDayTemplate { get; set; } = "recepcion_cita_dia_anterior_v1";
@@ -34,6 +36,8 @@ public sealed class Member : TenantRow
 {
     public string Subject { get; set; } = ""; public string Name { get; set; } = "";
     public string Role { get; set; } = "agent"; public bool Disabled { get; set; }
+    /// <summary>Set by the hospital for a doctor patients may write to: the agent offers it when a patient asks for a person.</summary>
+    public string? WhatsAppPhone { get; set; }
 }
 public sealed class Contact : TenantRow
 {

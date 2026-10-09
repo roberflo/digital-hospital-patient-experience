@@ -13,7 +13,7 @@ public static class TeamEndpoints
         {
             members = await db.Members.OrderBy(x => x.Name).Select(m => new
             {
-                m.Subject, m.Name, m.Role, m.Disabled,
+                m.Subject, m.Name, m.Role, m.Disabled, m.WhatsAppPhone,
                 open = db.Conversations.Count(c => c.AssignedTo == m.Subject && c.State == "open"),
                 pending = db.Conversations.Count(c => c.AssignedTo == m.Subject && c.State == "pending"),
                 snoozed = db.Conversations.Count(c => c.AssignedTo == m.Subject && c.State == "snoozed")

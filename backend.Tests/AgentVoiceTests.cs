@@ -82,7 +82,9 @@ public sealed class AgentVoiceTests : IAsyncLifetime
         ReadsLikeAChat(sent);
         Assert.DoesNotContain("¿Es una emergencia?", sent); // one question at a time: «¿la confirmo?» and «¿es una emergencia?» answered with one «sí» would be ambiguous
         Assert.DoesNotContain("CONFIRMAR", sent);
-        Assert.EndsWith("Si es una emergencia y no puedes esperar, llama al *2200 0000*.", sent); // the hospital's rule still reaches the patient, as a statement
+        Assert.Contains("Si es una emergencia y no puedes esperar,", sent); // the hospital's rule still reaches the patient, as a statement
+        Assert.EndsWith("*Emergencia* o llama al *2200 0000*.", sent);     // and the emergency is something to tap, not a word to type
+        Assert.Contains(AgentHarness.Options(h.Interactive[^1]), option => option.Id == "EMERGENCIA");
     }
 
     [Theory]

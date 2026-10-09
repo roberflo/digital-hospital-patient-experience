@@ -75,10 +75,22 @@ public static class CrmEndpoints
         {
             u.RequireAdmin(); using var teamLease = await locks.Lock(t.Id); if (id == u.Subject) throw new ArgumentException("No puedes desactivar tu propia cuenta"); var row = await db.Members.SingleOrDefaultAsync(x => x.Subject == id); if (row is null) return Results.NotFound(); if(b.Disabled && await db.Conversations.AnyAsync(c=>c.AssignedTo==id&&c.State!="resolved"))return Results.Conflict(new{title="Reasigna las conversaciones activas de esta persona antes de desactivar su acceso."}); row.Disabled = b.Disabled; Audit(db, t, u, "member.access", row.Id); await db.SaveChangesAsync(); return Results.Ok();
         });
+        // The hospital decides which doctors a patient may write to. An empty number takes the doctor off that list.
+        api.MapPut("/members/{id}/whatsapp", async (string id, MemberWhatsAppInput b, CrmDb db, CurrentUser u, TenantScope t) =>
+        {
+            u.RequireAdmin(); var row = await db.Members.SingleOrDefaultAsync(x => x.Subject == id); if (row is null) return Results.NotFound();
+            var phone = b.Phone?.Trim();
+            if (phone is { Length: > 0 })
+            {
+                if (row.Role != "doctor") throw new ArgumentException("Sólo un doctor puede ofrecerse a los pacientes por WhatsApp");
+                if (phone.Length > 20 || phone.Any(c => !char.IsAsciiDigit(c) && c is not ('+' or ' ' or '-')) || Choices.WhatsApp(phone) is null) throw new ArgumentException("Escribe el WhatsApp con código de país, por ejemplo +503 7000 0000");
+            }
+            row.WhatsAppPhone = string.IsNullOrEmpty(phone) ? null : phone; Audit(db, t, u, "member.whatsapp", row.Id); await db.SaveChangesAsync(); return Results.Ok();
+        });
         api.MapGet("/settings", async (CrmDb db, TenantScope t, CurrentUser u, HospitalClient h, IConfiguration c) =>
         {
             u.RequireAdmin(); var tenant = await db.Tenants.SingleAsync(x => x.Id == t.Id);
-            return new { tenant.Name, tenant.Guide, tenant.EmergencyPhone, tenant.TimeZone, tenant.AgentEnabled, tenant.GoogleCalendarId, googleConnected = tenant.GoogleRefreshToken != null, hospitalConfigured = h.IsConfigured(t.Id), kapsoConfigured = !string.IsNullOrEmpty(c["KAPSO_API_KEY"]), aiConfigured = !string.IsNullOrEmpty(c["NVIDIA_API_KEY"]), sendEnabled = c["SEND_ENABLED"] == "true", manualSendEnabled = c["SEND_ENABLED"] == "true" || c["KAPSO_MANUAL_SEND_ENABLED"] == "true", aiModel = c["AI_MODEL"] ?? "nvidia/nemotron-3-super-120b-a12b" };
+            return new { tenant.Name, tenant.Guide, tenant.EmergencyPhone, tenant.EmergencyWhatsApp, tenant.TimeZone, tenant.AgentEnabled, tenant.GoogleCalendarId, googleConnected = tenant.GoogleRefreshToken != null, hospitalConfigured = h.IsConfigured(t.Id), kapsoConfigured = !string.IsNullOrEmpty(c["KAPSO_API_KEY"]), aiConfigured = !string.IsNullOrEmpty(c["NVIDIA_API_KEY"]), sendEnabled = c["SEND_ENABLED"] == "true", manualSendEnabled = c["SEND_ENABLED"] == "true" || c["KAPSO_MANUAL_SEND_ENABLED"] == "true", aiModel = c["AI_MODEL"] ?? "nvidia/nemotron-3-super-120b-a12b" };
         });
         api.MapPut("/settings", async (SettingsInput b, CrmDb db, TenantScope t, CurrentUser u, HospitalClient h, CancellationToken ct) =>
         {
@@ -112,7 +124,9 @@ public static class CrmEndpoints
         var name = Rules.Required(b.Name);
         // Short codes (911, 132) are valid emergency numbers, so this is not Rules.Phone.
         var emergency = b.EmergencyPhone?.Trim(); if (emergency is { Length: > 0 } && (emergency.Length is < 3 or > 20 || emergency.Any(c => !char.IsAsciiDigit(c) && c is not ('+' or ' ' or '-')))) throw new ArgumentException("Teléfono de urgencias inválido");
-        row.EmergencyPhone = string.IsNullOrEmpty(emergency) ? null : emergency;
+        // A link to a WhatsApp chat needs the whole number: a short code or a local number opens nothing.
+        if (b.EmergencyWhatsApp && Choices.WhatsApp(emergency) is null) throw new ArgumentException("Para WhatsApp escribe el teléfono de urgencias con código de país, por ejemplo +503 7000 0000");
+        row.EmergencyPhone = string.IsNullOrEmpty(emergency) ? null : emergency; row.EmergencyWhatsApp = b.EmergencyWhatsApp;
         if (!hospitalConnected) { row.Name = name; row.TimeZone = b.TimeZone; }
         row.Guide = b.Guide; row.AgentEnabled = b.AgentEnabled;
     }
@@ -126,4 +140,5 @@ public record StageInput(string Stage);
 public record ActivityInput(string Body, Guid? ContactId, Guid? ConversationId);
 public record PatientLinkInput(Guid PatientId);
 public record MemberInput(bool Disabled);
-public record SettingsInput(string Name, string Guide, string TimeZone, bool AgentEnabled, string? GoogleCalendarId, string? EmergencyPhone = null);
+public record MemberWhatsAppInput(string? Phone);
+public record SettingsInput(string Name, string Guide, string TimeZone, bool AgentEnabled, string? GoogleCalendarId, string? EmergencyPhone = null, bool EmergencyWhatsApp = false);
