@@ -3,9 +3,17 @@
 // hosted Kapso link → automatic verification on return → sync result with its warnings.
 import { sessionFetch } from '@/lib/session-client';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ExternalLink, MessageCircle, RefreshCw } from 'lucide-react';
+import { ExternalLink, Info, MessageCircle, RefreshCw, TriangleAlert } from 'lucide-react';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import styles from './whatsapp-connect.module.css';
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemFooter,
+  ItemTitle,
+} from '@/components/ui/item';
 
 export type Sync = { connected: number; added: number; webhooksReady: number; warnings: string[] };
 export async function whatsappApi<T>(path: string, method = 'GET'): Promise<T> {
@@ -111,68 +119,76 @@ export function useWhatsAppConnect(admin: boolean, onSynced: () => unknown) {
 export function WhatsAppLinkFlow({ flow }: { flow: ReturnType<typeof useWhatsAppConnect> }) {
   const { link, busy, checking, result, error, waiting, attempts, start, verify, opened } = flow;
   return (
-    <>
-      <div className="mt-6 flex flex-wrap gap-3">
-        <Button disabled={busy} onClick={() => void start()}>
-          <MessageCircle size={17} />
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap gap-2">
+        <Button variant={link ? 'outline' : 'default'} disabled={busy} onClick={() => void start()}>
+          <MessageCircle />
           {busy ? 'Preparando enlace…' : link ? 'Generar otro enlace' : 'Agregar mi número'}
         </Button>
         <Button variant="outline" disabled={checking} onClick={() => void verify()}>
-          <RefreshCw size={16} />
+          <RefreshCw />
           {checking ? 'Verificando…' : 'Verificar conexión'}
         </Button>
       </div>
       {link && (
-        <div className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50 p-5">
-          <h2>Tu enlace está listo</h2>
-          <p className="my-2 text-sm">
-            Continúa en Kapso y regresa a esta pestaña cuando termines.
-          </p>
-          <a
-            href={link.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={opened}
-            className={styles.launch}
-          >
-            Continuar conexión en Kapso <ExternalLink size={16} />
-          </a>
+        <Item variant="outline">
+          <ItemContent>
+            <ItemTitle>
+              <h2>Tu enlace está listo</h2>
+            </ItemTitle>
+            <ItemDescription>
+              Continúa en Kapso y regresa a esta pestaña cuando termines.
+            </ItemDescription>
+          </ItemContent>
+          <ItemActions className="basis-full">
+            <Button asChild>
+              <a href={link.url} target="_blank" rel="noopener noreferrer" onClick={opened}>
+                Continuar conexión en Kapso <ExternalLink />
+              </a>
+            </Button>
+          </ItemActions>
           {link.expiresAt && (
-            <p className="mt-3 text-xs text-slate-500">
-              Válido hasta {new Date(link.expiresAt).toLocaleDateString('es')}. Generar otro enlace
-              reemplaza el anterior.
-            </p>
+            <ItemFooter>
+              <p className="text-xs text-muted-foreground">
+                Válido hasta {new Date(link.expiresAt).toLocaleDateString('es')}. Generar otro
+                enlace reemplaza el anterior.
+              </p>
+            </ItemFooter>
           )}
-        </div>
+        </Item>
       )}
       {waiting && (
-        <p className="mt-4 text-sm text-slate-500" role="status">
+        <p className="text-sm text-muted-foreground" role="status">
           {attempts < 20
             ? 'Esperando la conexión. Al volver, verificaremos tus números automáticamente.'
             : 'Puedes seguir en Kapso. Cuando termines, pulsa Verificar conexión.'}
         </p>
       )}
       {result && (
-        <div role="status" className="mt-4 rounded-lg bg-slate-50 p-4 text-sm">
-          <p>
-            {result.added > 0
-              ? `${result.added} número(s) agregado(s) a tu hospital.`
-              : result.connected > 0
-                ? 'Tus números conectados están actualizados.'
-                : 'Todavía no encontramos un número conectado. Completa los pasos en Kapso y vuelve a verificar.'}
-          </p>
-          {result.warnings.map((w) => (
-            <p key={w} className="mt-2 text-amber-800">
-              {w}
+        <Alert role="status">
+          <Info />
+          <AlertDescription>
+            <p>
+              {result.added > 0
+                ? `${result.added} número(s) agregado(s) a tu hospital.`
+                : result.connected > 0
+                  ? 'Tus números conectados están actualizados.'
+                  : 'Todavía no encontramos un número conectado. Completa los pasos en Kapso y vuelve a verificar.'}
             </p>
-          ))}
-        </div>
+            {result.warnings.map((w) => (
+              <p key={w} className="font-medium text-foreground">
+                {w}
+              </p>
+            ))}
+          </AlertDescription>
+        </Alert>
       )}
       {error && (
-        <p role="alert" className="mt-4 text-sm text-red-700">
-          {error}
-        </p>
+        <Alert variant="destructive">
+          <TriangleAlert />
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
       )}
-    </>
+    </div>
   );
 }

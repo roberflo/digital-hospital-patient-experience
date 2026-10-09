@@ -51,7 +51,7 @@ test('Hospital masters are read only in Reception and services show current serv
     'href',
     'http://localhost:3210/api/auth/idp?returnTo=%2Fes%2Fcommercial',
   );
-  await page.getByRole('button', { name: 'Servicios y precios', exact: true }).click();
+  await page.getByRole('tab', { name: 'Servicios y precios', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Consulta sintética' })).toBeVisible();
   await expect(page.getByText('$100.00', { exact: true })).toBeVisible();
   expect(

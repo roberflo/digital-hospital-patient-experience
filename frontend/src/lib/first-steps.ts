@@ -51,7 +51,7 @@ export function hospitalState(
 }
 
 // El canal «demo» del sembrado sintético no es un número conectado.
-const real = (rows: StepChannel[]) => rows.filter((c) => c.phoneNumberId !== 'demo');
+const real = (rows: StepChannel[]) => rows.filter((c) => !c.phoneNumberId.startsWith('demo'));
 const missing = (pairs: [boolean, string][]) => pairs.filter(([ok]) => !ok).map(([, name]) => name);
 
 // El canal activo cuya recepción aún hay que preguntar a Kapso. null = no hace falta preguntar:

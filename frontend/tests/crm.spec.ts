@@ -1,8 +1,7 @@
 import { test, expect } from '@playwright/test';
-import { login } from './login';
+import { login, openMenu } from './login';
 async function nav(page: import('@playwright/test').Page, name: string) {
-  const menu = page.getByRole('button', { name: 'Abrir menú' });
-  if (await menu.isVisible()) await menu.click();
+  await openMenu(page);
   await page.getByRole('button', { name, exact: true }).click();
 }
 test('dashboard and inbox are separate; conversation and internal note persist', async ({
@@ -135,7 +134,8 @@ test('inbox updates conversation workflow and shared CRM profile', async ({ page
   await expect(page.getByLabel('Estado de conversación', { exact: true })).toHaveValue('open');
   await page.getByLabel('Prioridad', { exact: true }).selectOption('normal');
   await expect(page.getByLabel('Prioridad', { exact: true })).toHaveValue('normal');
-  if (await page.getByRole('button', { name: 'Cerrar detalles' }).isVisible()) {
+  // On mobile the patient context is a sheet: it is open here, even while a dialog inside it closes.
+  if (await page.locator('[data-slot=sheet-content]').count()) {
     await page.getByRole('button', { name: 'Cerrar detalles' }).click();
   }
   await nav(page, 'Contactos');

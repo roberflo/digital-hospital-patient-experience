@@ -1,11 +1,28 @@
 'use client';
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import useSWR, { useSWRConfig } from 'swr';
-import { Users, UserPlus, ArrowUpRight, Copy, RefreshCw } from 'lucide-react';
+import { AlertCircle, Users, UserPlus, ArrowUpRight, Copy, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { api, fetcher, type Me, type Member, type Conversation } from '@/lib/api';
+import { Alert, AlertDescription } from './ui/alert';
+import { Badge } from './ui/badge';
 import { Button } from './ui/button';
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from './ui/dialog';
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from './ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog';
+import { Field } from './ui/field';
+import { Input } from './ui/input';
+import { Item, ItemActions, ItemContent, ItemTitle } from './ui/item';
+import { Label } from './ui/label';
+import { NativeSelect, NativeSelectOption } from './ui/native-select';
+import { Spinner } from './ui/spinner';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 
 export type WorkloadMember = Member & { open: number; pending: number; snoozed: number };
 export type Workload = { members: WorkloadMember[]; unassigned: number };
@@ -31,6 +48,7 @@ export function AssignmentControl({
     refreshInterval: 10000,
   });
   const [busy, setBusy] = useState(false);
+  const id = useId();
   const canEdit =
     managesTeam(me) || !conversation.assignedTo || conversation.assignedTo === me.subject;
   async function assign(subject: string) {
@@ -50,29 +68,35 @@ export function AssignmentControl({
     }
   }
   return (
-    <div className="assignment-bar">
-      <label>
-        <Users size={15} /> Responsable
-        <select
+    <div className="assignment-bar flex flex-wrap items-center gap-x-2 gap-y-1">
+      <Label htmlFor={id} className="shrink-0">
+        <Users className="size-4 text-muted-foreground" /> Responsable
+      </Label>
+      <Field className="max-w-72 min-w-0 flex-1 basis-40">
+        <NativeSelect
+          id={id}
+          size="sm"
           aria-label="Asignar conversación"
           value={conversation.assignedTo ?? ''}
           disabled={busy || !canEdit || !data || !!error}
           onChange={(e) => assign(e.target.value)}
         >
-          <option value="">Sin asignar</option>
+          <NativeSelectOption value="">Sin asignar</NativeSelectOption>
           {conversation.assignedTo &&
             !data?.members.some((m) => m.subject === conversation.assignedTo) && (
-              <option value={conversation.assignedTo}>Responsable actual</option>
+              <NativeSelectOption value={conversation.assignedTo}>
+                Responsable actual
+              </NativeSelectOption>
             )}
           {data?.members
             .filter((m) => !m.disabled || m.subject === conversation.assignedTo)
             .map((m) => (
-              <option key={m.subject} value={m.subject} disabled={m.disabled}>
+              <NativeSelectOption key={m.subject} value={m.subject} disabled={m.disabled}>
                 {memberLabel(m)}
-              </option>
+              </NativeSelectOption>
             ))}
-        </select>
-      </label>
+        </NativeSelect>
+      </Field>
       {!conversation.assignedTo && (
         <Button
           variant="outline"
@@ -83,9 +107,19 @@ export function AssignmentControl({
           Asignarme
         </Button>
       )}
-      {!canEdit && <small>El responsable o un administrador puede transferirla.</small>}
-      {error && <small role="alert">No se pudo cargar el equipo.</small>}
-      <a href="/?view=team">Ver equipo ↗</a>
+      {!canEdit && (
+        <span className="text-xs text-muted-foreground">
+          El responsable o un administrador puede transferirla.
+        </span>
+      )}
+      {error && (
+        <span role="alert" className="text-xs text-destructive">
+          No se pudo cargar el equipo.
+        </span>
+      )}
+      <Button asChild variant="link" size="sm" className="ml-auto">
+        <a href="/?view=team">Ver equipo ↗</a>
+      </Button>
     </div>
   );
 }
@@ -140,17 +174,35 @@ export function TeamWorkspace({
       setBusy(null);
     }
   }
+  // The number the agent offers a patient who asks for a person. Empty takes the doctor off that list.
+  async function saveWhatsApp(m: WorkloadMember, phone: string) {
+    if (phone.trim() === (m.whatsAppPhone ?? '')) return;
+    setBusy(m.subject);
+    try {
+      await api('/members/' + encodeURIComponent(m.subject) + '/whatsapp', 'PUT', {
+        phone: phone.trim(),
+      });
+      await mutate();
+      toast.success(phone.trim() ? 'WhatsApp del doctor guardado' : 'WhatsApp del doctor quitado');
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
   return (
     <>
-      <section className="content-card team-workspace">
-        <div className="card-toolbar">
-          <div>
-            <h2>Equipo de atención</h2>
-            <p className="hint">
+      <Card>
+        <CardHeader className="flex flex-wrap items-start justify-between gap-4">
+          <div className="flex min-w-0 flex-col gap-2">
+            <CardTitle>
+              <h2>Equipo de atención</h2>
+            </CardTitle>
+            <CardDescription>
               Cada persona puede atender varias conversaciones de los números del hospital.
-            </p>
+            </CardDescription>
           </div>
-          <div className="team-toolbar-actions">
+          <div className="flex flex-wrap gap-2">
             <Button variant="outline" size="sm" onClick={() => mutate()}>
               <RefreshCw />
               Actualizar
@@ -160,52 +212,65 @@ export function TeamWorkspace({
               Incorporar compañero
             </Button>
           </div>
-        </div>
-        <div className="team-queue">
-          <span>
-            <strong>{data?.unassigned ?? '—'}</strong> conversaciones activas sin responsable
-          </span>
-          <Button variant="outline" size="sm" onClick={() => onOpenInbox('unassigned')}>
-            Revisar pendientes <ArrowUpRight />
-          </Button>
-        </div>
-        {error && (
-          <p className="team-help" role="alert">
-            {error.message}
-          </p>
-        )}
-        {!data && !error && <p className="team-help">Cargando equipo…</p>}
-        {data && (
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>Persona</th>
-                  <th>Rol del Hospital</th>
-                  <th>Abiertas</th>
-                  <th>Pendientes</th>
-                  <th>Pospuestas</th>
-                  <th>Atención</th>
-                  {admin && <th>Acceso a Recepción</th>}
-                </tr>
-              </thead>
-              <tbody>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <Item variant="muted">
+            <ItemContent>
+              <ItemTitle>
+                <strong>{data?.unassigned ?? '—'}</strong> conversaciones activas sin responsable
+              </ItemTitle>
+            </ItemContent>
+            <ItemActions>
+              <Button variant="outline" size="sm" onClick={() => onOpenInbox('unassigned')}>
+                Revisar pendientes <ArrowUpRight />
+              </Button>
+            </ItemActions>
+          </Item>
+          {error && (
+            <Alert variant="destructive">
+              <AlertCircle />
+              <AlertDescription>{error.message}</AlertDescription>
+            </Alert>
+          )}
+          {!data && !error && (
+            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Spinner role={undefined} aria-label={undefined} aria-hidden />
+              Cargando equipo…
+            </p>
+          )}
+          {data && (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Persona</TableHead>
+                  <TableHead>Rol del Hospital</TableHead>
+                  <TableHead>Abiertas</TableHead>
+                  <TableHead>Pendientes</TableHead>
+                  <TableHead>Pospuestas</TableHead>
+                  <TableHead>Atención</TableHead>
+                  {admin && <TableHead>WhatsApp para pacientes</TableHead>}
+                  {admin && <TableHead>Acceso a Recepción</TableHead>}
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {data.members
                   .filter((m) =>
                     m.name.toLocaleLowerCase('es').includes(search.toLocaleLowerCase('es')),
                   )
                   .map((m) => (
-                    <tr key={m.subject}>
-                      <td>
-                        <strong>{m.name}</strong>
-                        {m.subject === me.subject && <span className="tag">Tú</span>}
-                        {m.disabled && <span className="tag">Desactivado</span>}
-                      </td>
-                      <td>{roles[m.role] ?? m.role}</td>
-                      <td data-label="Abiertas">{m.open}</td>
-                      <td data-label="Pendientes">{m.pending}</td>
-                      <td data-label="Pospuestas">{m.snoozed}</td>
-                      <td>
+                    <TableRow key={m.subject}>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">{m.name}</span>
+                          {m.subject === me.subject && <Badge variant="secondary">Tú</Badge>}
+                          {m.disabled && <Badge variant="outline">Desactivado</Badge>}
+                        </div>
+                      </TableCell>
+                      <TableCell>{roles[m.role] ?? m.role}</TableCell>
+                      <TableCell>{m.open}</TableCell>
+                      <TableCell>{m.pending}</TableCell>
+                      <TableCell>{m.snoozed}</TableCell>
+                      <TableCell>
                         <Button
                           variant="outline"
                           size="sm"
@@ -213,9 +278,41 @@ export function TeamWorkspace({
                         >
                           Ver conversaciones
                         </Button>
-                      </td>
+                      </TableCell>
                       {admin && (
-                        <td>
+                        <TableCell>
+                          {m.role === 'doctor' ? (
+                            <form
+                              key={m.whatsAppPhone ?? ''}
+                              className="flex items-center gap-2"
+                              onSubmit={(e) => {
+                                e.preventDefault();
+                                saveWhatsApp(
+                                  m,
+                                  String(new FormData(e.currentTarget).get('phone') ?? ''),
+                                );
+                              }}
+                            >
+                              <Input
+                                name="phone"
+                                type="tel"
+                                className="w-40"
+                                aria-label={`WhatsApp de ${m.name} para pacientes`}
+                                defaultValue={m.whatsAppPhone ?? ''}
+                                placeholder="+503 7000 0000"
+                                maxLength={20}
+                              />
+                              <Button variant="outline" size="sm" disabled={busy !== null}>
+                                Guardar
+                              </Button>
+                            </form>
+                          ) : (
+                            '—'
+                          )}
+                        </TableCell>
+                      )}
+                      {admin && (
+                        <TableCell>
                           <Button
                             variant="outline"
                             size="sm"
@@ -224,38 +321,51 @@ export function TeamWorkspace({
                           >
                             {m.disabled ? 'Restaurar acceso' : 'Desactivar acceso'}
                           </Button>
-                        </td>
+                        </TableCell>
                       )}
-                    </tr>
+                    </TableRow>
                   ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        <p className="team-help">
-          Los administradores pueden repartir conversaciones individualmente o en lote. Cada
-          recepcionista puede tomar las que no tienen responsable y transferir las suyas. Los
-          cambios quedan en el historial del cliente.
-        </p>
-      </section>
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+        <CardFooter className="flex-col items-start gap-2 text-sm text-muted-foreground">
+          <p>
+            Los administradores pueden repartir conversaciones individualmente o en lote. Cada
+            recepcionista puede tomar las que no tienen responsable y transferir las suyas. Los
+            cambios quedan en el historial del cliente.
+          </p>
+          {admin && (
+            <p>
+              Si un doctor tiene WhatsApp para pacientes, el agente ofrece un botón para escribirle
+              cuando un paciente pide hablar con una persona o con el doctor. Déjalo vacío para no
+              ofrecerlo.
+            </p>
+          )}
+        </CardFooter>
+      </Card>
       <Dialog open={onboarding} onOpenChange={setOnboarding}>
-        <DialogContent>
-          <DialogTitle>Incorporar a una persona del hospital</DialogTitle>
-          <DialogDescription>
-            Recepción usa la misma cuenta y el mismo hospital que el sistema Hospital.
-          </DialogDescription>
-          <ol className="team-onboarding">
+        <DialogContent className="max-h-dvh overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Incorporar a una persona del hospital</DialogTitle>
+            <DialogDescription>
+              Recepción usa la misma cuenta y el mismo hospital que el sistema Hospital.
+            </DialogDescription>
+          </DialogHeader>
+          <ol className="flex list-decimal flex-col gap-2 pl-5 text-sm">
             <li>
               El administrador configura la cuenta y el rol en la identidad compartida del Hospital.
             </li>
             <li>La persona inicia sesión en Recepción con esa cuenta.</li>
             <li>Aparece automáticamente en este equipo y ya puedes asignarle conversaciones.</li>
           </ol>
-          <p className="hint">
+          <p className="text-sm text-muted-foreground">
             La creación y los cambios de rol aún no están disponibles desde Recepción. No necesitas
             crear otra contraseña aquí.
           </p>
-          <CopyAccessLink />
+          <DialogFooter>
+            <CopyAccessLink />
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </>

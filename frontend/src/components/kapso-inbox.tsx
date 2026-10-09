@@ -14,16 +14,45 @@ import {
   Check,
   CheckCheck,
   Clock3,
+  Info,
   MessageCircle,
   Search,
   Send,
   ShieldCheck,
   TriangleAlert,
 } from 'lucide-react';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from '@/components/ui/empty';
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+  InputGroupTextarea,
+} from '@/components/ui/input-group';
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemMedia,
+  ItemTitle,
+} from '@/components/ui/item';
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
+import { Spinner } from '@/components/ui/spinner';
+import { cn } from '@/lib/utils';
 import { mergeMessages, windowOpen } from '@/lib/kapso-types';
 import type { Conversation, InboxEvent, Message, MessageStatus, Page } from '@/lib/kapso-types';
-import styles from './kapso-inbox.module.css';
 const label = (c: Conversation) =>
   c.kapso?.contact_name || c.phone_number || c.username || 'Conversación sin teléfono';
 const placeholders: Record<string, string> = {
@@ -63,15 +92,14 @@ function Status({ status }: { status?: MessageStatus }) {
   if (status === 'read' || status === 'delivered')
     return (
       <CheckCheck
-        size={15}
         aria-label={status === 'read' ? 'Leído' : 'Entregado'}
-        className={status === 'read' ? styles.read : ''}
+        className={cn('size-3.5', status === 'read' && 'text-primary-foreground')}
       />
     );
-  if (status === 'sent') return <Check size={15} aria-label="Enviado" />;
+  if (status === 'sent') return <Check className="size-3.5" aria-label="Enviado" />;
   if (status === 'failed')
-    return <TriangleAlert size={14} aria-label="Envío fallido o sin confirmar" />;
-  return <Clock3 size={13} aria-label="Pendiente" />;
+    return <TriangleAlert className="size-3.5" aria-label="Envío fallido o sin confirmar" />;
+  return <Clock3 className="size-3.5" aria-label="Pendiente" />;
 }
 class RequestError extends Error {
   constructor(
@@ -104,26 +132,48 @@ export default function KapsoInbox() {
   const current = numbers.find((c) => c.phoneNumberId === chosen) || numbers[0];
   if (error && !channels)
     return (
-      <main className="p-8">
-        <p role="alert">{error.message}</p>
-        <Link href="/login">Iniciar sesión</Link>
+      <main className="flex min-h-dvh items-center justify-center bg-background p-4">
+        <div className="flex w-full max-w-md flex-col items-start gap-4">
+          <Alert variant="destructive">
+            <TriangleAlert />
+            <AlertDescription>{error.message}</AlertDescription>
+          </Alert>
+          <Button variant="outline" asChild>
+            <Link href="/login">Iniciar sesión</Link>
+          </Button>
+        </div>
       </main>
     );
-  if (!channels) return <main className="p-8">Cargando números de tu hospital…</main>;
+  if (!channels)
+    return (
+      <main className="flex min-h-dvh items-center justify-center gap-2 bg-background p-4 text-sm text-muted-foreground">
+        <Spinner /> Cargando números de tu hospital…
+      </main>
+    );
   if (!current)
     return (
-      <main className="mx-auto max-w-xl p-10">
-        <MessageCircle size={36} />
-        <h1 className="mt-4 text-2xl font-semibold">Conecta tu WhatsApp</h1>
-        <p className="my-4">
-          Agrega el número de tu hospital para comenzar a recibir conversaciones.
-        </p>
-        <Link href="/whatsapp" className="text-primary">
-          Agregar mi número →
-        </Link>
-        <p className="mt-5">
-          <Link href="/?view=inbox">Bandeja de atención</Link>
-        </p>
+      <main className="flex min-h-dvh items-center justify-center bg-background p-4">
+        <Empty>
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <MessageCircle />
+            </EmptyMedia>
+            <EmptyTitle>
+              <h1>Conecta tu WhatsApp</h1>
+            </EmptyTitle>
+            <EmptyDescription>
+              Agrega el número de tu hospital para comenzar a recibir conversaciones.
+            </EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent>
+            <Button asChild>
+              <Link href="/whatsapp">Agregar mi número →</Link>
+            </Button>
+            <Button variant="ghost" asChild>
+              <Link href="/?view=inbox">Bandeja de atención</Link>
+            </Button>
+          </EmptyContent>
+        </Empty>
       </main>
     );
   return (
@@ -131,17 +181,17 @@ export default function KapsoInbox() {
       key={current.phoneNumberId}
       number={current.phoneNumberId}
       selector={
-        <select
+        <NativeSelect
           aria-label="Número de WhatsApp"
           value={current.phoneNumberId}
           onChange={(event) => setChosen(event.target.value)}
         >
           {numbers.map((c) => (
-            <option key={c.id} value={c.phoneNumberId}>
+            <NativeSelectOption key={c.id} value={c.phoneNumberId}>
               {c.name}
-            </option>
+            </NativeSelectOption>
           ))}
-        </select>
+        </NativeSelect>
       }
     />
   );
@@ -430,248 +480,342 @@ function InboxForNumber({ number, selector }: { number: string; selector: React.
         .includes(query.toLowerCase()),
   );
   return (
-    <main className={styles.shell}>
-      <header className={styles.top}>
-        <Link href="/?view=inbox" className={styles.backLink}>
-          <ArrowLeft size={16} /> Bandeja de atención
-        </Link>
-        <Link href="/whatsapp" className={styles.backLink}>
-          Agregar mi número
-        </Link>
+    <main className="flex h-dvh flex-col bg-background">
+      <header className="flex shrink-0 flex-wrap items-center justify-between gap-2 px-4 py-3 md:px-6">
+        <Button variant="ghost" asChild>
+          <Link href="/?view=inbox">
+            <ArrowLeft /> Bandeja de atención
+          </Link>
+        </Button>
+        <Button variant="outline" asChild>
+          <Link href="/whatsapp">Agregar mi número</Link>
+        </Button>
       </header>
-      <div className={`${styles.layout} ${selected ? styles.selected : ''}`}>
-        <aside className={styles.sidebar} aria-label="Conversaciones de WhatsApp">
-          <div className={styles.heading}>
-            <div className={styles.brand}>
-              <MessageCircle size={21} />
-            </div>
-            <div>
-              <h1>Historial de WhatsApp</h1>
-              <p>
-                <i className={live ? styles.online : styles.offline} />
-                {live ? 'Conectado en vivo' : 'Actualización cada 15 s'}
-              </p>
-            </div>
-            <span className={styles.count}>{conversations.length}</span>
-          </div>
-          <div className="px-4 pb-3">{selector}</div>
-          <label className={styles.search}>
-            <Search size={17} />
-            <input
-              aria-label="Buscar conversación"
-              placeholder="Buscar nombre o número"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-          </label>
-          <div className={styles.filters} aria-label="Estado de conversación">
-            {[
-              ['all', 'Todas'],
-              ['active', 'Activas'],
-              ['ended', 'Finalizadas'],
-            ].map(([value, name]) => (
-              <button key={value} aria-pressed={filter === value} onClick={() => setFilter(value)}>
-                {name}
-              </button>
-            ))}
-          </div>
-          <div className={styles.list}>
-            {loading ? (
-              <p className={styles.emptySmall}>Cargando conversaciones…</p>
-            ) : visible.length === 0 ? (
-              <div className={styles.emptySmall}>
-                <MessageCircle size={28} />
-                <p>
-                  {query || filter !== 'all'
-                    ? 'No hay conversaciones con este filtro.'
-                    : 'Aún no hay conversaciones.'}
-                </p>
-                <small>Los mensajes recibidos aparecerán aquí.</small>
-              </div>
-            ) : (
-              visible.map((c) => (
-                <button
-                  key={c.id}
-                  className={`${styles.row} ${selected?.id === c.id ? styles.current : ''}`}
-                  onClick={() => void choose(c)}
-                  aria-label={`Abrir conversación con ${label(c)}`}
-                >
-                  <span className={styles.avatar}>{label(c).slice(0, 2).toUpperCase()}</span>
-                  <span className={styles.preview}>
-                    <strong>{label(c)}</strong>
-                    <span>
-                      {c.kapso?.last_message_text ||
-                        placeholders[c.kapso?.last_message_type || ''] ||
-                        'Sin mensajes'}
-                    </span>
-                  </span>
-                  <span className={styles.rowMeta}>
-                    <time>{relative(c.last_active_at)}</time>
-                    {unread[c.id] > 0 && (
-                      <b aria-label={`${unread[c.id]} no leídos`}>{unread[c.id]}</b>
-                    )}
-                  </span>
-                </button>
-              ))
+      <div className="flex min-h-0 flex-1 md:px-6 md:pb-6">
+        <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden border-y bg-card text-card-foreground md:rounded-xl md:border">
+          <aside
+            className={cn(
+              'min-h-0 w-full min-w-0 flex-col md:flex md:w-88 md:shrink-0 md:border-r',
+              selected ? 'hidden' : 'flex',
             )}
-            {listCursor && (
-              <Button variant="ghost" onClick={() => void refreshList(listCursor).catch(fail)}>
-                Cargar más conversaciones
-              </Button>
-            )}
-          </div>
-          <footer className={styles.listFooter}>
-            Historial de WhatsApp · responsables y seguimiento en Bandeja
-          </footer>
-        </aside>
-        <section className={styles.chat} aria-label="Chat">
-          {selected ? (
-            <>
-              <header className={styles.chatHeader}>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label="Volver a conversaciones"
-                  className={styles.mobileBack}
-                  onClick={() => {
-                    selectedRef.current = null;
-                    setSelected(null);
-                  }}
-                >
-                  <ArrowLeft size={20} />
-                </Button>
-                <span className={styles.avatar}>{label(selected).slice(0, 2).toUpperCase()}</span>
-                <div>
-                  <h2>{label(selected)}</h2>
-                  <p>
-                    {selected.phone_number || selected.username || 'Sin teléfono disponible'} ·{' '}
-                    {selected.status === 'active' ? 'Activa' : 'Finalizada'}
+            aria-label="Conversaciones de WhatsApp"
+          >
+            <div className="flex flex-col gap-4 border-b p-4">
+              <div className="flex items-center gap-3">
+                <div className="flex min-w-0 flex-1 flex-col gap-1">
+                  <h1 className="text-lg font-semibold tracking-tight">Historial de WhatsApp</h1>
+                  <p className="text-sm text-muted-foreground">
+                    {live ? 'Conectado en vivo' : 'Actualización cada 15 s'}
                   </p>
                 </div>
-                <Link
-                  href={
-                    selected.phone_number
-                      ? `/?view=inbox&phone=${encodeURIComponent(selected.phone_number)}&phoneNumberId=${encodeURIComponent(number)}`
-                      : '/?view=inbox'
-                  }
-                  className={styles.crmLink}
-                >
-                  Asignar y gestionar en bandeja ↗
-                </Link>
-              </header>
-              <div
-                ref={scroller}
-                className={styles.messages}
-                onScroll={(e) => {
-                  const el = e.currentTarget;
-                  shouldScroll.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
-                }}
-              >
-                {messageCursor && (
+                <Badge variant="outline">{conversations.length}</Badge>
+              </div>
+              {selector}
+              <InputGroup>
+                <InputGroupInput
+                  aria-label="Buscar conversación"
+                  placeholder="Buscar nombre o número"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                />
+                <InputGroupAddon>
+                  <Search />
+                </InputGroupAddon>
+              </InputGroup>
+              <div className="flex flex-wrap gap-2" aria-label="Estado de conversación">
+                {[
+                  ['all', 'Todas'],
+                  ['active', 'Activas'],
+                  ['ended', 'Finalizadas'],
+                ].map(([value, name]) => (
                   <Button
-                    variant="outline"
-                    className={styles.older}
-                    disabled={loadingOlder}
-                    onClick={() => void older()}
+                    key={value}
+                    size="sm"
+                    variant={filter === value ? 'secondary' : 'ghost'}
+                    aria-pressed={filter === value}
+                    onClick={() => setFilter(value)}
                   >
-                    {loadingOlder ? 'Cargando…' : 'Cargar anteriores'}
+                    {name}
                   </Button>
-                )}
-                {loadingChat && <p className={styles.emptySmall}>Cargando mensajes…</p>}
-                {!loadingChat && !messages.length && (
-                  <p className={styles.emptySmall}>Esta conversación aún no tiene mensajes.</p>
-                )}
-                {messages.map((m, index) => (
-                  <div key={m.id}>
-                    {(index === 0 ||
-                      new Date(Number(messages[index - 1].timestamp) * 1000).toDateString() !==
-                        new Date(Number(m.timestamp) * 1000).toDateString()) && (
-                      <div className={styles.date}>
-                        {new Date(Number(m.timestamp) * 1000).toLocaleDateString('es', {
-                          day: 'numeric',
-                          month: 'long',
-                        })}
-                      </div>
-                    )}
-                    <div
-                      className={`${styles.bubble} ${m.kapso?.direction === 'outbound' ? styles.outbound : styles.inbound}`}
-                    >
-                      <p>{content(m)}</p>
-                      <span className={styles.messageMeta}>
-                        <time>{time(m)}</time>
-                        {m.kapso?.direction === 'outbound' && <Status status={m.kapso?.status} />}
-                      </span>
-                    </div>
-                  </div>
                 ))}
               </div>
-              <div className={styles.composer}>
-                {disabledReason && <p className={styles.notice}>{disabledReason}</p>}
-                <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    void send();
+            </div>
+            <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-2">
+              {loading ? (
+                <p className="flex items-center justify-center gap-2 p-10 text-sm text-muted-foreground">
+                  <Spinner /> Cargando conversaciones…
+                </p>
+              ) : visible.length === 0 ? (
+                <Empty>
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon">
+                      <MessageCircle />
+                    </EmptyMedia>
+                    <EmptyTitle>
+                      {query || filter !== 'all'
+                        ? 'No hay conversaciones con este filtro.'
+                        : 'Aún no hay conversaciones.'}
+                    </EmptyTitle>
+                    <EmptyDescription>Los mensajes recibidos aparecerán aquí.</EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              ) : (
+                visible.map((c) => (
+                  <Item
+                    key={c.id}
+                    asChild
+                    size="sm"
+                    variant={selected?.id === c.id ? 'muted' : 'default'}
+                    className="w-full shrink-0 flex-nowrap text-left"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => void choose(c)}
+                      aria-label={`Abrir conversación con ${label(c)}`}
+                    >
+                      <ItemMedia>
+                        <Avatar size="lg">
+                          <AvatarFallback>{label(c).slice(0, 2).toUpperCase()}</AvatarFallback>
+                        </Avatar>
+                      </ItemMedia>
+                      <ItemContent className="min-w-0">
+                        <ItemTitle className="max-w-full">
+                          <span className="truncate">{label(c)}</span>
+                        </ItemTitle>
+                        <ItemDescription className="line-clamp-1">
+                          {c.kapso?.last_message_text ||
+                            placeholders[c.kapso?.last_message_type || ''] ||
+                            'Sin mensajes'}
+                        </ItemDescription>
+                      </ItemContent>
+                      <ItemActions className="flex-col items-end">
+                        <time className="text-xs text-muted-foreground">
+                          {relative(c.last_active_at)}
+                        </time>
+                        {unread[c.id] > 0 && (
+                          <Badge aria-label={`${unread[c.id]} no leídos`}>{unread[c.id]}</Badge>
+                        )}
+                      </ItemActions>
+                    </button>
+                  </Item>
+                ))
+              )}
+              {listCursor && (
+                <Button
+                  variant="ghost"
+                  className="shrink-0"
+                  onClick={() => void refreshList(listCursor).catch(fail)}
+                >
+                  Cargar más conversaciones
+                </Button>
+              )}
+            </div>
+            <footer className="border-t p-3 text-center text-xs text-muted-foreground">
+              Historial de WhatsApp · responsables y seguimiento en Bandeja
+            </footer>
+          </aside>
+          <section
+            className={cn('min-h-0 min-w-0 flex-1 flex-col md:flex', selected ? 'flex' : 'hidden')}
+            aria-label="Chat"
+          >
+            {selected ? (
+              <>
+                <header className="flex flex-wrap items-center gap-3 border-b p-4">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Volver a conversaciones"
+                    className="md:hidden"
+                    onClick={() => {
+                      selectedRef.current = null;
+                      setSelected(null);
+                    }}
+                  >
+                    <ArrowLeft />
+                  </Button>
+                  <Avatar size="lg">
+                    <AvatarFallback>{label(selected).slice(0, 2).toUpperCase()}</AvatarFallback>
+                  </Avatar>
+                  <div className="flex min-w-0 flex-1 flex-col gap-1">
+                    <h2 className="truncate text-sm font-semibold">{label(selected)}</h2>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {selected.phone_number || selected.username || 'Sin teléfono disponible'} ·{' '}
+                      {selected.status === 'active' ? 'Activa' : 'Finalizada'}
+                    </p>
+                  </div>
+                  <Button variant="outline" size="sm" className="w-full md:w-auto" asChild>
+                    <Link
+                      href={
+                        selected.phone_number
+                          ? `/?view=inbox&phone=${encodeURIComponent(selected.phone_number)}&phoneNumberId=${encodeURIComponent(number)}`
+                          : '/?view=inbox'
+                      }
+                    >
+                      Asignar y gestionar en bandeja ↗
+                    </Link>
+                  </Button>
+                </header>
+                <div
+                  ref={scroller}
+                  className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-4 md:p-6"
+                  onScroll={(e) => {
+                    const el = e.currentTarget;
+                    shouldScroll.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
                   }}
                 >
-                  <textarea
-                    aria-label="Mensaje"
-                    placeholder={disabledReason ? 'Envío no disponible' : 'Escribe un mensaje…'}
-                    value={text}
-                    maxLength={4096}
-                    rows={2}
-                    disabled={!!disabledReason || sending || loadingChat}
-                    onChange={(e) => setText(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                        e.preventDefault();
-                        void send();
-                      }
+                  {messageCursor && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="shrink-0 self-center"
+                      disabled={loadingOlder}
+                      onClick={() => void older()}
+                    >
+                      {loadingOlder ? 'Cargando…' : 'Cargar anteriores'}
+                    </Button>
+                  )}
+                  {loadingChat && (
+                    <p className="flex items-center justify-center gap-2 p-10 text-sm text-muted-foreground">
+                      <Spinner /> Cargando mensajes…
+                    </p>
+                  )}
+                  {!loadingChat && !messages.length && (
+                    <p className="p-10 text-center text-sm text-muted-foreground">
+                      Esta conversación aún no tiene mensajes.
+                    </p>
+                  )}
+                  {messages.map((m, index) => (
+                    <div key={m.id} className="flex shrink-0 flex-col gap-2">
+                      {(index === 0 ||
+                        new Date(Number(messages[index - 1].timestamp) * 1000).toDateString() !==
+                          new Date(Number(m.timestamp) * 1000).toDateString()) && (
+                        <Badge variant="secondary" className="self-center">
+                          {new Date(Number(m.timestamp) * 1000).toLocaleDateString('es', {
+                            day: 'numeric',
+                            month: 'long',
+                          })}
+                        </Badge>
+                      )}
+                      <div
+                        className={cn(
+                          'flex w-fit max-w-[80%] flex-col gap-1 rounded-lg px-3 py-2 text-sm',
+                          m.kapso?.direction === 'outbound'
+                            ? 'self-end bg-primary text-primary-foreground'
+                            : 'self-start bg-muted',
+                        )}
+                      >
+                        <p className="wrap-anywhere whitespace-pre-wrap">{content(m)}</p>
+                        <span
+                          className={cn(
+                            'flex items-center justify-end gap-1 text-xs',
+                            m.kapso?.direction === 'outbound'
+                              ? 'text-primary-foreground/70'
+                              : 'text-muted-foreground',
+                          )}
+                        >
+                          <time>{time(m)}</time>
+                          {m.kapso?.direction === 'outbound' && <Status status={m.kapso?.status} />}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex flex-col gap-2 border-t p-4">
+                  {disabledReason && (
+                    <Alert role="note">
+                      <Info />
+                      <AlertDescription>{disabledReason}</AlertDescription>
+                    </Alert>
+                  )}
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      void send();
                     }}
-                  />
-                  <Button
-                    type="submit"
-                    aria-label="Enviar mensaje"
-                    disabled={!!disabledReason || sending || loadingChat || !text.trim()}
                   >
-                    <Send size={18} />
-                  </Button>
-                </form>
-                <small>Enter para enviar · Shift + Enter para un salto de línea</small>
-              </div>
-            </>
-          ) : (
-            <div className={styles.welcome}>
-              <div className={styles.welcomeIcon}>
-                <MessageCircle size={42} />
-              </div>
-              <h2>Una conversación, toda la atención</h2>
-              <p>
-                Selecciona un chat para consultar su historial
-                <br />y continuar la conversación con tu paciente.
-              </p>
-              <span>
-                <ShieldCheck size={14} /> Acceso exclusivo a tu hospital
-              </span>
-            </div>
-          )}
-        </section>
+                    <InputGroup>
+                      <InputGroupTextarea
+                        aria-label="Mensaje"
+                        placeholder={disabledReason ? 'Envío no disponible' : 'Escribe un mensaje…'}
+                        value={text}
+                        maxLength={4096}
+                        rows={2}
+                        className="max-h-40"
+                        disabled={!!disabledReason || sending || loadingChat}
+                        onChange={(e) => setText(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                            e.preventDefault();
+                            void send();
+                          }
+                        }}
+                      />
+                      <InputGroupAddon align="block-end" className="justify-end">
+                        <InputGroupButton
+                          type="submit"
+                          variant="default"
+                          size="icon-sm"
+                          aria-label="Enviar mensaje"
+                          disabled={!!disabledReason || sending || loadingChat || !text.trim()}
+                        >
+                          <Send />
+                        </InputGroupButton>
+                      </InputGroupAddon>
+                    </InputGroup>
+                  </form>
+                  <p className="text-xs text-muted-foreground">
+                    Enter para enviar · Shift + Enter para un salto de línea
+                  </p>
+                </div>
+              </>
+            ) : (
+              <Empty>
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <MessageCircle />
+                  </EmptyMedia>
+                  <EmptyTitle>
+                    <h2>Una conversación, toda la atención</h2>
+                  </EmptyTitle>
+                  <EmptyDescription>
+                    Selecciona un chat para consultar su historial
+                    <br />y continuar la conversación con tu paciente.
+                  </EmptyDescription>
+                </EmptyHeader>
+                <EmptyContent>
+                  <span className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <ShieldCheck className="size-4" /> Acceso exclusivo a tu hospital
+                  </span>
+                </EmptyContent>
+              </Empty>
+            )}
+          </section>
+        </div>
       </div>
       {error && (
-        <div className={styles.error} role="alert">
-          <TriangleAlert size={18} />
-          <span>{error}</span>
-          {/sesión/i.test(error) ? (
-            <Link href="/login">Iniciar sesión</Link>
-          ) : (
-            <button
-              onClick={() => {
-                setError('');
-                void refreshList().catch(fail);
-              }}
-            >
-              Reintentar consulta
-            </button>
-          )}
+        <div className="fixed inset-x-4 bottom-4 z-20 mx-auto max-w-md">
+          <Alert variant="destructive">
+            <TriangleAlert />
+            <AlertDescription>
+              <span>{error}</span>
+              {/sesión/i.test(error) ? (
+                <Button variant="outline" size="sm" asChild>
+                  <Link href="/login">Iniciar sesión</Link>
+                </Button>
+              ) : (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setError('');
+                    void refreshList().catch(fail);
+                  }}
+                >
+                  Reintentar consulta
+                </Button>
+              )}
+            </AlertDescription>
+          </Alert>
         </div>
       )}
     </main>

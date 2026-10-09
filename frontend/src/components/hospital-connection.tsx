@@ -1,13 +1,36 @@
 'use client';
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import useSWR from 'swr';
 import { signIn } from 'next-auth/react';
-import { HeartPulse, Search, CheckCircle2, RefreshCw, ArrowUpRight } from 'lucide-react';
+import {
+  AlertCircle,
+  ArrowUpRight,
+  CheckCircle2,
+  ChevronRight,
+  HeartPulse,
+  RefreshCw,
+  Search,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import { api, fetcher, type Contact, type Me } from '@/lib/api';
 import { refreshHospitalIdentity } from '@/lib/hospital-identity';
+import { Alert, AlertDescription, AlertTitle } from './ui/alert';
+import { Badge } from './ui/badge';
 import { Button } from './ui/button';
-import { Dialog, DialogContent, DialogTitle, DialogDescription } from './ui/dialog';
+import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog';
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+  FieldTitle,
+} from './ui/field';
+import { Input } from './ui/input';
+import { Item, ItemActions, ItemContent, ItemDescription, ItemTitle } from './ui/item';
+import { NativeSelect, NativeSelectOption } from './ui/native-select';
+import { RadioGroup, RadioGroupItem } from './ui/radio-group';
 
 type Connection = {
   hospital: Me['tenant'];
@@ -40,39 +63,50 @@ export function HospitalConnection({ platform = false }: { platform?: boolean })
   );
   const connected = !!health?.connected && !healthError;
   return (
-    <section className="content-card hospital-connection">
-      <div className="card-toolbar">
-        <h2>
-          <HeartPulse size={20} /> {platform ? 'Conexión con Hospital' : 'Mi hospital'}
-        </h2>
-      </div>
-      <div className="hospital-connection-body">
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          <h2 className="flex items-center gap-2">
+            <HeartPulse className="size-4" /> {platform ? 'Conexión con Hospital' : 'Mi hospital'}
+          </h2>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
         {error && (
-          <p role="alert">
-            {platform
-              ? 'No pudimos leer la conexión de esta recepción.'
-              : 'No pudimos cargar tu hospital.'}{' '}
-            <Button variant="outline" onClick={() => mutate()}>
-              Reintentar
-            </Button>
+          <Alert variant="destructive">
+            <AlertCircle />
+            <AlertDescription className="gap-3">
+              <p>
+                {platform
+                  ? 'No pudimos leer la conexión de esta recepción.'
+                  : 'No pudimos cargar tu hospital.'}
+              </p>
+              <Button variant="outline" size="sm" onClick={() => mutate()}>
+                Reintentar
+              </Button>
+            </AlertDescription>
+          </Alert>
+        )}
+        {!data && !error && (
+          <p className="text-sm text-muted-foreground">
+            {platform ? 'Leyendo la conexión…' : 'Cargando tu hospital…'}
           </p>
         )}
-        {!data && !error && <p>{platform ? 'Leyendo la conexión…' : 'Cargando tu hospital…'}</p>}
         {data && (
           <>
-            <div className="hospital-overview">
-              <div>
-                <h3>{data.hospital.name}</h3>
+            <div className="flex flex-col items-start gap-2 sm:flex-row sm:justify-between sm:gap-6">
+              <div className="flex min-w-0 flex-col gap-1">
+                <h3 className="text-xl font-semibold tracking-tight">{data.hospital.name}</h3>
                 {!platform && (
-                  <p>
+                  <p className="max-w-xl text-sm text-muted-foreground">
                     {data.sharedIdentity
                       ? `Has entrado como ${data.name}. Tu cuenta conserva los permisos del hospital.`
                       : 'Estás en un espacio de prueba. Para trabajar con tu equipo, usa tu cuenta del hospital.'}
                   </p>
                 )}
               </div>
-              <span role="status" className={`hospital-status ${connected ? 'is-connected' : ''}`}>
-                {connected ? <CheckCircle2 size={16} /> : <HeartPulse size={16} />}
+              <Badge role="status" variant={connected ? 'default' : 'secondary'}>
+                {connected ? <CheckCircle2 /> : <HeartPulse />}
                 {connected
                   ? 'Hospital conectado'
                   : isValidating
@@ -82,47 +116,66 @@ export function HospitalConnection({ platform = false }: { platform?: boolean })
                     : data.configured
                       ? 'Conexión interrumpida'
                       : 'Pendiente de conexión'}
-              </span>
+              </Badge>
             </div>
             {!platform && !data.sharedIdentity && data.hospitalLoginAvailable && (
-              <div className="hospital-access-callout">
-                <h4>Una cuenta para ambas aplicaciones</h4>
-                <p>
-                  Inicia sesión con el usuario que ya utilizas en Hospital. Reconoceremos tu
-                  hospital automáticamente.
-                </p>
-                <Button onClick={() => signIn('keycloak', { callbackUrl: '/?view=hospital' })}>
-                  Conectar con mi hospital <ArrowUpRight />
-                </Button>
-              </div>
+              <Alert role="note">
+                <HeartPulse />
+                <AlertTitle className="line-clamp-none">
+                  <h4>Una cuenta para ambas aplicaciones</h4>
+                </AlertTitle>
+                <AlertDescription className="gap-3">
+                  <p>
+                    Inicia sesión con el usuario que ya utilizas en Hospital. Reconoceremos tu
+                    hospital automáticamente.
+                  </p>
+                  <Button onClick={() => signIn('keycloak', { callbackUrl: '/?view=hospital' })}>
+                    Conectar con mi hospital <ArrowUpRight />
+                  </Button>
+                </AlertDescription>
+              </Alert>
             )}
             {platform && !data.configured && (
-              <p className="hospital-access-callout">
-                A esta recepción le falta el acceso a su hospital. Es una tarea del operador de la
-                instalación: no hay credenciales que introducir aquí.
-              </p>
+              <Alert role="note">
+                <AlertCircle />
+                <AlertDescription>
+                  A esta recepción le falta el acceso a su hospital. Es una tarea del operador de la
+                  instalación: no hay credenciales que introducir aquí.
+                </AlertDescription>
+              </Alert>
             )}
             {!platform && data.sharedIdentity && !data.configured && (
-              <p className="hospital-access-callout">
-                Tu cuenta ya está vinculada. Falta habilitar el acceso de Recepción a este hospital;
-                pide al administrador de la plataforma que lo complete. No necesitas introducir
-                contraseñas de conexión ni otros datos técnicos.
-              </p>
+              <Alert role="note">
+                <AlertCircle />
+                <AlertDescription>
+                  Tu cuenta ya está vinculada. Falta habilitar el acceso de Recepción a este
+                  hospital; pide al administrador de la plataforma que lo complete. No necesitas
+                  introducir contraseñas de conexión ni otros datos técnicos.
+                </AlertDescription>
+              </Alert>
             )}
             {healthError && (
-              <div role="alert" className="hospital-access-callout">
-                <p>
-                  No pudimos comunicarnos con Hospital.
-                  {!platform && ' Tu cuenta y tus datos siguen vinculados.'}
-                </p>
-                <Button variant="outline" disabled={isValidating} onClick={() => check()}>
-                  <RefreshCw /> Volver a intentar
-                </Button>
-              </div>
+              <Alert variant="destructive">
+                <AlertCircle />
+                <AlertDescription className="gap-3">
+                  <p>
+                    No pudimos comunicarnos con Hospital.
+                    {!platform && ' Tu cuenta y tus datos siguen vinculados.'}
+                  </p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={isValidating}
+                    onClick={() => check()}
+                  >
+                    <RefreshCw /> Volver a intentar
+                  </Button>
+                </AlertDescription>
+              </Alert>
             )}
             {!platform && (
               <>
-                <div className="hospital-actions">
+                <div className="flex flex-wrap items-center gap-2">
                   {connected && (
                     <Button asChild>
                       <a href="/?view=calendar">
@@ -133,27 +186,44 @@ export function HospitalConnection({ platform = false }: { platform?: boolean })
                   {data.hospitalUrl && (
                     <Button asChild variant="outline">
                       <a href={data.hospitalUrl} target="_blank" rel="noreferrer">
-                        Abrir Hospital <ArrowUpRight size={15} />
+                        Abrir Hospital <ArrowUpRight />
                       </a>
                     </Button>
                   )}
                 </div>
-                <div className="hospital-next-steps">
-                  <a href="/?view=contacts">
-                    <strong>Vincular pacientes</strong>
-                    <span>Busca el expediente desde un contacto para consultar sus citas.</span>
-                    <span aria-hidden="true">→</span>
-                  </a>
-                  <a href="/?view=team">
-                    <strong>Trabajar con tu equipo</strong>
-                    <span>Tus compañeros entran con su cuenta del Hospital y aparecen aquí.</span>
-                    <span aria-hidden="true">→</span>
-                  </a>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <Item variant="outline" asChild>
+                    <a href="/?view=contacts">
+                      <ItemContent>
+                        <ItemTitle>Vincular pacientes</ItemTitle>
+                        <ItemDescription>
+                          Busca el expediente desde un contacto para consultar sus citas.
+                        </ItemDescription>
+                      </ItemContent>
+                      <ItemActions>
+                        <ChevronRight className="size-4" aria-hidden="true" />
+                      </ItemActions>
+                    </a>
+                  </Item>
+                  <Item variant="outline" asChild>
+                    <a href="/?view=team">
+                      <ItemContent>
+                        <ItemTitle>Trabajar con tu equipo</ItemTitle>
+                        <ItemDescription>
+                          Tus compañeros entran con su cuenta del Hospital y aparecen aquí.
+                        </ItemDescription>
+                      </ItemContent>
+                      <ItemActions>
+                        <ChevronRight className="size-4" aria-hidden="true" />
+                      </ItemActions>
+                    </a>
+                  </Item>
                 </div>
                 {data.sharedIdentity && data.hospitalLoginAvailable && (
                   <Button
                     variant="ghost"
                     size="sm"
+                    className="self-start"
                     onClick={() =>
                       signIn('keycloak', { callbackUrl: '/?view=hospital' }, { prompt: 'login' })
                     }
@@ -163,13 +233,13 @@ export function HospitalConnection({ platform = false }: { platform?: boolean })
                 )}
               </>
             )}
-            <p className="hint">
+            <p className="text-sm text-muted-foreground">
               Los pacientes, las citas y las conversaciones permanecen en su hospital.
             </p>
           </>
         )}
-      </div>
-    </section>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -194,6 +264,7 @@ export function PatientLink({
   const { data: connection } = useSWR<Connection>(open ? '/hospital/connection' : null, fetcher);
   const { data: me } = useSWR<Me>(open ? '/me' : null, fetcher);
   const allowed = me && ['admin', 'agent'].includes(me.role);
+  const fieldId = useId();
   function reset() {
     setResults(null);
     setSelected(null);
@@ -211,29 +282,36 @@ export function PatientLink({
       }}
     >
       <DialogContent>
-        <DialogTitle>{contact.patientId ? 'Paciente vinculado' : 'Vincular paciente'}</DialogTitle>
-        <DialogDescription>
-          {contact.name} · Hospital: {connection?.hospital.name ?? 'Cargando…'}. Se comprobará que
-          el teléfono del expediente coincide con +{contact.phone}.
-        </DialogDescription>
+        <DialogHeader>
+          <DialogTitle>
+            {contact.patientId ? 'Paciente vinculado' : 'Vincular paciente'}
+          </DialogTitle>
+          <DialogDescription>
+            {contact.name} · Hospital: {connection?.hospital.name ?? 'Cargando…'}. Se comprobará que
+            el teléfono del expediente coincide con +{contact.phone}.
+          </DialogDescription>
+        </DialogHeader>
         {contact.patientId ? (
-          <p>
+          <p className="text-sm">
             Este contacto ya está vinculado a su expediente. Sus citas y documentos autorizados se
             consultan desde la conversación.
           </p>
         ) : !allowed ? (
-          <p>
+          <p className="text-sm">
             Un recepcionista o administrador debe vincular el paciente antes de consultar su
             información.
           </p>
         ) : connection && !connection.configured ? (
-          <p>
-            Primero <a href="/?view=hospital">conecta el hospital de tu cuenta</a>.
+          <p className="text-sm">
+            Primero{' '}
+            <a className="underline underline-offset-4" href="/?view=hospital">
+              conecta el hospital de tu cuenta
+            </a>
+            .
           </p>
         ) : (
           <>
             <form
-              className="dialog-form"
               onSubmit={async (e) => {
                 e.preventDefault();
                 setBusy(true);
@@ -252,76 +330,99 @@ export function PatientLink({
                 }
               }}
             >
-              <label>
-                Buscar por
-                <select
-                  value={shape}
-                  disabled={busy}
-                  onChange={(e) => {
-                    setShape(e.target.value);
-                    reset();
-                  }}
-                >
-                  <option value="name-tokens">Nombre y apellido</option>
-                  <option value="dui">DUI</option>
-                  <option value="record-number">Número de expediente</option>
-                </select>
-              </label>
-              <label>
-                Datos del paciente
-                <input
-                  value={term}
-                  onChange={(e) => {
-                    setTerm(e.target.value);
-                    reset();
-                  }}
-                  required
-                  minLength={3}
-                  maxLength={100}
-                  disabled={busy}
-                  autoComplete="off"
-                  placeholder={
-                    shape === 'name-tokens'
-                      ? 'Nombre y apellido completos'
-                      : 'Identificador registrado en Hospital'
-                  }
-                />
-              </label>
-              <Button disabled={busy || !connection?.configured}>
-                <Search />
-                {busy ? 'Consultando…' : 'Buscar paciente'}
-              </Button>
+              <FieldGroup className="gap-4">
+                <Field>
+                  <FieldLabel htmlFor={`${fieldId}-shape`}>Buscar por</FieldLabel>
+                  <NativeSelect
+                    id={`${fieldId}-shape`}
+                    value={shape}
+                    disabled={busy}
+                    onChange={(e) => {
+                      setShape(e.target.value);
+                      reset();
+                    }}
+                  >
+                    <NativeSelectOption value="name-tokens">Nombre y apellido</NativeSelectOption>
+                    <NativeSelectOption value="dui">DUI</NativeSelectOption>
+                    <NativeSelectOption value="record-number">
+                      Número de expediente
+                    </NativeSelectOption>
+                  </NativeSelect>
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor={`${fieldId}-term`}>Datos del paciente</FieldLabel>
+                  <Input
+                    id={`${fieldId}-term`}
+                    value={term}
+                    onChange={(e) => {
+                      setTerm(e.target.value);
+                      reset();
+                    }}
+                    required
+                    minLength={3}
+                    maxLength={100}
+                    disabled={busy}
+                    autoComplete="off"
+                    placeholder={
+                      shape === 'name-tokens'
+                        ? 'Nombre y apellido completos'
+                        : 'Identificador registrado en Hospital'
+                    }
+                  />
+                </Field>
+                <Field>
+                  <Button
+                    variant={selected ? 'outline' : 'default'}
+                    disabled={busy || !connection?.configured}
+                  >
+                    <Search />
+                    {busy ? 'Consultando…' : 'Buscar paciente'}
+                  </Button>
+                </Field>
+              </FieldGroup>
             </form>
             {results && (
-              <div className="patient-link-results" aria-label="Pacientes encontrados">
+              <div
+                className="flex max-h-64 flex-col gap-3 overflow-y-auto p-1"
+                aria-label="Pacientes encontrados"
+              >
                 {results.length === 0 ? (
-                  <p>
+                  <p className="text-sm">
                     No se encontraron pacientes. Revisa los datos o registra al paciente desde
                     Hospital.
                   </p>
                 ) : (
                   <>
-                    <p className="hint">
+                    <p className="text-sm text-muted-foreground">
                       Selecciona el expediente correcto. La coincidencia de nombre no vincula
                       automáticamente al paciente.
                     </p>
-                    {results.map((p) => (
-                      <label key={p.patientId} className="patient-link-result">
-                        <input
-                          type="radio"
-                          name="patient-match"
-                          checked={selected?.patientId === p.patientId}
-                          disabled={busy}
-                          onChange={() => setSelected(p)}
-                        />
-                        <span>
-                          <strong>{p.displayName}</strong>
-                          <small>Expediente: {p.recordNumber ?? 'Sin número visible'}</small>
-                        </span>
-                      </label>
-                    ))}
+                    <RadioGroup
+                      name="patient-match"
+                      value={selected?.patientId ?? ''}
+                      disabled={busy}
+                      onValueChange={(id) =>
+                        setSelected(results.find((p) => p.patientId === id) ?? null)
+                      }
+                    >
+                      {results.map((p) => (
+                        <FieldLabel key={p.patientId} htmlFor={`${fieldId}-${p.patientId}`}>
+                          <Field orientation="horizontal">
+                            <RadioGroupItem value={p.patientId} id={`${fieldId}-${p.patientId}`} />
+                            <FieldContent>
+                              <FieldTitle>{p.displayName}</FieldTitle>
+                              <FieldDescription>
+                                Expediente: {p.recordNumber ?? 'Sin número visible'}
+                              </FieldDescription>
+                            </FieldContent>
+                          </Field>
+                        </FieldLabel>
+                      ))}
+                    </RadioGroup>
                     {results.length >= 30 && (
-                      <p>Mostrando hasta 30 resultados. Afina la búsqueda si no ves al paciente.</p>
+                      <p className="text-sm text-muted-foreground">
+                        Mostrando hasta 30 resultados. Afina la búsqueda si no ves al paciente.
+                      </p>
                     )}
                   </>
                 )}
@@ -329,6 +430,7 @@ export function PatientLink({
             )}
             {selected && (
               <Button
+                className="h-auto min-h-9 whitespace-normal"
                 disabled={busy}
                 onClick={async () => {
                   setBusy(true);
@@ -359,19 +461,17 @@ export function PatientLink({
           </>
         )}
         {error && (
-          <p className="error" role="alert">
-            {error}
-          </p>
+          <Alert variant="destructive">
+            <AlertCircle />
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
         )}
         {connection?.hospitalUrl && (
-          <a
-            href={connection.hospitalUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="mt-4 inline-block text-sm font-semibold text-primary"
-          >
-            Abrir Hospital →
-          </a>
+          <Button asChild variant="link" className="justify-self-start">
+            <a href={connection.hospitalUrl} target="_blank" rel="noreferrer">
+              Abrir Hospital →
+            </a>
+          </Button>
         )}
       </DialogContent>
     </Dialog>

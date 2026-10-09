@@ -10,6 +10,15 @@ import {
   Users,
 } from 'lucide-react';
 import { Button } from './ui/button';
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from './ui/card';
 
 export function DashboardView({
   stats,
@@ -32,7 +41,6 @@ export function DashboardView({
       value: stats?.human,
       detail: 'Atención personal',
       view: 'inbox',
-      urgent: true,
     },
     {
       icon: Sparkles,
@@ -52,29 +60,35 @@ export function DashboardView({
 
   return (
     <>
-      <div className="metrics">
-        {/* Each figure leads where it is acted on; the one waiting on people stands out. */}
-        {metrics.map(({ icon: Icon, label, value, detail, view, urgent }) => (
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {/* Each figure leads where it is acted on. */}
+        {metrics.map(({ icon: Icon, label, value, detail, view }) => (
           <button
             type="button"
-            className={'metric' + (urgent && value ? ' metric-urgent' : '')}
+            className="min-w-0 text-left"
             key={label}
             onClick={() => onNavigate(view)}
           >
-            <div>
-              <span>{label}</span>
-              <Icon size={17} />
-            </div>
-            <strong>{value ?? '—'}</strong>
-            <small>{detail}</small>
+            <Card className="h-full">
+              <CardHeader>
+                <CardDescription>{label}</CardDescription>
+                <CardTitle className="text-2xl tabular-nums">{value ?? '—'}</CardTitle>
+                <CardAction>
+                  <Icon className="size-4 text-muted-foreground" />
+                </CardAction>
+              </CardHeader>
+              <CardFooter className="text-sm text-muted-foreground">{detail}</CardFooter>
+            </Card>
           </button>
         ))}
       </div>
-      <section className="content-card">
-        <div className="card-toolbar">
-          <h2>Continúa la atención</h2>
-        </div>
-        <div className="dashboard-actions">
+      <Card>
+        <CardHeader>
+          <CardTitle>
+            <h2>Continúa la atención</h2>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-2">
           <Button onClick={() => onNavigate('inbox')}>
             <Inbox />
             Abrir bandeja
@@ -87,8 +101,8 @@ export function DashboardView({
             <Columns3 />
             Ver seguimientos
           </Button>
-        </div>
-      </section>
+        </CardContent>
+      </Card>
     </>
   );
 }

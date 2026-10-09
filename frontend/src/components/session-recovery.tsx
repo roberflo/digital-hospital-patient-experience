@@ -2,9 +2,10 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { usePathname } from 'next/navigation';
 import { SWRConfig, useSWRConfig } from 'swr';
-import { LockKeyhole, RefreshCw } from 'lucide-react';
+import { AlertCircle, LockKeyhole, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from './ui/dialog';
+import { Alert, AlertDescription } from './ui/alert';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog';
 import { Button } from './ui/button';
 import { loginUrl } from '@/lib/login-return';
 import {
@@ -144,40 +145,43 @@ function Recovery({ children }: { children: ReactNode }) {
       </div>
       <Dialog open={expired && !publicPage}>
         <DialogContent
-          showClose={false}
+          showCloseButton={false}
           onOpenAutoFocus={(event) => {
             event.preventDefault();
             loginLink.current?.focus();
           }}
-          className="session-recovery"
           onEscapeKeyDown={(e) => e.preventDefault()}
           onPointerDownOutside={(e) => e.preventDefault()}
           onInteractOutside={(e) => e.preventDefault()}
         >
-          <div className="session-recovery-icon">
-            <LockKeyhole size={26} />
+          <DialogHeader>
+            <div className="flex size-10 items-center justify-center self-center rounded-md bg-muted sm:self-start">
+              <LockKeyhole className="size-5" />
+            </div>
+            <DialogTitle>Tu sesión terminó</DialogTitle>
+            <DialogDescription>
+              Vuelve a iniciar sesión para continuar. Esta pantalla y tus borradores siguen abiertos
+              en esta pestaña.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-2">
+            <Button asChild>
+              <a
+                ref={loginLink}
+                href={loginUrl('/session-restored')}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Iniciar sesión y continuar
+              </a>
+            </Button>
+            <p className="text-xs text-muted-foreground">
+              El acceso se abre en otra pestaña. Al terminar, vuelve aquí: recuperaremos tu sesión
+              sin recargar tu trabajo. No cierres esta pestaña.
+            </p>
           </div>
-          <DialogTitle className="text-xl font-semibold">Tu sesión terminó</DialogTitle>
-          <DialogDescription className="mt-3 text-sm leading-6 text-slate-600">
-            Vuelve a iniciar sesión para continuar. Esta pantalla y tus borradores siguen abiertos
-            en esta pestaña.
-          </DialogDescription>
-          <a
-            ref={loginLink}
-            className="session-recovery-login"
-            href={loginUrl('/session-restored')}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Iniciar sesión y continuar
-          </a>
-          <p className="text-xs leading-5 text-slate-500">
-            El acceso se abre en otra pestaña. Al terminar, vuelve aquí: recuperaremos tu sesión sin
-            recargar tu trabajo. No cierres esta pestaña.
-          </p>
           <Button
             variant="outline"
-            className="mt-4 w-full"
             disabled={checking}
             onClick={() => {
               setError('');
@@ -188,11 +192,12 @@ function Recovery({ children }: { children: ReactNode }) {
             {checking ? 'Comprobando…' : 'Ya inicié sesión · continuar'}
           </Button>
           {error && (
-            <p className="mt-3 text-sm text-red-700" role="alert">
-              {error}
-            </p>
+            <Alert variant="destructive">
+              <AlertCircle />
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
           )}
-          <p className="mt-4 text-xs text-slate-500">
+          <p className="text-xs text-muted-foreground">
             Los mensajes y cambios que no se completaron no se reenviarán automáticamente.
           </p>
         </DialogContent>

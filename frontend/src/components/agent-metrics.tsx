@@ -1,7 +1,7 @@
 'use client';
 import useSWR from 'swr';
 import { fetcher } from '@/lib/api';
-import styles from './agent-metrics.module.css';
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from './ui/card';
 
 type Metrics = {
   days: number;
@@ -39,27 +39,34 @@ export function AgentMetrics() {
     [data.providerFailures, 'fallos del proveedor de IA'],
   ].filter(([count]) => Number(count) > 0);
   return (
-    <section
-      className={styles.metrics}
-      aria-label={`Atención del agente en los últimos ${data.days} días`}
-    >
-      <h2 className={styles.title}>Agente de WhatsApp · últimos {data.days} días</h2>
-      <dl className={styles.figures}>
-        {figures.map(([value, label, detail]) => (
-          <div key={label} className={styles.figure}>
-            <dt>{label}</dt>
-            <dd>
-              {value}
-              {detail && <small>{detail}</small>}
-            </dd>
-          </div>
-        ))}
-      </dl>
-      {review.length > 0 && (
-        <p className={styles.review}>
-          Para revisar: {review.map(([count, label]) => `${count} ${label}`).join(' · ')}
-        </p>
-      )}
+    <section aria-label={`Atención del agente en los últimos ${data.days} días`}>
+      <Card>
+        <CardHeader>
+          <CardTitle>
+            <h2>Agente de WhatsApp · últimos {data.days} días</h2>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-6">
+            {figures.map(([value, label, detail]) => (
+              <div key={label} className="flex min-w-0 flex-col-reverse justify-end gap-1">
+                <dt className="text-sm text-muted-foreground">{label}</dt>
+                <dd className="flex flex-wrap items-baseline gap-2 text-2xl font-semibold tabular-nums">
+                  {value}
+                  {detail && (
+                    <small className="text-xs font-normal text-muted-foreground">{detail}</small>
+                  )}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </CardContent>
+        {review.length > 0 && (
+          <CardFooter className="text-sm text-muted-foreground">
+            <p>Para revisar: {review.map(([count, label]) => `${count} ${label}`).join(' · ')}</p>
+          </CardFooter>
+        )}
+      </Card>
     </section>
   );
 }

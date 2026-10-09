@@ -23,6 +23,20 @@ export function devPassword() {
   return line.slice(line.indexOf('=') + 1).trim();
 }
 
+/** The sidebar is a sheet on mobile: open it first. A dialog that is still closing hides the page
+ * from the accessibility tree and takes focus back, which would dismiss the sheet: wait it out. */
+export async function openMenu(page: Page) {
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  const menu = page.getByRole('button', { name: 'Abrir menú' });
+  if (!(await menu.isVisible())) return;
+  await expect(async () => {
+    if (!(await page.locator('.profile').isVisible())) await menu.click({ timeout: 2000 });
+    await expect(page.locator('.profile')).toBeVisible({ timeout: 1000 });
+    await page.waitForTimeout(400);
+    await expect(page.locator('.profile')).toBeVisible({ timeout: 1000 });
+  }).toPass();
+}
+
 /** From Recepción's login page, through Keycloak's own page and back. Needs no live SSO session. */
 export async function enter(page: Page, user: User = 'admin') {
   await page.getByRole('button', { name: 'Continuar con mi cuenta del hospital' }).click();

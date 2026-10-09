@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { enter, login, users } from './login';
+import { enter, login, openMenu, users } from './login';
 test.afterEach(async ({ page }) => {
   await page.unrouteAll({ behavior: 'wait' });
 });
@@ -97,6 +97,7 @@ test('recovery with another account clears old workspace instead of reusing its 
   await enter(auth, 'doctor');
   await expect(auth.getByRole('heading', { name: 'Ya puedes continuar' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
+  await openMenu(page);
   await expect(page.locator('.profile')).toContainText(users.doctor.name);
   await expect(page.getByLabel('Mensaje al paciente')).toHaveCount(0);
   await auth.close();

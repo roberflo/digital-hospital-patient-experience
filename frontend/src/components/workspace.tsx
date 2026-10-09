@@ -1,6 +1,13 @@
 'use client';
 import { GoogleCalendarConnection } from './google-calendar-connection';
-import { useEffect, useState, useRef, type FormEvent, type ReactNode } from 'react';
+import {
+  useEffect,
+  useState,
+  useRef,
+  useSyncExternalStore,
+  type FormEvent,
+  type ReactNode,
+} from 'react';
 import useSWR, { useSWRConfig } from 'swr';
 import { endSession } from '@/lib/session-client';
 import {
@@ -16,7 +23,6 @@ import {
   Search,
   Plus,
   ArrowUpRight,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Send,
@@ -28,7 +34,6 @@ import {
   ShieldCheck,
   Link2,
   LogOut,
-  Menu,
   X,
   MessageCircle,
   FileText,
@@ -37,13 +42,85 @@ import {
   Play,
   ArrowLeft,
   AlertCircle,
-  Loader2,
   ExternalLink,
   Stethoscope,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { Alert, AlertDescription } from './ui/alert';
+import { Avatar, AvatarFallback } from './ui/avatar';
+import { Badge } from './ui/badge';
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from './ui/breadcrumb';
 import { Button } from './ui/button';
-import { Dialog, DialogContent, DialogTitle, DialogDescription } from './ui/dialog';
+import { ButtonGroup } from './ui/button-group';
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from './ui/card';
+import { Checkbox } from './ui/checkbox';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog';
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from './ui/empty';
+import {
+  Field as UiField,
+  FieldContent,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from './ui/field';
+import { Input } from './ui/input';
+import { InputGroup, InputGroupAddon, InputGroupInput } from './ui/input-group';
+import { Item, ItemActions, ItemContent, ItemDescription, ItemMedia, ItemTitle } from './ui/item';
+import { Label } from './ui/label';
+import { NativeSelect, NativeSelectOption } from './ui/native-select';
+import { Separator } from './ui/separator';
+import { Sheet, SheetClose, SheetContent, SheetHeader, SheetTitle } from './ui/sheet';
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuAction,
+  SidebarMenuBadge,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarSeparator,
+  SidebarTrigger,
+  useSidebar,
+} from './ui/sidebar';
+import { Spinner } from './ui/spinner';
+import { Switch } from './ui/switch';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
+import { Textarea } from './ui/textarea';
 import {
   api,
   fetcher,
@@ -57,6 +134,7 @@ import {
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { AppointmentReminders, ReminderConsent } from './appointment-reminders';
+import { AttentionSettings } from './attention-settings';
 import {
   HospitalCompanies,
   CustomerCommercial,
@@ -69,6 +147,7 @@ import { PatientClinical } from './patient-clinical';
 import { SavedInboxViews, ConversationMacros } from './inbox-productivity';
 import { DashboardView } from './dashboard-view';
 import { FirstSteps } from './first-steps';
+import { ThemeToggle } from './theme-toggle';
 import {
   AssignmentControl,
   TeamWorkspace,
@@ -139,18 +218,30 @@ function time(value: string, tz = 'America/El_Salvador') {
 function date(value: string) {
   return new Date(value).toLocaleDateString('es-SV', { day: 'numeric', month: 'short' });
 }
-function Avatar({ name, large = false }: { name: string; large?: boolean }) {
-  return <span className={cn('avatar', large && 'large')}>{initials(name)}</span>;
-}
-function Badge({ value }: { value: string }) {
+function PersonAvatar({ name, large = false }: { name: string; large?: boolean }) {
   return (
-    <span className={'status status-' + value}>
-      {value === 'agent' ? <Sparkles size={11} /> : <span />}
-      {labels[value] ?? value}
-    </span>
+    <Avatar className={cn(large && 'size-16')}>
+      <AvatarFallback className={cn(large && 'text-lg')}>{initials(name)}</AvatarFallback>
+    </Avatar>
   );
 }
-function Empty({
+function StatusBadge({ value }: { value: string }) {
+  return (
+    <Badge
+      variant={
+        value === 'failed'
+          ? 'destructive'
+          : value === 'human' || value === 'agent'
+            ? 'secondary'
+            : 'outline'
+      }
+    >
+      {value === 'agent' && <Sparkles />}
+      {labels[value] ?? value}
+    </Badge>
+  );
+}
+function EmptyState({
   icon: Icon = Inbox,
   title,
   children,
@@ -160,27 +251,29 @@ function Empty({
   children?: ReactNode;
 }) {
   return (
-    <div className="empty">
-      <span>
-        <Icon size={28} />
-      </span>
-      <h3>{title}</h3>
-      <p>{children}</p>
-    </div>
+    <Empty>
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <Icon />
+        </EmptyMedia>
+        <EmptyTitle>{title}</EmptyTitle>
+        {children && <EmptyDescription>{children}</EmptyDescription>}
+      </EmptyHeader>
+    </Empty>
   );
 }
 function ErrorBox({ error }: { error?: Error }) {
   return error ? (
-    <div className="error-box" role="alert">
-      <AlertCircle size={17} />
-      {error.message}
-    </div>
+    <Alert variant="destructive">
+      <AlertCircle />
+      <AlertDescription>{error.message}</AlertDescription>
+    </Alert>
   ) : null;
 }
 function Loading() {
   return (
-    <div className="loading">
-      <Loader2 className="animate-spin" size={20} /> Cargando tu espacio…
+    <div className="flex items-center justify-center gap-2 p-10 text-sm text-muted-foreground">
+      <Spinner /> Cargando tu espacio…
     </div>
   );
 }
@@ -217,12 +310,13 @@ function FormDialog({
       }}
     >
       <DialogContent>
-        <DialogTitle className="dialog-title">{title}</DialogTitle>
-        <DialogDescription className="dialog-description">
-          {description ?? 'Completa los datos para continuar.'}
-        </DialogDescription>
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>
+            {description ?? 'Completa los datos para continuar.'}
+          </DialogDescription>
+        </DialogHeader>
         <form
-          className="dialog-form"
           onSubmit={async (e) => {
             e.preventDefault();
             setBusy(true);
@@ -239,59 +333,215 @@ function FormDialog({
             }
           }}
         >
-          {fields.map((f) => (
-            <label key={f.name}>
-              {f.label}
-              {f.options ? (
-                <select
-                  aria-label={f.label}
-                  name={f.name}
-                  defaultValue={f.value}
-                  required={f.required}
-                >
-                  <option value="">Selecciona una opción</option>
-                  {f.options.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-              ) : f.type === 'textarea' ? (
-                <textarea
-                  rows={4}
-                  name={f.name}
-                  defaultValue={f.value}
-                  required={f.required}
-                  maxLength={10000}
-                />
-              ) : (
-                <input
-                  name={f.name}
-                  type={f.type ?? 'text'}
-                  defaultValue={f.value}
-                  required={f.required}
-                  placeholder={f.placeholder}
-                  maxLength={f.type === 'text' || !f.type ? 500 : undefined}
-                />
-              )}
-            </label>
-          ))}
-          <div className="dialog-actions">
-            <Button type="button" variant="outline" onClick={onClose}>
-              Cancelar
-            </Button>
-            <Button disabled={busy}>
-              {busy ? <Loader2 className="animate-spin" /> : <Check />}Guardar
-            </Button>
-          </div>
+          <FieldGroup>
+            {fields.map((f) => (
+              <UiField key={f.name}>
+                <FieldLabel htmlFor={'field-' + f.name}>{f.label}</FieldLabel>
+                {f.options ? (
+                  <NativeSelect
+                    id={'field-' + f.name}
+                    className="w-full"
+                    name={f.name}
+                    defaultValue={f.value}
+                    required={f.required}
+                  >
+                    <NativeSelectOption value="">Selecciona una opción</NativeSelectOption>
+                    {f.options.map((o) => (
+                      <NativeSelectOption key={o.value} value={o.value}>
+                        {o.label}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                ) : f.type === 'textarea' ? (
+                  <Textarea
+                    id={'field-' + f.name}
+                    rows={4}
+                    name={f.name}
+                    defaultValue={f.value}
+                    required={f.required}
+                    maxLength={10000}
+                  />
+                ) : (
+                  <Input
+                    id={'field-' + f.name}
+                    name={f.name}
+                    type={f.type ?? 'text'}
+                    defaultValue={f.value}
+                    required={f.required}
+                    placeholder={f.placeholder}
+                    maxLength={f.type === 'text' || !f.type ? 500 : undefined}
+                  />
+                )}
+              </UiField>
+            ))}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={onClose}>
+                Cancelar
+              </Button>
+              <Button disabled={busy}>{busy ? <Spinner /> : <Check />}Guardar</Button>
+            </DialogFooter>
+          </FieldGroup>
         </form>
       </DialogContent>
     </Dialog>
   );
 }
+const descriptions: Record<string, string> = {
+  dashboard: 'El resumen de la atención de tu hospital.',
+  team: 'Organiza responsables y reparte la atención de tu hospital.',
+  contacts: 'Conoce a tus pacientes. Acompaña cada paso.',
+  companies: 'Relaciones y convenios que conectan tu hospital.',
+  opportunities: 'Del primer contacto al seguimiento de la atención.',
+  calendar: 'Una agenda compartida para todo tu hospital.',
+  hospital: 'Tu cuenta, tus pacientes y tu equipo, conectados al mismo hospital.',
+  activity: 'Quién atendió a cada paciente, qué hizo y cómo continuó la atención.',
+  agent: 'Un compañero para tu equipo. Disponible para tus pacientes.',
+  settings: 'Personaliza cómo trabaja y se conecta tu hospital.',
+};
+function AppSidebar({
+  me,
+  view,
+  waiting,
+  onNavigate,
+}: {
+  me?: Me;
+  view: string;
+  waiting?: number;
+  onNavigate: (view: string) => void;
+}) {
+  const { setOpenMobile } = useSidebar();
+  const go = (v: string) => {
+    setOpenMobile(false);
+    onNavigate(v);
+  };
+  return (
+    <Sidebar>
+      <SidebarHeader>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton size="lg" asChild>
+              <a href="/" aria-label="Recepción inicio">
+                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
+                  <HeartPulse className="size-4" />
+                </div>
+                <div className="grid flex-1 text-left text-sm leading-tight">
+                  <span className="truncate font-medium">Recepción</span>
+                  <span className="truncate text-xs">CRM del hospital</span>
+                </div>
+              </a>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              size="lg"
+              isActive={view === 'hospital'}
+              onClick={() => go('hospital')}
+              aria-label="Ver conexión con mi hospital"
+            >
+              <div className="flex aspect-square size-8 items-center justify-center rounded-lg border bg-background">
+                <Building2 className="size-4" />
+              </div>
+              <div className="grid flex-1 text-left text-sm leading-tight">
+                <span className="truncate font-medium">{me?.tenant.name ?? 'Hospital'}</span>
+                <span className="truncate text-xs">Ver conexión y cuenta</span>
+              </div>
+              <ChevronRight className="ml-auto" />
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarHeader>
+      <SidebarContent>
+        <SidebarGroup>
+          <SidebarGroupLabel>Espacio de trabajo</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {nav.map(([id, label, Icon]) => (
+                <SidebarMenuItem key={id}>
+                  <SidebarMenuButton
+                    aria-label={label}
+                    isActive={view === id}
+                    onClick={() => go(id)}
+                  >
+                    <Icon />
+                    <span>{label}</span>
+                  </SidebarMenuButton>
+                  {id === 'inbox' && !!waiting && <SidebarMenuBadge>{waiting}</SidebarMenuBadge>}
+                  {id === 'agent' && <SidebarMenuBadge>IA</SidebarMenuBadge>}
+                </SidebarMenuItem>
+              ))}
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild>
+                  <a href="/whatsapp">
+                    <MessageCircle />
+                    <span>WhatsApp · números</span>
+                  </a>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+      </SidebarContent>
+      <SidebarFooter>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              size="lg"
+              onClick={() => go('agent')}
+              aria-label="Ver actividad del agente"
+            >
+              <div className="flex aspect-square size-8 items-center justify-center rounded-lg border bg-background">
+                {me?.tenant.agentEnabled ? (
+                  <Sparkles className="size-4" />
+                ) : (
+                  <Pause className="size-4" />
+                )}
+              </div>
+              <div className="grid flex-1 text-left text-sm leading-tight">
+                <span className="truncate font-medium">
+                  {me?.tenant.agentEnabled ? 'Agente disponible' : 'Agente en pausa'}
+                </span>
+                <span className="truncate text-xs">
+                  {me?.tenant.agentEnabled
+                    ? 'Conectado con tu equipo'
+                    : 'Actívalo cuando esté configurado'}
+                </span>
+              </div>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          {me?.role === 'admin' && (
+            <SidebarMenuItem>
+              <SidebarMenuButton isActive={view === 'settings'} onClick={() => go('settings')}>
+                <Settings />
+                <span>Configuración</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          )}
+        </SidebarMenu>
+        <SidebarSeparator />
+        <SidebarMenu>
+          <SidebarMenuItem className="profile">
+            <SidebarMenuButton size="lg" asChild>
+              <div>
+                <PersonAvatar name={me?.name ?? 'Usuario'} />
+                <div className="grid flex-1 text-left text-sm leading-tight">
+                  <span className="truncate font-medium">{me?.name ?? 'Conectando…'}</span>
+                  <span className="truncate text-xs">
+                    {me?.role === 'agent' ? 'Recepcionista' : (labels[me?.role ?? ''] ?? '')}
+                  </span>
+                </div>
+              </div>
+            </SidebarMenuButton>
+            <SidebarMenuAction aria-label="Cerrar sesión" onClick={endSession}>
+              <LogOut />
+            </SidebarMenuAction>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarFooter>
+    </Sidebar>
+  );
+}
 export default function Workspace() {
   const [view, setView] = useState('dashboard');
-  const [mobile, setMobile] = useState(false);
   const [search, setSearch] = useState('');
   const [teamAssignment, setTeamAssignment] = useState<string | null>(null);
   const [todayLabel, setTodayLabel] = useState('');
@@ -317,215 +567,138 @@ export default function Workspace() {
   const navigate = (v: string) => {
     setView(v);
     setSearch('');
-    setMobile(false);
     history.replaceState(null, '', '/?view=' + v);
   };
   const title =
     view === 'settings' ? 'Configuración' : (nav.find((n) => n[0] === view)?.[1] ?? 'Recepción');
+  const searchable = !['hospital', 'settings', 'agent', 'dashboard', 'activity'].includes(view);
   return (
-    <div className="app-shell">
-      <aside className={cn('sidebar', mobile && 'open')}>
-        <a className="brand" href="/" aria-label="Recepción inicio">
-          <span className="brand-icon">
-            <HeartPulse />
-          </span>
-          recepción<span className="brand-dot">.</span>
-        </a>
-        <button
-          className="hospital-switch"
-          onClick={() => navigate('hospital')}
-          aria-label="Ver conexión con mi hospital"
-        >
-          <div className="hospital-mark">
-            <Building2 size={18} />
-          </div>
-          <div>
-            <strong>{me?.tenant.name ?? 'Hospital'}</strong>
-            <small>Ver conexión y cuenta</small>
-          </div>
-          <ChevronDown size={14} />
-        </button>
-        <div className="nav-caption">ESPACIO DE TRABAJO</div>
-        <nav>
-          {nav.map(([id, label, Icon]) => (
-            <button
-              key={id}
-              aria-label={label}
-              className={cn('nav-item', view === id && 'active')}
-              onClick={() => navigate(id)}
-            >
-              <Icon size={18} />
-              <span>{label}</span>
-              {id === 'inbox' && !!stats?.human && <b>{stats.human}</b>}
-              {id === 'agent' && <span className="nav-new">IA</span>}
-            </button>
-          ))}
-          <a className="nav-item" href="/whatsapp">
-            <MessageCircle size={18} />
-            <span>WhatsApp · números</span>
-          </a>
-        </nav>
-        <div className="sidebar-bottom">
-          <div className="agent-mini">
-            <div>
-              <span className={cn('live-dot', !me?.tenant.agentEnabled && 'off')} />
-              <strong>{me?.tenant.agentEnabled ? 'Agente disponible' : 'Agente en pausa'}</strong>
-            </div>
-            <p>
-              {me?.tenant.agentEnabled
-                ? 'Conectado con tu equipo'
-                : 'Actívalo cuando esté configurado'}
-            </p>
-            <button onClick={() => navigate('agent')}>
-              Ver actividad del agente <ArrowUpRight size={14} />
-            </button>
-          </div>
-          {me?.role === 'admin' && (
-            <button
-              className={cn('nav-item', view === 'settings' && 'active')}
-              onClick={() => navigate('settings')}
-            >
-              <Settings size={18} />
-              Configuración
-            </button>
-          )}
-          <div className="profile">
-            <Avatar name={me?.name ?? 'Usuario'} />
-            <div>
-              <strong>{me?.name ?? 'Conectando…'}</strong>
-              <small>
-                {me?.role === 'agent' ? 'Recepcionista' : (labels[me?.role ?? ''] ?? '')}
-              </small>
-            </div>
-            <button aria-label="Cerrar sesión" onClick={endSession}>
-              <LogOut size={17} />
-            </button>
-          </div>
-        </div>
-      </aside>
-      {mobile && (
-        <button
-          className="mobile-shade"
-          aria-label="Cerrar menú"
-          onClick={() => setMobile(false)}
-        />
-      )}
-      <main className={cn('main', view === 'inbox' && 'main-inbox')}>
-        <header className="topbar">
-          <div>
-            <button
-              className="mobile-menu"
-              disabled={!me}
-              onClick={() => setMobile(true)}
-              aria-label="Abrir menú"
-              aria-expanded={mobile}
-            >
-              <Menu />
-            </button>
-            <span className="breadcrumb">Espacio de trabajo</span>
-            <ChevronRight size={13} />
-            <strong>{title}</strong>
-          </div>
-          <div className="topbar-right">
-            <span className="today">{todayLabel}</span>
-            <span className="separator" />
-            <span className="secure">
-              <ShieldCheck size={15} /> Sesión protegida
-            </span>
+    <SidebarProvider>
+      <AppSidebar me={me} view={view} waiting={stats?.human} onNavigate={navigate} />
+      <SidebarInset className={cn('min-w-0', view === 'inbox' && 'h-svh overflow-hidden')}>
+        <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
+          <SidebarTrigger className="-ml-1 md:hidden" disabled={!me} aria-label="Abrir menú" />
+          <Separator
+            orientation="vertical"
+            className="mr-2 data-[orientation=vertical]:h-4 md:hidden"
+          />
+          <Breadcrumb>
+            <BreadcrumbList>
+              <BreadcrumbItem className="hidden md:block">Espacio de trabajo</BreadcrumbItem>
+              <BreadcrumbSeparator className="hidden md:block" />
+              <BreadcrumbItem>
+                <BreadcrumbPage>{title}</BreadcrumbPage>
+              </BreadcrumbItem>
+            </BreadcrumbList>
+          </Breadcrumb>
+          <div className="ml-auto flex items-center gap-3 text-sm text-muted-foreground">
+            <span className="hidden sm:inline">{todayLabel}</span>
+            <Badge variant="outline">
+              <ShieldCheck /> Sesión protegida
+            </Badge>
+            <ThemeToggle />
           </div>
         </header>
-        <div className={cn('page-heading', view === 'inbox' && 'inbox-heading')}>
-          <div>
-            {view !== 'inbox' && <div className="eyebrow">ATENCIÓN CONECTADA</div>}
-            <h1>
-              {title}
-              <span className="title-dot" />
-            </h1>
-            {view !== 'inbox' && (
-              <p>
-                {
-                  (
-                    {
-                      dashboard: 'El resumen de la atención de tu hospital.',
-                      inbox: 'Cada conversación, con el contexto que necesitas.',
-                      team: 'Organiza responsables y reparte la atención de tu hospital.',
-                      contacts: 'Conoce a tus pacientes. Acompaña cada paso.',
-                      companies: 'Relaciones y convenios que conectan tu hospital.',
-                      opportunities: 'Del primer contacto al seguimiento de la atención.',
-                      calendar: 'Una agenda compartida para todo tu hospital.',
-                      hospital:
-                        'Tu cuenta, tus pacientes y tu equipo, conectados al mismo hospital.',
-                      activity:
-                        'Quién atendió a cada paciente, qué hizo y cómo continuó la atención.',
-                      agent: 'Un compañero para tu equipo. Disponible para tus pacientes.',
-                      settings: 'Personaliza cómo trabaja y se conecta tu hospital.',
-                    } as Record<string, string>
-                  )[view]
-                }
-              </p>
-            )}
-          </div>
-          {view !== 'hospital' &&
-            view !== 'settings' &&
-            view !== 'agent' &&
-            view !== 'dashboard' &&
-            view !== 'activity' && (
-              <div className="search-input">
-                <Search size={16} />
-                <input
+        <div
+          className={cn(
+            'flex min-h-0 flex-1 flex-col p-4 md:p-6',
+            view === 'inbox' ? 'gap-3 md:py-4' : 'gap-6',
+          )}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-col gap-1">
+              <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+              {descriptions[view] && <p className="text-muted-foreground">{descriptions[view]}</p>}
+            </div>
+            {searchable && (
+              <InputGroup className="w-full sm:w-72">
+                <InputGroupInput
                   aria-label="Buscar"
                   placeholder="Buscar en esta vista…"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                 />
-                <kbd>⌕</kbd>
-              </div>
+                <InputGroupAddon>
+                  <Search />
+                </InputGroupAddon>
+              </InputGroup>
             )}
+          </div>
+          <ErrorBox error={error} />
+          {!me && !error ? (
+            <Loading />
+          ) : (
+            me && (
+              <div className="flex min-h-0 flex-1 flex-col gap-6">
+                {view === 'dashboard' ? (
+                  <>
+                    <ErrorBox error={statsError} />
+                    <FirstSteps me={me} onNavigate={navigate} />
+                    <DashboardView stats={stats} onNavigate={navigate} />
+                  </>
+                ) : view === 'inbox' ? (
+                  <InboxView me={me} search={search} initialAssignment={teamAssignment} />
+                ) : view === 'team' ? (
+                  <TeamWorkspace
+                    me={me}
+                    search={search}
+                    onOpenInbox={(assignment) => {
+                      setTeamAssignment(assignment);
+                      navigate('inbox');
+                    }}
+                  />
+                ) : view === 'contacts' ? (
+                  <ContactsView search={search} />
+                ) : view === 'companies' ? (
+                  <HospitalCompanies search={search} />
+                ) : view === 'opportunities' ? (
+                  <OpportunitiesView search={search} />
+                ) : view === 'hospital' ? (
+                  <HospitalConnection />
+                ) : view === 'calendar' ? (
+                  <CalendarView search={search} me={me} />
+                ) : view === 'activity' ? (
+                  <ActivityWorkspace search={search} onSearch={setSearch} me={me} />
+                ) : view === 'agent' ? (
+                  <AgentView me={me} />
+                ) : view === 'settings' ? (
+                  <SettingsView me={me} />
+                ) : null}
+              </div>
+            )
+          )}
         </div>
-        <ErrorBox error={error} />
-        {!me && !error ? (
-          <Loading />
-        ) : (
-          me && (
-            <div className="page-content">
-              {view === 'dashboard' ? (
-                <>
-                  <ErrorBox error={statsError} />
-                  <FirstSteps me={me} onNavigate={navigate} />
-                  <DashboardView stats={stats} onNavigate={navigate} />
-                </>
-              ) : view === 'inbox' ? (
-                <InboxView me={me} search={search} initialAssignment={teamAssignment} />
-              ) : view === 'team' ? (
-                <TeamWorkspace
-                  me={me}
-                  search={search}
-                  onOpenInbox={(assignment) => {
-                    setTeamAssignment(assignment);
-                    navigate('inbox');
-                  }}
-                />
-              ) : view === 'contacts' ? (
-                <ContactsView search={search} />
-              ) : view === 'companies' ? (
-                <HospitalCompanies search={search} />
-              ) : view === 'opportunities' ? (
-                <OpportunitiesView search={search} />
-              ) : view === 'hospital' ? (
-                <HospitalConnection />
-              ) : view === 'calendar' ? (
-                <CalendarView search={search} me={me} />
-              ) : view === 'activity' ? (
-                <ActivityWorkspace search={search} onSearch={setSearch} me={me} />
-              ) : view === 'agent' ? (
-                <AgentView me={me} />
-              ) : view === 'settings' ? (
-                <SettingsView me={me} />
-              ) : null}
-            </div>
-          )
-        )}
-      </main>
+      </SidebarInset>
+    </SidebarProvider>
+  );
+}
+/** Tracks a CSS media query; reads the real value on the first client render. */
+function useMediaQuery(query: string) {
+  return useSyncExternalStore(
+    (notify) => {
+      const list = window.matchMedia(query);
+      list.addEventListener('change', notify);
+      return () => list.removeEventListener('change', notify);
+    },
+    () => window.matchMedia(query).matches,
+    () => false,
+  );
+}
+function ActivityTimeline({ items, proposal }: { items?: Activity[]; proposal: string }) {
+  if (!items?.length) return null;
+  return (
+    <div className="flex flex-col gap-4">
+      {items.map((a) => (
+        <div key={a.id} className="flex flex-col gap-1 border-l pl-3 text-sm">
+          <strong className="font-medium">{a.actor}</strong>
+          <p className="break-words whitespace-pre-wrap text-muted-foreground">
+            {a.kind.startsWith('proposal') ? proposal : a.body}
+          </p>
+          <small className="text-xs text-muted-foreground">
+            {date(a.createdAt)} · {time(a.createdAt)}
+          </small>
+        </div>
+      ))}
     </div>
   );
 }
@@ -626,133 +799,143 @@ function InboxView({
   return (
     <>
       <ErrorBox error={error} />
-      <div className={cn('inbox-layout', active && 'has-selection')}>
-        <section className="conversation-list">
-          <div className="list-heading">
-            <h2>
-              Conversaciones <span>{filtered?.length ?? 0}</span>
-            </h2>
-            <a
-              href="/whatsapp"
-              className="text-xs text-primary"
-              title="Gestionar números de WhatsApp"
-            >
-              Números ↗
-            </a>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Actualizar conversaciones"
-              onClick={() => mutate()}
-            >
-              <RefreshCw size={15} />
-            </Button>
-          </div>
-          <SavedInboxViews
-            filters={{ state, assignment, channelId, priority, label, mode: filter }}
-            onApply={(f) => {
-              setState(f.state);
-              setAssignment(f.assignment);
-              setChannelId(f.channelId);
-              setPriority(f.priority);
-              setLabel(f.label);
-              setFilter(f.mode);
-              setPage(1);
-              setSelected(null);
-            }}
-          />
-          <div className="inbox-filters">
-            <select
-              aria-label="Filtrar por estado"
-              value={state}
-              onChange={(e) => setState(e.target.value)}
-            >
-              <option value="">Todos los estados</option>
-              {conversationStates.map(([v, l]) => (
-                <option value={v} key={v}>
-                  {l}
-                </option>
-              ))}
-            </select>
-            <select
-              aria-label="Filtrar por responsable"
-              value={assignment}
-              onChange={(e) => setAssignment(e.target.value)}
-            >
-              <option value="all">Todo el equipo</option>
-              <option value="mine">Mis conversaciones</option>
-              <option value="unassigned">Sin asignar</option>
-              {workload?.members.map((m) => (
-                <option key={m.subject} value={'member:' + m.subject}>
-                  {memberLabel(m)}
-                </option>
-              ))}
-            </select>
-            <select
-              aria-label="Filtrar por canal"
-              value={channelId}
-              onChange={(e) => setChannelId(e.target.value)}
-            >
-              <option value="">Todos los canales</option>
-              {channels?.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-            <select
-              aria-label="Filtrar por prioridad"
-              value={priority}
-              onChange={(e) => setPriority(e.target.value)}
-            >
-              <option value="">Todas las prioridades</option>
-              {priorities.map(([v, l]) => (
-                <option key={v} value={v}>
-                  {l}
-                </option>
-              ))}
-            </select>
-            <input
-              aria-label="Filtrar por etiqueta"
-              placeholder="Etiqueta de conversación"
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-              maxLength={40}
-            />
-          </div>
-          <div className="tabs">
-            {[
-              ['all', 'Todas'],
-              ['human', 'Personas'],
-              ['agent', 'Agente'],
-            ].map(([id, name]) => (
-              <button
-                className={filter === id ? 'selected' : ''}
-                key={id}
-                onClick={() => setFilter(id)}
-              >
-                {name}
-              </button>
-            ))}
-          </div>
-          {(linkedPhone || linkedConversation) && (
-            <div className="linked-conversation">
-              {linkedConversation ? 'Conversación desde Actividad' : 'Conversación desde WhatsApp'}{' '}
-              <button onClick={clearLinkedConversation}>Ver todas</button>
-            </div>
+      <Card className="inbox-layout min-h-0 flex-1 flex-row gap-0 overflow-hidden py-0">
+        <section
+          className={cn(
+            'w-full shrink-0 flex-col overflow-y-auto md:flex md:w-72 md:overflow-hidden md:border-r 2xl:w-80',
+            active ? 'hidden' : 'flex',
           )}
-          {managesTeam(me) && (
-            <div className="bulk-assignment">
-              <label>
-                <input
-                  type="checkbox"
+        >
+          <div className="flex flex-col gap-3 border-b p-3">
+            <div className="flex items-center gap-1">
+              <h2 className="flex items-center gap-2 text-sm font-semibold">
+                Conversaciones <Badge variant="secondary">{filtered?.length ?? 0}</Badge>
+              </h2>
+              <Button asChild variant="link" size="sm" className="ml-auto">
+                <a href="/whatsapp" title="Gestionar números de WhatsApp">
+                  Números ↗
+                </a>
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Actualizar conversaciones"
+                onClick={() => mutate()}
+              >
+                <RefreshCw />
+              </Button>
+            </div>
+            <SavedInboxViews
+              filters={{ state, assignment, channelId, priority, label, mode: filter }}
+              onApply={(f) => {
+                setState(f.state);
+                setAssignment(f.assignment);
+                setChannelId(f.channelId);
+                setPriority(f.priority);
+                setLabel(f.label);
+                setFilter(f.mode);
+                setPage(1);
+                setSelected(null);
+              }}
+            />
+            <div className="grid grid-cols-2 gap-2 *:w-full *:min-w-0">
+              <NativeSelect
+                aria-label="Filtrar por estado"
+                value={state}
+                onChange={(e) => setState(e.target.value)}
+              >
+                <NativeSelectOption value="">Todos los estados</NativeSelectOption>
+                {conversationStates.map(([v, l]) => (
+                  <NativeSelectOption value={v} key={v}>
+                    {l}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+              <NativeSelect
+                aria-label="Filtrar por responsable"
+                value={assignment}
+                onChange={(e) => setAssignment(e.target.value)}
+              >
+                <NativeSelectOption value="all">Todo el equipo</NativeSelectOption>
+                <NativeSelectOption value="mine">Mis conversaciones</NativeSelectOption>
+                <NativeSelectOption value="unassigned">Sin asignar</NativeSelectOption>
+                {workload?.members.map((m) => (
+                  <NativeSelectOption key={m.subject} value={'member:' + m.subject}>
+                    {memberLabel(m)}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+              <NativeSelect
+                aria-label="Filtrar por canal"
+                value={channelId}
+                onChange={(e) => setChannelId(e.target.value)}
+              >
+                <NativeSelectOption value="">Todos los canales</NativeSelectOption>
+                {channels?.map((c) => (
+                  <NativeSelectOption key={c.id} value={c.id}>
+                    {c.name}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+              <NativeSelect
+                aria-label="Filtrar por prioridad"
+                value={priority}
+                onChange={(e) => setPriority(e.target.value)}
+              >
+                <NativeSelectOption value="">Todas las prioridades</NativeSelectOption>
+                {priorities.map(([v, l]) => (
+                  <NativeSelectOption key={v} value={v}>
+                    {l}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+              <Input
+                className="col-span-2"
+                aria-label="Filtrar por etiqueta"
+                placeholder="Etiqueta de conversación"
+                value={label}
+                onChange={(e) => setLabel(e.target.value)}
+                maxLength={40}
+              />
+            </div>
+            <ButtonGroup className="w-full *:flex-1">
+              {[
+                ['all', 'Todas'],
+                ['human', 'Personas'],
+                ['agent', 'Agente'],
+              ].map(([id, name]) => (
+                <Button
+                  variant={filter === id ? 'secondary' : 'outline'}
+                  size="sm"
+                  aria-pressed={filter === id}
+                  key={id}
+                  onClick={() => setFilter(id)}
+                >
+                  {name}
+                </Button>
+              ))}
+            </ButtonGroup>
+            {(linkedPhone || linkedConversation) && (
+              <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground">
+                {linkedConversation
+                  ? 'Conversación desde Actividad'
+                  : 'Conversación desde WhatsApp'}{' '}
+                <Button variant="link" size="sm" onClick={clearLinkedConversation}>
+                  Ver todas
+                </Button>
+              </div>
+            )}
+            {managesTeam(me) && (
+              <div className="flex flex-wrap items-center gap-2 *:max-w-full">
+                <Checkbox
+                  id="inbox-select-visible"
                   aria-label="Seleccionar conversaciones visibles"
                   checked={
                     !!filtered?.length && filtered.every((c) => c.conversation.id in checked)
                   }
-                  onChange={(e) =>
+                  onCheckedChange={(value) =>
                     setChecked(
-                      e.target.checked
+                      value === true
                         ? Object.fromEntries(
                             (filtered ?? []).map((c) => [
                               c.conversation.id,
@@ -763,114 +946,133 @@ function InboxView({
                     )
                   }
                 />
-                Seleccionar
-              </label>
-              {!!Object.keys(checked).length && (
-                <>
-                  <span>{Object.keys(checked).length}</span>
-                  <select
-                    aria-label="Responsable de la selección"
-                    value={bulkTarget}
-                    onChange={(e) => setBulkTarget(e.target.value)}
-                  >
-                    <option value="">Sin asignar</option>
-                    {workload?.members
-                      .filter((m) => !m.disabled)
-                      .map((m) => (
-                        <option key={m.subject} value={m.subject}>
-                          {memberLabel(m)}
-                        </option>
-                      ))}
-                  </select>
-                  <Button size="sm" disabled={assigning} onClick={assignSelection}>
-                    Asignar selección
-                  </Button>
-                </>
-              )}
-            </div>
-          )}
-          <div className="conversation-scroll">
+                <Label htmlFor="inbox-select-visible">Seleccionar</Label>
+                {!!Object.keys(checked).length && (
+                  <>
+                    <Badge variant="secondary">{Object.keys(checked).length}</Badge>
+                    <NativeSelect
+                      size="sm"
+                      aria-label="Responsable de la selección"
+                      value={bulkTarget}
+                      onChange={(e) => setBulkTarget(e.target.value)}
+                    >
+                      <NativeSelectOption value="">Sin asignar</NativeSelectOption>
+                      {workload?.members
+                        .filter((m) => !m.disabled)
+                        .map((m) => (
+                          <NativeSelectOption key={m.subject} value={m.subject}>
+                            {memberLabel(m)}
+                          </NativeSelectOption>
+                        ))}
+                    </NativeSelect>
+                    <Button size="sm" disabled={assigning} onClick={assignSelection}>
+                      Asignar selección
+                    </Button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+          <div className="flex flex-col md:min-h-0 md:flex-1 md:overflow-y-auto">
             {!chats ? (
               <Loading />
             ) : !filtered?.length ? (
-              <Empty title="Todo al día">
+              <EmptyState title="Todo al día">
                 Las conversaciones entrantes aparecerán aquí. Revisa los filtros si buscas otra
                 atención.
-              </Empty>
+              </EmptyState>
             ) : (
               filtered.map(({ conversation: c, contact, channel, unreadCount }) => (
-                <div key={c.id} className="conversation-row">
+                <div
+                  key={c.id}
+                  className={cn(
+                    'flex items-center border-b last:border-b-0',
+                    managesTeam(me) && 'pl-3',
+                  )}
+                >
                   {managesTeam(me) && (
-                    <input
-                      className="conversation-check"
-                      type="checkbox"
+                    <Checkbox
                       aria-label={'Seleccionar conversación de ' + contact.name}
                       checked={c.id in checked}
-                      onChange={(e) =>
+                      onCheckedChange={(value) =>
                         setChecked((previous) => {
                           const next = { ...previous };
-                          if (e.target.checked) next[c.id] = c.revision;
+                          if (value === true) next[c.id] = c.revision;
                           else delete next[c.id];
                           return next;
                         })
                       }
                     />
                   )}
-                  <button
-                    className={cn(
-                      'conversation-card',
-                      active?.conversation.id === c.id && 'selected',
-                    )}
-                    onClick={() => setSelected(c.id)}
+                  <Item
+                    asChild
+                    size="sm"
+                    variant={active?.conversation.id === c.id ? 'muted' : 'default'}
+                    className="conversation-card min-w-0 flex-1 flex-nowrap text-left hover:bg-accent/50"
                   >
-                    <Avatar name={contact.name} />
-                    <div>
-                      <div className="conversation-title">
-                        <strong>
-                          <span>{contact.name}</span>
-                          {unreadCount > 0 && (
-                            <span
-                              className="unread-count"
-                              aria-label={`${unreadCount} mensajes sin leer`}
-                            >
-                              {unreadCount}
-                            </span>
+                    <button onClick={() => setSelected(c.id)}>
+                      <ItemMedia>
+                        <PersonAvatar name={contact.name} />
+                      </ItemMedia>
+                      <ItemContent className="min-w-0">
+                        <ItemTitle className="w-full justify-between">
+                          <strong className="flex min-w-0 items-center gap-2 font-medium">
+                            <span className="truncate">{contact.name}</span>
+                            {unreadCount > 0 && (
+                              <Badge aria-label={`${unreadCount} mensajes sin leer`}>
+                                {unreadCount}
+                              </Badge>
+                            )}
+                          </strong>
+                          <time className="shrink-0 text-xs font-normal text-muted-foreground">
+                            {time(c.updatedAt, me.tenant.timeZone)}
+                          </time>
+                        </ItemTitle>
+                        <ItemDescription className="line-clamp-1">
+                          {c.lastMessage || c.summary || 'Nueva conversación de WhatsApp'}
+                        </ItemDescription>
+                        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                          <Badge variant="outline">
+                            {conversationStates.find(([v]) => v === c.state)?.[1]}
+                          </Badge>
+                          <StatusBadge value={c.status} />
+                          {c.priority !== 'normal' && (
+                            <Badge variant={c.priority === 'urgent' ? 'destructive' : 'secondary'}>
+                              {priorities.find(([v]) => v === c.priority)?.[1]}
+                            </Badge>
                           )}
-                        </strong>
-                        <time>{time(c.updatedAt, me.tenant.timeZone)}</time>
-                      </div>
-                      <p>{c.lastMessage || c.summary || 'Nueva conversación de WhatsApp'}</p>
-                      <div className="conversation-meta">
-                        <span className={'tag state-' + c.state}>
-                          {conversationStates.find(([v]) => v === c.state)?.[1]}
-                        </span>
-                        <Badge value={c.status} />
-                        {c.priority !== 'normal' && (
-                          <span className={'tag priority-' + c.priority}>
-                            {priorities.find(([v]) => v === c.priority)?.[1]}
+                          <small className="text-xs">{channel.name}</small>
+                          <span className="flex items-center gap-1">
+                            <UserRound className="size-3" />
+                            {workload?.members.find((m) => m.subject === c.assignedTo)?.name ??
+                              (c.assignedTo ? 'Responsable asignado' : 'Sin asignar')}
                           </span>
-                        )}
-                        <small>{channel.name}</small>
-                        <span className="conversation-owner">
-                          <UserRound size={12} />
-                          {workload?.members.find((m) => m.subject === c.assignedTo)?.name ??
-                            (c.assignedTo ? 'Responsable asignado' : 'Sin asignar')}
-                        </span>
-                      </div>
-                    </div>
-                  </button>
+                        </div>
+                      </ItemContent>
+                    </button>
+                  </Item>
                 </div>
               ))
             )}
           </div>
-          <div className="list-footer inbox-pagination">
-            <button disabled={page === 1} onClick={() => setPage(page - 1)}>
+          <div className="flex items-center justify-between gap-2 border-t p-3">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={page === 1}
+              onClick={() => setPage(page - 1)}
+            >
               Anterior
-            </button>
-            <span>Página {page}</span>
-            <button disabled={!chats || chats.length < 100} onClick={() => setPage(page + 1)}>
+            </Button>
+            <span className="text-sm text-muted-foreground">Página {page}</span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!chats || chats.length < 100}
+              onClick={() => setPage(page + 1)}
+            >
               Siguiente
-            </button>
+            </Button>
           </div>
         </section>
         {active ? (
@@ -885,25 +1087,30 @@ function InboxView({
             refresh={() => mutate()}
           />
         ) : (
-          <section className="chat-placeholder">
-            <div className="orbit">
-              <MessageCircle size={36} />
-              <span>
-                <Sparkles size={16} />
-              </span>
-            </div>
-            <h2>Todo comienza con una conversación</h2>
-            <p>
-              Selecciona un paciente para ver sus mensajes,
-              <br />
-              consultar el contexto y continuar la atención.
-            </p>
-            <div>
-              <ShieldCheck size={14} /> Información disponible según tus permisos
-            </div>
+          <section className="hidden min-w-0 flex-1 items-center justify-center md:flex">
+            <Empty>
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <MessageCircle />
+                </EmptyMedia>
+                <EmptyTitle>
+                  <h2>Todo comienza con una conversación</h2>
+                </EmptyTitle>
+                <EmptyDescription>
+                  Selecciona un paciente para ver sus mensajes,
+                  <br />
+                  consultar el contexto y continuar la atención.
+                </EmptyDescription>
+              </EmptyHeader>
+              <EmptyContent>
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <ShieldCheck className="size-4" /> Información disponible según tus permisos
+                </div>
+              </EmptyContent>
+            </Empty>
           </section>
         )}
-      </div>
+      </Card>
     </>
   );
 }
@@ -935,6 +1142,8 @@ function ChatPanel({
   const [note, setNote] = useState(false);
   const [patient, setPatient] = useState(false);
   const [details, setDetails] = useState(false);
+  // Wide screens keep the patient context as a third column; narrower ones open it on demand.
+  const wide = useMediaQuery('(min-width: 1280px)');
   const [findMessages, setFindMessages] = useState(false);
   const [messageSearch, setMessageSearch] = useState('');
   const [onlyFiles, setOnlyFiles] = useState(false);
@@ -996,25 +1205,89 @@ function ChatPanel({
       setBusy(false);
     }
   }
+  const context = (
+    <div className="flex flex-col gap-6">
+      <div className="flex flex-col items-center gap-2 text-center">
+        <PersonAvatar name={chat.contact.name} large />
+        <h3 className="font-semibold">{chat.contact.name}</h3>
+        <p className="text-sm text-muted-foreground">+{chat.contact.phone}</p>
+        {chat.contact.tags && <Badge variant="secondary">{chat.contact.tags}</Badge>}
+      </div>
+      <Separator />
+      <WorkflowControls
+        chat={chat}
+        onChange={() => {
+          refresh();
+          refreshActivities();
+        }}
+      />
+      <PatientAppointments contact={chat.contact} me={me} />
+      <ReminderConsent contactId={chat.contact.id} />
+      <CustomerCrm
+        chat={chat}
+        onChange={() => {
+          refresh();
+          refreshActivities();
+        }}
+      />
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center justify-between gap-2">
+          <h4 className="text-sm font-medium">Expediente del hospital</h4>
+          <Link2 className="size-4 text-muted-foreground" />
+        </div>
+        <p className="text-sm text-muted-foreground">
+          {chat.contact.patientId
+            ? 'Paciente vinculado. El teléfono se verifica en cada consulta.'
+            : 'Vincula el expediente para consultar agenda y recetas.'}
+        </p>
+        <Button variant="outline" size="sm" className="w-full" onClick={() => setPatient(true)}>
+          {chat.contact.patientId ? 'Ver paciente vinculado' : 'Vincular paciente'}
+        </Button>
+      </div>
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center justify-between gap-2">
+          <h4 className="text-sm font-medium">Historial del cliente</h4>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Agregar nota"
+            onClick={() => setNote(true)}
+          >
+            <Plus />
+          </Button>
+        </div>
+        <ActivityTimeline
+          items={activities?.slice(0, 16)}
+          proposal="Propuesta de agenda registrada"
+        />
+      </div>
+    </div>
+  );
   return (
     <>
-      <section className="chat-panel">
-        <div className="chat-header">
-          <button className="back-chat" onClick={onClose} aria-label="Volver a conversaciones">
-            <ArrowLeft size={18} />
-          </button>
-          <Avatar name={chat.contact.name} />
-          <div>
-            <h2>{chat.contact.name}</h2>
-            <small>
-              <span className="whatsapp-dot" /> +{chat.contact.phone}
-            </small>
+      <section className="flex min-w-0 flex-1 flex-col overflow-y-auto">
+        <div className="flex items-center gap-3 border-b p-3">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="md:hidden"
+            onClick={onClose}
+            aria-label="Volver a conversaciones"
+          >
+            <ArrowLeft />
+          </Button>
+          <PersonAvatar name={chat.contact.name} />
+          <div className="flex min-w-0 flex-col">
+            <h2 className="truncate text-sm font-semibold">{chat.contact.name}</h2>
+            <small className="truncate text-xs text-muted-foreground">+{chat.contact.phone}</small>
           </div>
-          <div className="chat-tools">
-            <Badge value={c.status} />
+          <div className="ml-auto flex shrink-0 items-center gap-1">
+            <span className="hidden sm:inline-flex">
+              <StatusBadge value={c.status} />
+            </span>
             <Button
-              variant="ghost"
-              size="icon"
+              variant={findMessages ? 'secondary' : 'ghost'}
+              size="icon-sm"
               aria-label="Buscar mensajes"
               aria-pressed={findMessages}
               onClick={() => setFindMessages(!findMessages)}
@@ -1022,8 +1295,8 @@ function ChatPanel({
               <Search />
             </Button>
             <Button
-              variant="ghost"
-              size="icon"
+              variant={onlyFiles ? 'secondary' : 'ghost'}
+              size="icon-sm"
               aria-label="Mostrar archivos"
               aria-pressed={onlyFiles}
               onClick={() => setOnlyFiles(!onlyFiles)}
@@ -1032,7 +1305,7 @@ function ChatPanel({
             </Button>
             <Button
               variant="ghost"
-              size="icon"
+              size="icon-sm"
               aria-label="Ver información del paciente"
               onClick={() => setDetails(!details)}
             >
@@ -1040,85 +1313,105 @@ function ChatPanel({
             </Button>
           </div>
         </div>
-        <AssignmentControl
-          conversation={c}
-          me={me}
-          onChange={() => {
-            refresh();
-            refreshActivities();
-          }}
-        />
-        <div className="attention-banner">
-          <Sparkles size={16} />
-          <span>
-            {c.status === 'agent'
-              ? 'El agente está atendiendo esta conversación.'
-              : c.status === 'closed'
-                ? 'La conversación está cerrada.'
-                : 'Tu equipo está a cargo. El agente está en pausa.'}
-          </span>
-          <button
-            disabled={!managesTeam(me) && !!c.assignedTo && c.assignedTo !== me.subject}
-            onClick={() =>
-              action(
-                c.status === 'agent' ? 'human' : 'agent',
-                c.status === 'agent' ? me.subject : undefined,
-              )
-            }
-          >
-            {c.status === 'agent' ? 'Tomar conversación' : 'Activar agente'}
-            <ArrowUpRight size={13} />
-          </button>
-        </div>
-        <div className="conversation-actions">
-          <PatientClinical
-            key={`${c.id}:${c.assignedTo}:${c.status}:${chat.contact.patientId}`}
-            chat={chat}
-            me={me}
-          />
-          <ConversationMacros
-            chat={chat}
+        <div className="flex flex-col gap-3 border-b p-3">
+          <AssignmentControl
+            conversation={c}
             me={me}
             onChange={() => {
               refresh();
               refreshActivities();
             }}
           />
-          {(findMessages || onlyFiles) && (
-            <span>{visibleMessages?.length ?? 0} resultados · últimos 200 mensajes</span>
-          )}
-        </div>
-        {findMessages && (
-          <div className="message-search">
-            <Search size={14} />
-            <input
-              aria-label="Buscar en esta conversación"
-              placeholder="Buscar texto o nombre de archivo…"
-              value={messageSearch}
-              onChange={(e) => setMessageSearch(e.target.value)}
+          <Alert>
+            <Sparkles />
+            <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
+              <span>
+                {c.status === 'agent'
+                  ? 'El agente está atendiendo esta conversación.'
+                  : c.status === 'closed'
+                    ? 'La conversación está cerrada.'
+                    : 'Tu equipo está a cargo. El agente está en pausa.'}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!managesTeam(me) && !!c.assignedTo && c.assignedTo !== me.subject}
+                onClick={() =>
+                  action(
+                    c.status === 'agent' ? 'human' : 'agent',
+                    c.status === 'agent' ? me.subject : undefined,
+                  )
+                }
+              >
+                {c.status === 'agent' ? 'Tomar conversación' : 'Activar agente'}
+                <ArrowUpRight />
+              </Button>
+            </AlertDescription>
+          </Alert>
+          <div className="flex flex-wrap items-center gap-2">
+            <PatientClinical
+              key={`${c.id}:${c.assignedTo}:${c.status}:${chat.contact.patientId}`}
+              chat={chat}
+              me={me}
             />
+            <ConversationMacros
+              chat={chat}
+              me={me}
+              onChange={() => {
+                refresh();
+                refreshActivities();
+              }}
+            />
+            {(findMessages || onlyFiles) && (
+              <span className="text-xs text-muted-foreground">
+                {visibleMessages?.length ?? 0} resultados · últimos 200 mensajes
+              </span>
+            )}
           </div>
-        )}
-        <ErrorBox error={error} />
-        <div className="messages">
-          <div className="day-divider">
+          {findMessages && (
+            <InputGroup>
+              <InputGroupInput
+                aria-label="Buscar en esta conversación"
+                placeholder="Buscar texto o nombre de archivo…"
+                value={messageSearch}
+                onChange={(e) => setMessageSearch(e.target.value)}
+              />
+              <InputGroupAddon>
+                <Search />
+              </InputGroupAddon>
+            </InputGroup>
+          )}
+          <ErrorBox error={error} />
+        </div>
+        <div className="flex min-h-48 flex-1 flex-col gap-3 overflow-y-auto p-4">
+          <div className="flex items-center gap-3 text-xs text-muted-foreground">
+            <Separator className="flex-1" />
             <span>Historial de atención</span>
+            <Separator className="flex-1" />
           </div>
           {visibleMessages?.length === 0 && (
-            <p className="hint">
+            <p className="text-center text-sm text-muted-foreground">
               {onlyFiles
                 ? 'No hay archivos en los mensajes cargados.'
                 : 'No hay mensajes que coincidan.'}
             </p>
           )}
           {visibleMessages?.map((m) => (
-            <div className={cn('message-row', m.sender !== 'patient' && 'outgoing')} key={m.id}>
-              {m.sender === 'patient' && <Avatar name={chat.contact.name} />}
-              <div className="bubble">
-                <div className="bubble-author">
+            <div
+              className={cn('flex items-end gap-2', m.sender !== 'patient' && 'justify-end')}
+              key={m.id}
+            >
+              {m.sender === 'patient' && <PersonAvatar name={chat.contact.name} />}
+              <div
+                className={cn(
+                  'bubble flex max-w-4/5 min-w-0 flex-col gap-1 rounded-lg border px-3 py-2 text-sm',
+                  m.sender !== 'patient' && 'bg-muted',
+                )}
+              >
+                <div className="flex items-center gap-1 text-xs font-medium text-muted-foreground">
                   {m.sender === 'agent' ? (
                     <>
-                      <Sparkles size={12} />
+                      <Sparkles className="size-3" />
                       Agente de atención
                     </>
                   ) : m.sender === 'human' ? (
@@ -1127,27 +1420,24 @@ function ChatPanel({
                     chat.contact.name
                   )}
                 </div>
-                <p>{m.body}</p>
+                <p className="break-words whitespace-pre-wrap">{m.body}</p>
                 {m.mediaId && (
-                  <a
-                    className="media-link"
-                    href={`/api/crm/messages/${m.id}/media`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    <Paperclip size={14} />{' '}
-                    {m.type === 'audio' ? 'Escuchar / descargar audio' : 'Abrir archivo'}
-                    <ExternalLink size={12} />
-                  </a>
+                  <Button asChild variant="outline" size="sm" className="self-start">
+                    <a href={`/api/crm/messages/${m.id}/media`} target="_blank" rel="noreferrer">
+                      <Paperclip />{' '}
+                      {m.type === 'audio' ? 'Escuchar / descargar audio' : 'Abrir archivo'}
+                      <ExternalLink />
+                    </a>
+                  </Button>
                 )}
-                <div className="message-time">
+                <div className="flex items-center justify-end gap-1 text-xs text-muted-foreground">
                   <time>{time(m.createdAt, me.tenant.timeZone)}</time>
                   {m.sender !== 'patient' && (
                     <span title={labels[m.status]}>
                       {m.status === 'read' ? (
-                        <CheckCheck size={13} />
+                        <CheckCheck className="size-3" />
                       ) : m.status === 'sent' || m.status === 'delivered' ? (
-                        <Check size={13} />
+                        <Check className="size-3" />
                       ) : (
                         labels[m.status]
                       )}
@@ -1159,17 +1449,17 @@ function ChatPanel({
           ))}
           <div ref={bottom} />
         </div>
-        <form className="composer" onSubmit={send}>
-          <div className="composer-top">
-            <span>
-              <UserRound size={13} /> Respuesta del equipo
+        <form className="flex flex-col gap-2 border-t p-3" onSubmit={send}>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="flex items-center gap-1 text-xs text-muted-foreground">
+              <UserRound className="size-3" /> Respuesta del equipo
             </span>
-            <button type="button" onClick={() => setNote(true)}>
-              <FileText size={13} /> Nota interna
-            </button>
+            <Button type="button" variant="ghost" size="sm" onClick={() => setNote(true)}>
+              <FileText /> Nota interna
+            </Button>
           </div>
           <SavedReplies me={me} onInsert={(text) => setBody(text)} />
-          <textarea
+          <Textarea
             aria-label="Mensaje al paciente"
             rows={2}
             placeholder="Escribe un mensaje para el paciente…"
@@ -1177,112 +1467,70 @@ function ChatPanel({
             onChange={(e) => setBody(e.target.value)}
             maxLength={4000}
           />
-          <div className="composer-bottom">
-            <label className="attach-button" title="Adjuntar archivo">
-              <Paperclip size={18} />
-              <span className="sr-only">Adjuntar archivo</span>
-              <input
-                type="file"
-                accept=".pdf,.jpg,.jpeg,.png,.ogg,.mp3,.mp4"
-                className="sr-only"
-                disabled={busy || !canReply}
-                onChange={async (e) => {
-                  const file = e.target.files?.[0];
-                  if (!file) return;
-                  const form = new FormData();
-                  form.append('file', file);
-                  setBusy(true);
-                  try {
-                    const sent = await api<Message>(`/conversations/${c.id}/media`, 'POST', form);
-                    mutate();
-                    refresh();
-                    toast[sent.status === 'sent' ? 'success' : 'error'](
-                      labels[sent.status] ?? sent.status,
-                    );
-                  } catch (err) {
-                    toast.error((err as Error).message);
-                  } finally {
-                    setBusy(false);
-                    e.target.value = '';
-                  }
-                }}
-              />
-            </label>
-            <small>
+          <div className="flex items-center gap-2">
+            <Button asChild variant="ghost" size="icon-sm">
+              <label title="Adjuntar archivo">
+                <Paperclip />
+                <span className="sr-only">Adjuntar archivo</span>
+                <input
+                  type="file"
+                  accept=".pdf,.jpg,.jpeg,.png,.ogg,.mp3,.mp4"
+                  className="sr-only"
+                  disabled={busy || !canReply}
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    const form = new FormData();
+                    form.append('file', file);
+                    setBusy(true);
+                    try {
+                      const sent = await api<Message>(`/conversations/${c.id}/media`, 'POST', form);
+                      mutate();
+                      refresh();
+                      toast[sent.status === 'sent' ? 'success' : 'error'](
+                        labels[sent.status] ?? sent.status,
+                      );
+                    } catch (err) {
+                      toast.error((err as Error).message);
+                    } finally {
+                      setBusy(false);
+                      e.target.value = '';
+                    }
+                  }}
+                />
+              </label>
+            </Button>
+            <small className="min-w-0 flex-1 text-xs text-muted-foreground">
               {canReply
                 ? 'Al responder, tomarás la conversación.'
                 : 'Solicita la transferencia al responsable para responder.'}
             </small>
             <Button type="submit" size="sm" disabled={busy || !body.trim() || !canReply}>
-              {busy ? <Loader2 className="animate-spin" /> : <Send />}Enviar
+              {busy ? <Spinner /> : <Send />}Enviar
             </Button>
           </div>
         </form>
       </section>
-      <aside className={cn('contact-panel', details && 'mobile-visible')}>
-        <div className="contact-panel-title">
-          CONTEXTO DEL PACIENTE
-          <button onClick={() => setDetails(false)} aria-label="Cerrar detalles">
-            <X size={14} />
-          </button>
-        </div>
-        <div className="contact-identity">
-          <Avatar name={chat.contact.name} large />
-          <h3>{chat.contact.name}</h3>
-          <p>+{chat.contact.phone}</p>
-          {chat.contact.tags && <span className="tag">{chat.contact.tags}</span>}
-        </div>
-        <WorkflowControls
-          chat={chat}
-          onChange={() => {
-            refresh();
-            refreshActivities();
-          }}
-        />
-        <PatientAppointments contact={chat.contact} me={me} />
-        <ReminderConsent contactId={chat.contact.id} />
-        <CustomerCrm
-          chat={chat}
-          onChange={() => {
-            refresh();
-            refreshActivities();
-          }}
-        />
-        <div className="detail-section">
-          <div className="section-heading">
-            <h4>Expediente del hospital</h4>
-            <Link2 size={14} />
-          </div>
-          <p>
-            {chat.contact.patientId
-              ? 'Paciente vinculado. El teléfono se verifica en cada consulta.'
-              : 'Vincula el expediente para consultar agenda y recetas.'}
-          </p>
-          <Button variant="outline" size="sm" className="w-full" onClick={() => setPatient(true)}>
-            {chat.contact.patientId ? 'Ver paciente vinculado' : 'Vincular paciente'}
-          </Button>
-        </div>
-        <div className="detail-section">
-          <div className="section-heading">
-            <h4>Historial del cliente</h4>
-            <button aria-label="Agregar nota" onClick={() => setNote(true)}>
-              <Plus size={16} />
-            </button>
-          </div>
-          <div className="timeline small">
-            {activities?.slice(0, 16).map((a) => (
-              <div key={a.id}>
-                <span className="timeline-dot" />
-                <strong>{a.actor}</strong>
-                <p>{a.kind.startsWith('proposal') ? 'Propuesta de agenda registrada' : a.body}</p>
-                <small>
-                  {date(a.createdAt)} · {time(a.createdAt)}
-                </small>
-              </div>
-            ))}
-          </div>
-        </div>
-      </aside>
+      {wide ? (
+        <aside className="flex w-72 shrink-0 flex-col gap-4 overflow-y-auto border-l p-4 2xl:w-80">
+          <div className="text-xs font-medium text-muted-foreground">CONTEXTO DEL PACIENTE</div>
+          {context}
+        </aside>
+      ) : (
+        <Sheet open={details} onOpenChange={setDetails}>
+          <SheetContent showCloseButton={false} aria-describedby={undefined} className="gap-0">
+            <SheetHeader className="flex-row items-center justify-between gap-2">
+              <SheetTitle>CONTEXTO DEL PACIENTE</SheetTitle>
+              <SheetClose asChild>
+                <Button variant="ghost" size="icon-sm" aria-label="Cerrar detalles">
+                  <X />
+                </Button>
+              </SheetClose>
+            </SheetHeader>
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">{context}</div>
+          </SheetContent>
+        </Sheet>
+      )}
       <FormDialog
         title="Nota interna"
         description="Visible para tu equipo; no se envía por WhatsApp."
@@ -1319,88 +1567,105 @@ function ContactsView({ search }: { search: string }) {
   const [edit, setEdit] = useState<Contact | null>(null);
   const [patientContact, setPatientContact] = useState<Contact | null>(null);
   return (
-    <section className="content-card">
-      <div className="card-toolbar">
-        <h2>
-          Contactos <span>{data?.length ?? 0}</span>
-        </h2>
-        <Button size="sm" onClick={() => setCreate(true)}>
-          <Plus />
-          Nuevo contacto
-        </Button>
-      </div>
-      <ErrorBox error={error} />
-      {!data && !error ? (
-        <Loading />
-      ) : data?.length ? (
-        <div className="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>Paciente / contacto</th>
-                <th>Teléfono</th>
-                <th>Correo</th>
-                <th>Etiqueta</th>
-                <th>Relación / expediente</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {data.map((c) => (
-                <tr key={c.id}>
-                  <td>
-                    <div className="name-cell">
-                      <Avatar name={c.name} />
-                      <strong>{c.name}</strong>
-                    </div>
-                  </td>
-                  <td>+{c.phone}</td>
-                  <td>{c.email || '—'}</td>
-                  <td>{c.tags ? <span className="tag">{c.tags}</span> : '—'}</td>
-                  <td>
-                    <span className={c.patientId ? 'linked' : 'muted'}>
-                      {c.isCustomer ? 'Cliente' : 'Contacto'} ·{' '}
-                      {c.patientId ? 'Vinculado' : 'Por vincular'}
-                    </span>
-                  </td>
-                  <td>
-                    <Button variant="outline" size="sm" onClick={() => setPatientContact(c)}>
-                      {c.patientId ? 'Ver vínculo' : 'Vincular paciente'}
-                    </Button>
-                    <CustomerCommercial
-                      contact={c}
-                      onChange={() => {
-                        mutate();
-                      }}
-                    />
-                    <Button variant="ghost" size="sm" onClick={() => setEdit(c)}>
-                      Editar
-                    </Button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        <Empty icon={Users} title="Tu próxima relación empieza aquí">
-          Agrega un contacto o recibe su primer mensaje por WhatsApp.
-        </Empty>
-      )}
-      <div className="card-toolbar">
-        <Button variant="outline" size="sm" disabled={page === 1} onClick={() => setPage(page - 1)}>
-          Anterior
-        </Button>
-        <span className="hint">Página {page} · hasta 100 contactos</span>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={!data || data.length < 100}
-          onClick={() => setPage(page + 1)}
-        >
-          Siguiente
-        </Button>
-      </div>
+    <>
+      <Card>
+        <CardHeader>
+          <CardTitle>
+            <h2 className="flex items-center gap-2">
+              Contactos <Badge variant="secondary">{data?.length ?? 0}</Badge>
+            </h2>
+          </CardTitle>
+          <CardAction>
+            <Button size="sm" onClick={() => setCreate(true)}>
+              <Plus />
+              Nuevo contacto
+            </Button>
+          </CardAction>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <ErrorBox error={error} />
+          {!data && !error ? (
+            <Loading />
+          ) : data?.length ? (
+            <div className="w-0 min-w-full">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Paciente / contacto</TableHead>
+                    <TableHead>Teléfono</TableHead>
+                    <TableHead>Correo</TableHead>
+                    <TableHead>Etiqueta</TableHead>
+                    <TableHead>Relación / expediente</TableHead>
+                    <TableHead />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {data.map((c) => (
+                    <TableRow key={c.id}>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <PersonAvatar name={c.name} />
+                          <strong className="font-medium">{c.name}</strong>
+                        </div>
+                      </TableCell>
+                      <TableCell>+{c.phone}</TableCell>
+                      <TableCell>{c.email || '—'}</TableCell>
+                      <TableCell>
+                        {c.tags ? <Badge variant="secondary">{c.tags}</Badge> : '—'}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={c.patientId ? 'secondary' : 'outline'}>
+                          {c.isCustomer ? 'Cliente' : 'Contacto'} ·{' '}
+                          {c.patientId ? 'Vinculado' : 'Por vincular'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center justify-end gap-2">
+                          <Button variant="outline" size="sm" onClick={() => setPatientContact(c)}>
+                            {c.patientId ? 'Ver vínculo' : 'Vincular paciente'}
+                          </Button>
+                          <CustomerCommercial
+                            contact={c}
+                            onChange={() => {
+                              mutate();
+                            }}
+                          />
+                          <Button variant="ghost" size="sm" onClick={() => setEdit(c)}>
+                            Editar
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          ) : (
+            <EmptyState icon={Users} title="Tu próxima relación empieza aquí">
+              Agrega un contacto o recibe su primer mensaje por WhatsApp.
+            </EmptyState>
+          )}
+        </CardContent>
+        <CardFooter className="flex-wrap justify-between gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={page === 1}
+            onClick={() => setPage(page - 1)}
+          >
+            Anterior
+          </Button>
+          <span className="text-sm text-muted-foreground">Página {page} · hasta 100 contactos</span>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!data || data.length < 100}
+            onClick={() => setPage(page + 1)}
+          >
+            Siguiente
+          </Button>
+        </CardFooter>
+      </Card>
       {patientContact && (
         <PatientLink
           key={patientContact.id}
@@ -1436,7 +1701,7 @@ function ContactsView({ search }: { search: string }) {
           mutate();
         }}
       />
-    </section>
+    </>
   );
 }
 function OpportunitiesView({ search }: { search: string }) {
@@ -1445,80 +1710,93 @@ function OpportunitiesView({ search }: { search: string }) {
   const [create, setCreate] = useState(false);
   return (
     <>
-      <div className="section-toolbar">
-        <span className="hint">Seguimientos de la atención y oportunidades del hospital</span>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <span className="text-sm text-muted-foreground">
+          Seguimientos de la atención y oportunidades del hospital
+        </span>
         <Button size="sm" onClick={() => setCreate(true)}>
           <Plus />
           Nuevo seguimiento
         </Button>
       </div>
       <ErrorBox error={error} />
-      <div className="kanban">
-        {stages.map(([id, label], index) => {
+      <div className="flex w-0 min-w-full items-start gap-4 overflow-x-auto pb-2">
+        {stages.map(([id, label]) => {
           const rows = data?.filter(
             (o) => o.stage === id && o.title.toLowerCase().includes(search.toLowerCase()),
           );
           return (
-            <section className="kanban-column" key={id}>
-              <div className="kanban-heading">
-                <span
-                  style={{
-                    background: ['#92a0b0', '#d9b567', '#7badbe', '#82b7a3', '#b8b8b8'][index],
-                  }}
-                />
-                <h3>{label}</h3>
-                <b>{rows?.length ?? 0}</b>
+            <section
+              className="kanban-column flex max-w-80 min-w-64 flex-1 flex-col gap-3 rounded-xl bg-muted/50 p-3"
+              key={id}
+            >
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-medium">{label}</h3>
+                <Badge variant="secondary">{rows?.length ?? 0}</Badge>
               </div>
               {rows?.map((o) => (
-                <article className="opportunity-card" key={o.id}>
-                  <span className="eyebrow">ATENCIÓN AL PACIENTE</span>
-                  <h4>{o.title}</h4>
-                  <div className="opportunity-person">
-                    <UserRound size={13} />
-                    {contacts?.find((c) => c.id === o.contactId)?.name ?? 'Contacto'}
-                  </div>
-                  {o.value > 0 && (
-                    <strong className="amount">
-                      ${o.value.toFixed(2)}{' '}
-                      <small>
-                        {o.hospitalPurchaseId
-                          ? 'Pagado'
-                          : o.hospitalQuote
-                            ? 'Cotizado por Hospital'
-                            : 'Estimado'}
-                      </small>
-                    </strong>
-                  )}
-                  <OpportunityCommercial
-                    opportunity={o}
-                    onChange={() => {
-                      mutate();
-                    }}
-                  />
-                  <select
-                    aria-label={'Etapa de ' + o.title}
-                    value={o.stage}
-                    onChange={async (e) => {
-                      try {
-                        await api(`/opportunities/${o.id}`, 'PATCH', { stage: e.target.value });
+                <Card key={o.id}>
+                  <CardHeader>
+                    <CardDescription>ATENCIÓN AL PACIENTE</CardDescription>
+                    <CardTitle>
+                      <h4 className="break-words">{o.title}</h4>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="flex flex-col gap-4">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <UserRound className="size-4 shrink-0" />
+                      {contacts?.find((c) => c.id === o.contactId)?.name ?? 'Contacto'}
+                    </div>
+                    {o.value > 0 && (
+                      <strong className="flex flex-wrap items-baseline gap-2 font-semibold">
+                        ${o.value.toFixed(2)}{' '}
+                        <small className="text-xs font-normal text-muted-foreground">
+                          {o.hospitalPurchaseId
+                            ? 'Pagado'
+                            : o.hospitalQuote
+                              ? 'Cotizado por Hospital'
+                              : 'Estimado'}
+                        </small>
+                      </strong>
+                    )}
+                    <OpportunityCommercial
+                      opportunity={o}
+                      onChange={() => {
                         mutate();
-                      } catch (err) {
-                        toast.error((err as Error).message);
-                      }
-                    }}
-                  >
-                    {stages.map(([key, value]) => (
-                      <option value={key} key={key}>
-                        {value}
-                      </option>
-                    ))}
-                  </select>
-                </article>
+                      }}
+                    />
+                    <UiField>
+                      <NativeSelect
+                        aria-label={'Etapa de ' + o.title}
+                        value={o.stage}
+                        onChange={async (e) => {
+                          try {
+                            await api(`/opportunities/${o.id}`, 'PATCH', { stage: e.target.value });
+                            mutate();
+                          } catch (err) {
+                            toast.error((err as Error).message);
+                          }
+                        }}
+                      >
+                        {stages.map(([key, value]) => (
+                          <NativeSelectOption value={key} key={key}>
+                            {value}
+                          </NativeSelectOption>
+                        ))}
+                      </NativeSelect>
+                    </UiField>
+                  </CardContent>
+                </Card>
               ))}
-              <button className="kanban-add" onClick={() => setCreate(true)}>
-                <Plus size={14} />
+              <Button
+                variant="ghost"
+                size="sm"
+                className="justify-start"
+                onClick={() => setCreate(true)}
+              >
+                <Plus />
                 Agregar seguimiento
-              </button>
+              </Button>
             </section>
           );
         })}
@@ -1644,113 +1922,137 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
     setDay(d.toISOString().slice(0, 10));
   };
   return (
-    <section className="content-card">
-      <div className="card-toolbar">
-        <div className="calendar-date">
-          <Button variant="outline" size="sm" onClick={() => setDay(today)}>
-            Hoy
-          </Button>
-          <Button variant="ghost" size="icon" aria-label="Día anterior" onClick={() => shift(-1)}>
-            <ChevronLeft />
-          </Button>
-          <input
-            aria-label="Fecha de la agenda"
-            type="date"
-            value={day}
-            onChange={(e) => setDay(e.target.value)}
-          />
-          <Button variant="ghost" size="icon" aria-label="Día siguiente" onClick={() => shift(1)}>
-            <ChevronRight />
-          </Button>
-        </div>
-        <Button size="sm" disabled={!data || !!error} onClick={() => setCreate(true)}>
-          <Plus />
-          Nueva cita
-        </Button>
-      </div>
-      <div className="calendar-note">
-        <CalendarDays size={15} /> Agenda del hospital · {me.tenant.timeZone}
-        <span>Todos los doctores</span>
-      </div>
-      <ErrorBox error={notConfigured ? null : error} />
-      {!data && !error ? (
-        <Loading />
-      ) : !rows?.length ? (
-        <Empty
-          icon={CalendarDays}
-          title={error ? 'Revisa la conexión de tu hospital' : 'Un día por organizar'}
-        >
-          {notConfigured ? (
-            <>
-              <span>Estás en «{me.tenant.name}», que aún no tiene una agenda conectada.</span>
-              <span className="block mt-2">
-                Revisa la conexión o entra con tu cuenta del Hospital desde «Mi hospital».
-              </span>
-              <Button className="mt-4" variant="outline" asChild>
-                <a href="/?view=hospital">Revisar conexión con Hospital</a>
-              </Button>
-            </>
-          ) : error ? (
-            'No pudimos consultar Hospital. Revisa la conexión y vuelve a intentar.'
+    <>
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex flex-wrap items-center gap-2">
+            <CalendarDays className="size-4" /> Agenda del hospital · {me.tenant.timeZone}
+          </CardTitle>
+          <CardDescription>Todos los doctores</CardDescription>
+          <CardAction>
+            <Button size="sm" disabled={!data || !!error} onClick={() => setCreate(true)}>
+              <Plus />
+              Nueva cita
+            </Button>
+          </CardAction>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => setDay(today)}>
+              Hoy
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Día anterior"
+              onClick={() => shift(-1)}
+            >
+              <ChevronLeft />
+            </Button>
+            <Input
+              className="w-auto"
+              aria-label="Fecha de la agenda"
+              type="date"
+              value={day}
+              onChange={(e) => setDay(e.target.value)}
+            />
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Día siguiente"
+              onClick={() => shift(1)}
+            >
+              <ChevronRight />
+            </Button>
+          </div>
+          <ErrorBox error={notConfigured ? null : error} />
+          {!data && !error ? (
+            <Loading />
+          ) : !rows?.length ? (
+            <EmptyState
+              icon={CalendarDays}
+              title={error ? 'Revisa la conexión de tu hospital' : 'Un día por organizar'}
+            >
+              {notConfigured ? (
+                <>
+                  <span>Estás en «{me.tenant.name}», que aún no tiene una agenda conectada.</span>
+                  <span className="mt-2 block">
+                    Revisa la conexión o entra con tu cuenta del Hospital desde «Mi hospital».
+                  </span>
+                  <Button className="mt-4" variant="outline" asChild>
+                    <a href="/?view=hospital">Revisar conexión con Hospital</a>
+                  </Button>
+                </>
+              ) : error ? (
+                'No pudimos consultar Hospital. Revisa la conexión y vuelve a intentar.'
+              ) : (
+                'No hay citas para esta fecha.'
+              )}
+            </EmptyState>
           ) : (
-            'No hay citas para esta fecha.'
+            <div className="flex flex-col gap-2">
+              {rows.map((r) => (
+                <Item variant="outline" key={r.appointmentId}>
+                  <div className="flex w-16 shrink-0 flex-col">
+                    <strong className="font-medium">
+                      {time(r.scheduledStart, me.tenant.timeZone)}
+                    </strong>
+                    <span className="text-xs text-muted-foreground">{r.durationMinutes} min</span>
+                  </div>
+                  <ItemMedia>
+                    <PersonAvatar name={r.displayName} />
+                  </ItemMedia>
+                  <ItemContent className="min-w-40">
+                    <ItemTitle>
+                      <h3>{r.displayName}</h3>
+                    </ItemTitle>
+                    <ItemDescription className="flex items-center gap-1">
+                      <Stethoscope className="size-3.5 shrink-0" />
+                      {doctorName(r.clinicianName)} · {r.placeName}
+                    </ItemDescription>
+                  </ItemContent>
+                  <ItemActions className="flex-wrap">
+                    <Badge variant="secondary">
+                      {(
+                        {
+                          booked: 'Programada',
+                          'cancelled-by-patient': 'Cancelada por paciente',
+                          'cancelled-by-clinic': 'Cancelada por hospital',
+                          arrived: 'Presente',
+                          fulfilled: 'Atendida',
+                          'no-show': 'No asistió',
+                          'not-recorded': 'Sin registrar',
+                          'entered-in-error': 'Registrada por error',
+                        } as Record<string, string>
+                      )[r.status] ?? r.status}
+                    </Badge>
+                    {r.overlaps && <Badge variant="destructive">Solapamiento</Badge>}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={r.status !== 'booked' && r.status !== 'not-recorded'}
+                      onClick={() => setModify(r)}
+                    >
+                      Reprogramar
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={r.status !== 'booked' && r.status !== 'not-recorded'}
+                      onClick={() => {
+                        setCancelReason('');
+                        setCancel(r);
+                      }}
+                    >
+                      Cancelar
+                    </Button>
+                  </ItemActions>
+                </Item>
+              ))}
+            </div>
           )}
-        </Empty>
-      ) : (
-        <div className="agenda-list">
-          {rows.map((r) => (
-            <article className="agenda-row" key={r.appointmentId}>
-              <div className="agenda-time">
-                <strong>{time(r.scheduledStart, me.tenant.timeZone)}</strong>
-                <span>{r.durationMinutes} min</span>
-              </div>
-              <div className="agenda-accent" />
-              <Avatar name={r.displayName} />
-              <div className="agenda-person">
-                <h3>{r.displayName}</h3>
-                <p>
-                  <Stethoscope size={13} />
-                  {doctorName(r.clinicianName)} · {r.placeName}
-                </p>
-              </div>
-              <span className="tag">
-                {(
-                  {
-                    booked: 'Programada',
-                    'cancelled-by-patient': 'Cancelada por paciente',
-                    'cancelled-by-clinic': 'Cancelada por hospital',
-                    arrived: 'Presente',
-                    fulfilled: 'Atendida',
-                    'no-show': 'No asistió',
-                    'not-recorded': 'Sin registrar',
-                    'entered-in-error': 'Registrada por error',
-                  } as Record<string, string>
-                )[r.status] ?? r.status}
-              </span>
-              {r.overlaps && <span className="error">Solapamiento</span>}
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={r.status !== 'booked' && r.status !== 'not-recorded'}
-                onClick={() => setModify(r)}
-              >
-                Reprogramar
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={r.status !== 'booked' && r.status !== 'not-recorded'}
-                onClick={() => {
-                  setCancelReason('');
-                  setCancel(r);
-                }}
-              >
-                Cancelar
-              </Button>
-            </article>
-          ))}
-        </div>
-      )}
+        </CardContent>
+      </Card>
       <Dialog
         open={create || !!modify}
         onOpenChange={(v) => {
@@ -1761,14 +2063,11 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
         }}
       >
         <DialogContent>
-          <DialogTitle className="dialog-title">
-            {modify ? 'Reprogramar cita' : 'Nueva cita'}
-          </DialogTitle>
-          <DialogDescription className="dialog-description">
-            Se registrará en la agenda del hospital.
-          </DialogDescription>
+          <DialogHeader>
+            <DialogTitle>{modify ? 'Reprogramar cita' : 'Nueva cita'}</DialogTitle>
+            <DialogDescription>Se registrará en la agenda del hospital.</DialogDescription>
+          </DialogHeader>
           <form
-            className="dialog-form"
             onSubmit={async (e) => {
               e.preventDefault();
               const f = new FormData(e.currentTarget);
@@ -1802,84 +2101,107 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
               }
             }}
           >
-            <label>
-              Paciente vinculado
-              <select
-                name="contactId"
-                required
-                defaultValue={contacts?.find((c) => c.patientId === modify?.patientId)?.id ?? ''}
-              >
-                <option value="">Selecciona un paciente</option>
-                {contacts
-                  ?.filter((c) => c.patientId && (!modify || c.patientId === modify.patientId))
-                  .map((c) => (
-                    <option value={c.id} key={c.id}>
-                      {c.name}
-                    </option>
+            <FieldGroup>
+              <UiField>
+                <FieldLabel htmlFor="appointment-contact">Paciente vinculado</FieldLabel>
+                <NativeSelect
+                  id="appointment-contact"
+                  name="contactId"
+                  required
+                  defaultValue={contacts?.find((c) => c.patientId === modify?.patientId)?.id ?? ''}
+                >
+                  <NativeSelectOption value="">Selecciona un paciente</NativeSelectOption>
+                  {contacts
+                    ?.filter((c) => c.patientId && (!modify || c.patientId === modify.patientId))
+                    .map((c) => (
+                      <NativeSelectOption value={c.id} key={c.id}>
+                        {c.name}
+                      </NativeSelectOption>
+                    ))}
+                </NativeSelect>
+                <FieldDescription>
+                  Si un paciente no aparece, vincula primero su expediente desde la conversación.
+                </FieldDescription>
+              </UiField>
+              <UiField>
+                <FieldLabel htmlFor="appointment-date">Fecha</FieldLabel>
+                <Input
+                  id="appointment-date"
+                  type="date"
+                  value={day}
+                  onChange={(e) => setDay(e.target.value)}
+                  required
+                />
+              </UiField>
+              <ErrorBox error={availabilityError} />
+              {availabilityLoading && (
+                <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Spinner /> Consultando horarios del hospital…
+                </p>
+              )}
+              {availability && !availability.professionals.length && (
+                <p className="text-sm text-muted-foreground">
+                  El hospital no tiene doctores disponibles en el padrón para esta consulta.
+                </p>
+              )}
+              {closedDay && (
+                <div
+                  className="flex flex-col items-start gap-2 text-sm text-muted-foreground"
+                  role="status"
+                >
+                  Ningún doctor tiene horario disponible en esta fecha. Elige otro día.{' '}
+                  {nextOpenDay && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setDay(nextOpenDay)}
+                    >
+                      Ir al próximo día con horario
+                    </Button>
+                  )}
+                </div>
+              )}
+              <UiField>
+                <FieldLabel htmlFor="appointment-doctor">Doctor</FieldLabel>
+                <NativeSelect
+                  id="appointment-doctor"
+                  value={doctor}
+                  onChange={(e) => setDoctor(e.target.value)}
+                  required
+                >
+                  <NativeSelectOption value="">Selecciona un doctor</NativeSelectOption>
+                  {availability?.professionals.map((p) => (
+                    <NativeSelectOption value={p.clinicianId} key={p.clinicianId}>
+                      {doctorName(p.clinicianName)}
+                      {freeSlots(p).length ? '' : ' · sin cupo este día'}
+                    </NativeSelectOption>
                   ))}
-              </select>
-            </label>
-            <label>
-              Fecha
-              <input type="date" value={day} onChange={(e) => setDay(e.target.value)} required />
-            </label>
-            <ErrorBox error={availabilityError} />
-            {availabilityLoading && <p className="hint">Consultando horarios del hospital…</p>}
-            {availability && !availability.professionals.length && (
-              <p className="hint">
-                El hospital no tiene doctores disponibles en el padrón para esta consulta.
-              </p>
-            )}
-            {closedDay && (
-              <p className="hint" role="status">
-                Ningún doctor tiene horario disponible en esta fecha. Elige otro día.{' '}
-                {nextOpenDay && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setDay(nextOpenDay)}
-                  >
-                    Ir al próximo día con horario
-                  </Button>
+                </NativeSelect>
+              </UiField>
+              <UiField>
+                <FieldLabel htmlFor="appointment-slot">Horario disponible</FieldLabel>
+                <NativeSelect id="appointment-slot" name="startsAt" required>
+                  <NativeSelectOption value="">Selecciona un horario</NativeSelectOption>
+                  {slots.map((s) => (
+                    <NativeSelectOption key={s.startsAt} value={s.startsAt}>
+                      {time(s.startsAt, me.tenant.timeZone)} · {s.durationMinutes} min
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
+                {doctor && availability && !slots.length && (
+                  <FieldDescription>
+                    No hay cupos disponibles para este doctor en la fecha seleccionada. Cambia el
+                    día o el doctor.
+                  </FieldDescription>
                 )}
-              </p>
-            )}
-            <label>
-              Doctor
-              <select value={doctor} onChange={(e) => setDoctor(e.target.value)} required>
-                <option value="">Selecciona un doctor</option>
-                {availability?.professionals.map((p) => (
-                  <option value={p.clinicianId} key={p.clinicianId}>
-                    {doctorName(p.clinicianName)}
-                    {freeSlots(p).length ? '' : ' · sin cupo este día'}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Horario disponible
-              <select name="startsAt" required>
-                <option value="">Selecciona un horario</option>
-                {slots.map((s) => (
-                  <option key={s.startsAt} value={s.startsAt}>
-                    {time(s.startsAt, me.tenant.timeZone)} · {s.durationMinutes} min
-                  </option>
-                ))}
-              </select>
-            </label>
-            {doctor && availability && !slots.length && (
-              <p className="hint">
-                No hay cupos disponibles para este doctor en la fecha seleccionada. Cambia el día o
-                el doctor.
-              </p>
-            )}
-            <p className="hint">
-              Si un paciente no aparece, vincula primero su expediente desde la conversación.
-            </p>
-            <Button type="submit" disabled={!slots.length || savingAppointment}>
-              Confirmar cita
-            </Button>
+              </UiField>
+              <DialogFooter>
+                <Button type="submit" disabled={!slots.length || savingAppointment}>
+                  Confirmar cita
+                </Button>
+              </DialogFooter>
+            </FieldGroup>
           </form>
         </DialogContent>
       </Dialog>
@@ -1890,28 +2212,37 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
         }}
       >
         <DialogContent>
-          <DialogTitle className="dialog-title">Cancelar cita</DialogTitle>
-          <DialogDescription className="dialog-description">
-            Se cancelará la cita de {cancel?.displayName} en la agenda del hospital.
-          </DialogDescription>
+          <DialogHeader>
+            <DialogTitle>Cancelar cita</DialogTitle>
+            <DialogDescription>
+              Se cancelará la cita de {cancel?.displayName} en la agenda del hospital.
+            </DialogDescription>
+          </DialogHeader>
           {/* Hospital records who cancelled; staff say so instead of it being assumed. */}
-          <label>
-            Motivo de la cancelación
-            <select
+          <UiField>
+            <FieldLabel htmlFor="cancel-reason">Motivo de la cancelación</FieldLabel>
+            <NativeSelect
+              id="cancel-reason"
               aria-label="Motivo de la cancelación"
               value={cancelReason}
               onChange={(e) => setCancelReason(e.target.value)}
             >
-              <option value="">Selecciona un motivo</option>
-              <option value="patient-requested">El paciente lo pidió</option>
-              <option value="clinician-unavailable">El doctor no está disponible</option>
-              <option value="clinic-closed">El hospital no atiende ese día</option>
-              <option value="duplicate">La cita estaba duplicada</option>
-              <option value="other">Otro motivo del hospital</option>
-            </select>
-          </label>
+              <NativeSelectOption value="">Selecciona un motivo</NativeSelectOption>
+              <NativeSelectOption value="patient-requested">
+                El paciente lo pidió
+              </NativeSelectOption>
+              <NativeSelectOption value="clinician-unavailable">
+                El doctor no está disponible
+              </NativeSelectOption>
+              <NativeSelectOption value="clinic-closed">
+                El hospital no atiende ese día
+              </NativeSelectOption>
+              <NativeSelectOption value="duplicate">La cita estaba duplicada</NativeSelectOption>
+              <NativeSelectOption value="other">Otro motivo del hospital</NativeSelectOption>
+            </NativeSelect>
+          </UiField>
           {/* A destructive confirm offers its way out as a button, not only the X. */}
-          <div className="dialog-actions">
+          <DialogFooter>
             <Button variant="outline" disabled={savingAppointment} onClick={() => setCancel(null)}>
               Conservar cita
             </Button>
@@ -1951,10 +2282,10 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
             >
               Confirmar cancelación
             </Button>
-          </div>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
-    </section>
+    </>
   );
 }
 function AgentView({ me }: { me: Me }) {
@@ -1967,72 +2298,103 @@ function AgentView({ me }: { me: Me }) {
   const [busy, setBusy] = useState(false);
   return (
     <>
-      <section className="agent-hero">
-        <div className="agent-hero-icon">
-          <Sparkles size={34} />
-        </div>
-        <div>
-          <span className="eyebrow">TU EQUIPO, CON MÁS CAPACIDAD</span>
-          <h2>Agente de atención</h2>
-          <p>Responde preguntas, acompaña la agenda y entrega la atención a la persona correcta.</p>
-          <Badge value={me.tenant.agentEnabled ? 'agent' : 'human'} />
-        </div>
-        <div className="agent-hero-detail">
-          <span>
-            <ShieldCheck size={16} /> Contexto de tu hospital
-          </span>
-          <span>
-            <Users size={16} /> Transferencia a humanos
-          </span>
-          <span>
-            <ActivityIcon size={16} /> Historial de cada acción
-          </span>
-        </div>
-      </section>
-      <div className="agent-columns">
-        <section className="content-card">
-          <div className="card-toolbar">
-            <h2>
-              <Sparkles size={17} /> Asistente del equipo
+      <Card>
+        <CardHeader>
+          <CardDescription>TU EQUIPO, CON MÁS CAPACIDAD</CardDescription>
+          <CardTitle>
+            <h2 className="flex items-center gap-2">
+              <Sparkles className="size-4" /> Agente de atención
             </h2>
-          </div>
-          <div className="assistant-intro">
-            <h3>¿En qué trabajamos hoy?</h3>
-            <p>
-              Consulta las métricas o selecciona un contacto para guardar una nota o crear un
-              seguimiento.
-            </p>
-            <label className="mt-5">
-              Contacto para acciones
-              <select
+          </CardTitle>
+          <CardDescription>
+            Responde preguntas, acompaña la agenda y entrega la atención a la persona correcta.
+          </CardDescription>
+          <CardAction>
+            <StatusBadge value={me.tenant.agentEnabled ? 'agent' : 'human'} />
+          </CardAction>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-2">
+          <Badge variant="outline">
+            <ShieldCheck /> Contexto de tu hospital
+          </Badge>
+          <Badge variant="outline">
+            <Users /> Transferencia a humanos
+          </Badge>
+          <Badge variant="outline">
+            <ActivityIcon /> Historial de cada acción
+          </Badge>
+        </CardContent>
+      </Card>
+      <div className="grid items-start gap-6 lg:grid-cols-5">
+        <Card className="min-w-0 lg:col-span-3">
+          <CardHeader>
+            <CardTitle>
+              <h2 className="flex items-center gap-2">
+                <Sparkles className="size-4" /> Asistente del equipo
+              </h2>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4">
+            <div className="flex flex-col gap-1">
+              <h3 className="font-medium">¿En qué trabajamos hoy?</h3>
+              <p className="text-sm text-muted-foreground">
+                Consulta las métricas o selecciona un contacto para guardar una nota o crear un
+                seguimiento.
+              </p>
+            </div>
+            <UiField>
+              <FieldLabel htmlFor="assistant-contact">Contacto para acciones</FieldLabel>
+              <NativeSelect
+                id="assistant-contact"
                 aria-label="Contacto para acciones"
                 value={contactId}
                 onChange={(e) => setContactId(e.target.value)}
               >
-                <option value="">Solo consultar métricas</option>
+                <NativeSelectOption value="">Solo consultar métricas</NativeSelectOption>
                 {contacts?.map((c) => (
-                  <option value={c.id} key={c.id}>
+                  <NativeSelectOption value={c.id} key={c.id}>
                     {c.name}
-                  </option>
+                  </NativeSelectOption>
                 ))}
-              </select>
-            </label>
-            <p className="hint mt-2">La ficha del contacto seleccionado permanece en el CRM.</p>
-            <div className="suggestion-chips">
+              </NativeSelect>
+              <FieldDescription>
+                La ficha del contacto seleccionado permanece en el CRM.
+              </FieldDescription>
+            </UiField>
+            <div className="flex flex-col gap-2">
               {[
                 'Resume las conversaciones pendientes',
                 '¿Qué oportunidades necesitan seguimiento?',
                 'Crea un seguimiento para el contacto seleccionado',
               ].map((s) => (
-                <button key={s} onClick={() => setQuery(s)}>
-                  {s}
-                  <ArrowUpRight size={13} />
-                </button>
+                <Item
+                  asChild
+                  variant="outline"
+                  size="sm"
+                  className="text-left hover:bg-accent/50"
+                  key={s}
+                >
+                  <button onClick={() => setQuery(s)}>
+                    <ItemContent>
+                      <ItemTitle>{s}</ItemTitle>
+                    </ItemContent>
+                    <ItemActions>
+                      <ArrowUpRight className="size-4" />
+                    </ItemActions>
+                  </button>
+                </Item>
               ))}
             </div>
-            {answer && <div className="assistant-answer">{answer}</div>}
+            {answer && (
+              <Alert>
+                <Sparkles />
+                <AlertDescription className="break-words whitespace-pre-wrap">
+                  {answer}
+                </AlertDescription>
+              </Alert>
+            )}
             <form
-              className="assistant-form"
+              className="flex flex-col items-start gap-3"
               onSubmit={async (e) => {
                 e.preventDefault();
                 setBusy(true);
@@ -2050,7 +2412,7 @@ function AgentView({ me }: { me: Me }) {
                 }
               }}
             >
-              <textarea
+              <Textarea
                 aria-label="Pregunta al asistente"
                 rows={3}
                 placeholder="Pregunta sobre la atención de tu hospital…"
@@ -2059,44 +2421,39 @@ function AgentView({ me }: { me: Me }) {
                 maxLength={2000}
               />
               <Button disabled={busy || !query.trim()}>
-                {busy ? <Loader2 className="animate-spin" /> : <Send />}
+                {busy ? <Spinner /> : <Send />}
                 {busy ? 'Consultando…' : 'Consultar al agente'}
               </Button>
             </form>
-          </div>
-        </section>
-        <section className="content-card">
-          <div className="card-toolbar">
-            <h2>Acciones recientes</h2>
-          </div>
-          <div className="timeline small agent-timeline">
-            {data
-              ?.filter((a) => a.actor === 'Agente' || a.kind === 'handoff')
-              .slice(0, 10)
-              .map((a) => (
-                <div key={a.id}>
-                  <span className="timeline-dot" />
-                  <strong>{a.actor}</strong>
-                  <p>{a.kind.startsWith('proposal') ? 'Propuesta de cita registrada' : a.body}</p>
-                  <small>
-                    {date(a.createdAt)} · {time(a.createdAt)}
-                  </small>
-                </div>
-              ))}
-          </div>
-          {!data?.some((a) => a.actor === 'Agente' || a.kind === 'handoff') && (
-            <Empty icon={Sparkles} title="Listo para acompañar">
-              Las acciones aparecerán al habilitar la atención automática.
-            </Empty>
-          )}
-        </section>
+          </CardContent>
+        </Card>
+        <Card className="min-w-0 lg:col-span-2">
+          <CardHeader>
+            <CardTitle>
+              <h2>Acciones recientes</h2>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4">
+            <ActivityTimeline
+              items={data?.filter((a) => a.actor === 'Agente' || a.kind === 'handoff').slice(0, 10)}
+              proposal="Propuesta de cita registrada"
+            />
+            {!data?.some((a) => a.actor === 'Agente' || a.kind === 'handoff') && (
+              <EmptyState icon={Sparkles} title="Listo para acompañar">
+                Las acciones aparecerán al habilitar la atención automática.
+              </EmptyState>
+            )}
+          </CardContent>
+        </Card>
       </div>
       {admin && <AppointmentReminders me={me} />}
       {admin && (
-        <div className="inline-note">
-          <Settings size={16} />
-          Personaliza las instrucciones y habilita el agente desde Configuración.
-        </div>
+        <Alert>
+          <Settings />
+          <AlertDescription>
+            Personaliza las instrucciones y habilita el agente desde Configuración.
+          </AlertDescription>
+        </Alert>
       )}
     </>
   );
@@ -2105,6 +2462,7 @@ type SettingsData = {
   name: string;
   guide: string;
   emergencyPhone?: string;
+  emergencyWhatsApp?: boolean;
   timeZone: string;
   agentEnabled: boolean;
   googleCalendarId?: string;
@@ -2123,151 +2481,192 @@ function SettingsView({ me }: { me: Me }) {
   const [saving, setSaving] = useState(false);
   if (me.role !== 'admin')
     return (
-      <Empty icon={ShieldCheck} title="Solo administradores">
+      <EmptyState icon={ShieldCheck} title="Solo administradores">
         Tu administrador gestiona las conexiones y la guía del negocio.
-      </Empty>
+      </EmptyState>
     );
   return (
     <>
       <ErrorBox error={error} />
       {data ? (
-        <div>
+        <div className="flex flex-col gap-6">
           <HospitalConnection />
-          <div className="settings-grid">
-            <section className="content-card">
-              <div className="card-toolbar">
-                <h2>Tu hospital y su guía de atención</h2>
-              </div>
-              <form
-                key={data.name + data.timeZone + data.agentEnabled}
-                className="settings-form"
-                onSubmit={async (e) => {
-                  e.preventDefault();
-                  const f = new FormData(e.currentTarget);
-                  setSaving(true);
-                  try {
-                    await api('/settings', 'PUT', {
-                      name: f.get('name'),
-                      timeZone: f.get('timeZone'),
-                      guide: f.get('guide'),
-                      emergencyPhone: f.get('emergencyPhone'),
-                      agentEnabled: f.get('agentEnabled') === 'on',
-                    });
-                    mutate();
-                    globalMutate('/me');
-                    toast.success('Configuración guardada');
-                  } catch (err) {
-                    toast.error((err as Error).message);
-                  } finally {
-                    setSaving(false);
-                  }
-                }}
-              >
-                <div className="form-grid">
-                  <label>
-                    Nombre del hospital
-                    <input
-                      name="name"
-                      defaultValue={data.name}
-                      required
-                      readOnly={data.hospitalConfigured}
-                    />
-                  </label>
-                  <label>
-                    Zona horaria
-                    <input
-                      name="timeZone"
-                      defaultValue={data.timeZone}
-                      required
-                      readOnly={data.hospitalConfigured}
-                    />
-                  </label>
-                </div>
-                {data.hospitalConfigured && (
-                  <p className="hint">
-                    El nombre y la zona horaria vienen de Hospital y se actualizan desde allí.
-                  </p>
-                )}
-                <label>
-                  Guía de atención
-                  <textarea
-                    rows={9}
-                    name="guide"
-                    defaultValue={data.guide}
-                    placeholder="Horarios, servicios, instrucciones de atención y reglas de derivación…"
-                    maxLength={30000}
-                  />
-                </label>
-                <p className="hint">
-                  El agente utiliza esta guía junto con las herramientas autorizadas del hospital.
-                  Las decisiones clínicas se derivan al doctor.
-                </p>
-                <label>
-                  Teléfono de urgencias
-                  <input
-                    name="emergencyPhone"
-                    type="tel"
-                    defaultValue={data.emergencyPhone ?? ''}
-                    placeholder="Ej. 132 o +503 2200 0000"
-                    maxLength={20}
-                  />
-                </label>
-                <p className="hint">
-                  El agente lo envía al paciente cada vez que deriva una conversación a tu equipo,
-                  con un botón para llamar. Puede ser un número corto, como 132 o 911.
-                </p>
-                <label className="toggle-row">
-                  <div>
-                    <strong>Atención automática</strong>
-                    <small>Permite al agente atender conversaciones habilitadas.</small>
-                  </div>
-                  <input type="checkbox" name="agentEnabled" defaultChecked={data.agentEnabled} />
-                </label>
-                <div className="dialog-actions">
-                  <Button disabled={saving}>
-                    {saving ? <Loader2 className="animate-spin" /> : <Check />}Guardar cambios
-                  </Button>
-                </div>
-              </form>
-            </section>
-            <section className="content-card">
-              <div className="card-toolbar">
-                <h2>Conexiones</h2>
-              </div>
-              <div className="integration-list">
-                {[
-                  [HeartPulse, 'Hospital', data.hospitalConfigured, 'Agenda y expediente'],
-                  [
-                    MessageCircle,
-                    'WhatsApp',
-                    data.kapsoConfigured,
-                    data.sendEnabled
-                      ? 'Envío habilitado'
-                      : data.manualSendEnabled
-                        ? 'Envío manual habilitado'
-                        : 'Envío en pausa',
-                  ],
-                  [Sparkles, 'Agente de atención', data.aiConfigured, 'Respuestas y seguimiento'],
-                  [CalendarDays, 'Google Calendar', data.googleConnected, 'Agenda compartida'],
-                ].map(([Icon, title, ok, sub], i) => {
-                  const I = Icon as typeof Inbox;
-                  return (
-                    <div className="integration-item" key={i}>
-                      <span>
-                        <I size={21} />
-                      </span>
-                      <div>
-                        <strong>{title as string}</strong>
-                        <small>{sub as string}</small>
-                      </div>
-                      <span
-                        className={cn('connection-dot', ok && 'connected')}
-                        title={ok ? 'Configurado' : 'Pendiente'}
-                      />
+          <div className="grid gap-6 lg:grid-cols-5">
+            <Card className="min-w-0 lg:col-span-3">
+              <CardHeader>
+                <CardTitle>
+                  <h2>Tu hospital y su guía de atención</h2>
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <form
+                  key={data.name + data.timeZone + data.agentEnabled + data.emergencyWhatsApp}
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    const f = new FormData(e.currentTarget);
+                    setSaving(true);
+                    try {
+                      await api('/settings', 'PUT', {
+                        name: f.get('name'),
+                        timeZone: f.get('timeZone'),
+                        guide: f.get('guide'),
+                        emergencyPhone: f.get('emergencyPhone'),
+                        emergencyWhatsApp: f.get('emergencyWhatsApp') === 'on',
+                        agentEnabled: f.get('agentEnabled') === 'on',
+                      });
+                      mutate();
+                      globalMutate('/me');
+                      toast.success('Configuración guardada');
+                    } catch (err) {
+                      toast.error((err as Error).message);
+                    } finally {
+                      setSaving(false);
+                    }
+                  }}
+                >
+                  <FieldGroup>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <UiField>
+                        <FieldLabel htmlFor="settings-name">Nombre del hospital</FieldLabel>
+                        <Input
+                          id="settings-name"
+                          name="name"
+                          defaultValue={data.name}
+                          required
+                          readOnly={data.hospitalConfigured}
+                        />
+                      </UiField>
+                      <UiField>
+                        <FieldLabel htmlFor="settings-time-zone">Zona horaria</FieldLabel>
+                        <Input
+                          id="settings-time-zone"
+                          name="timeZone"
+                          defaultValue={data.timeZone}
+                          required
+                          readOnly={data.hospitalConfigured}
+                        />
+                      </UiField>
+                      {data.hospitalConfigured && (
+                        <p className="text-sm text-muted-foreground sm:col-span-2">
+                          El nombre y la zona horaria vienen de Hospital y se actualizan desde allí.
+                        </p>
+                      )}
                     </div>
-                  );
-                })}
-                <p className="hint">
+                    <UiField>
+                      <FieldLabel htmlFor="settings-guide">Guía de atención</FieldLabel>
+                      <Textarea
+                        id="settings-guide"
+                        rows={9}
+                        name="guide"
+                        defaultValue={data.guide}
+                        placeholder="Horarios, servicios, instrucciones de atención y reglas de derivación…"
+                        maxLength={30000}
+                      />
+                      <FieldDescription>
+                        El agente utiliza esta guía junto con las herramientas autorizadas del
+                        hospital. Las decisiones clínicas se derivan al doctor.
+                      </FieldDescription>
+                    </UiField>
+                    <UiField>
+                      <FieldLabel htmlFor="settings-emergency-phone">
+                        Teléfono de urgencias
+                      </FieldLabel>
+                      <Input
+                        id="settings-emergency-phone"
+                        name="emergencyPhone"
+                        type="tel"
+                        defaultValue={data.emergencyPhone ?? ''}
+                        placeholder="Ej. 132 o +503 2200 0000"
+                        maxLength={20}
+                      />
+                      <FieldDescription>
+                        El agente lo envía al paciente cada vez que deriva una conversación a tu
+                        equipo, con un botón para llamar. Puede ser un número corto, como 132 o 911.
+                      </FieldDescription>
+                    </UiField>
+                    <UiField orientation="horizontal">
+                      <FieldContent>
+                        <FieldLabel htmlFor="settings-emergency-whatsapp">
+                          Este número tiene WhatsApp
+                        </FieldLabel>
+                        <FieldDescription>
+                          En una emergencia el paciente recibe también un botón para escribirle.
+                          Requiere el número con código de país, como +503 7000 0000.
+                        </FieldDescription>
+                      </FieldContent>
+                      <Switch
+                        id="settings-emergency-whatsapp"
+                        name="emergencyWhatsApp"
+                        defaultChecked={data.emergencyWhatsApp ?? false}
+                      />
+                    </UiField>
+                    <UiField orientation="horizontal">
+                      <FieldContent>
+                        <FieldLabel htmlFor="settings-agent-enabled">
+                          Atención automática
+                        </FieldLabel>
+                        <FieldDescription>
+                          Permite al agente atender conversaciones habilitadas.
+                        </FieldDescription>
+                      </FieldContent>
+                      <Switch
+                        id="settings-agent-enabled"
+                        name="agentEnabled"
+                        defaultChecked={data.agentEnabled}
+                      />
+                    </UiField>
+                    <div className="flex justify-end">
+                      <Button disabled={saving}>
+                        {saving ? <Spinner /> : <Check />}Guardar cambios
+                      </Button>
+                    </div>
+                  </FieldGroup>
+                </form>
+              </CardContent>
+            </Card>
+            <Card className="min-w-0 lg:col-span-2">
+              <CardHeader>
+                <CardTitle>
+                  <h2>Conexiones</h2>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-4">
+                <div className="flex flex-col gap-2">
+                  {[
+                    [HeartPulse, 'Hospital', data.hospitalConfigured, 'Agenda y expediente'],
+                    [
+                      MessageCircle,
+                      'WhatsApp',
+                      data.kapsoConfigured,
+                      data.sendEnabled
+                        ? 'Envío habilitado'
+                        : data.manualSendEnabled
+                          ? 'Envío manual habilitado'
+                          : 'Envío en pausa',
+                    ],
+                    [Sparkles, 'Agente de atención', data.aiConfigured, 'Respuestas y seguimiento'],
+                    [CalendarDays, 'Google Calendar', data.googleConnected, 'Agenda compartida'],
+                  ].map(([Icon, title, ok, sub], i) => {
+                    const I = Icon as typeof Inbox;
+                    return (
+                      <Item variant="outline" size="sm" key={i}>
+                        <ItemMedia variant="icon">
+                          <I />
+                        </ItemMedia>
+                        <ItemContent>
+                          <ItemTitle>{title as string}</ItemTitle>
+                          <ItemDescription>{sub as string}</ItemDescription>
+                        </ItemContent>
+                        <ItemActions>
+                          <Badge variant={ok ? 'secondary' : 'outline'}>
+                            {ok ? 'Configurado' : 'Pendiente'}
+                          </Badge>
+                        </ItemActions>
+                      </Item>
+                    );
+                  })}
+                </div>
+                <p className="text-sm text-muted-foreground">
                   Tu cuenta del Hospital reúne a tu equipo, pacientes y agenda. Google y WhatsApp te
                   pedirán autorización al conectarlos.
                 </p>
@@ -2276,78 +2675,89 @@ function SettingsView({ me }: { me: Me }) {
                   selected={data.googleCalendarId}
                   onChange={() => mutate()}
                 />
-              </div>
-            </section>
-            <section className="content-card wide">
-              <div className="card-toolbar">
-                <h2>Números de WhatsApp</h2>
-                <div className="button-group">
+              </CardContent>
+            </Card>
+            <Card className="min-w-0 lg:col-span-5">
+              <CardHeader>
+                <CardTitle>
+                  <h2>Números de WhatsApp</h2>
+                </CardTitle>
+                <CardAction>
                   <Button asChild size="sm">
                     <a href="/whatsapp">
                       <Plus />
                       Agregar mi número
                     </a>
                   </Button>
+                </CardAction>
+              </CardHeader>
+              <CardContent>
+                <div className="w-0 min-w-full">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Canal</TableHead>
+                        <TableHead>Atención</TableHead>
+                        <TableHead>Uso en el celular</TableHead>
+                        <TableHead>Conexión</TableHead>
+                        <TableHead>Estado</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {channels?.map((c) => (
+                        <TableRow key={c.id}>
+                          <TableCell>
+                            <div className="flex items-center gap-2">
+                              <MessageCircle className="size-4 text-muted-foreground" />
+                              <strong className="font-medium">{c.name}</strong>
+                            </div>
+                          </TableCell>
+                          <TableCell>{c.doctorId ? 'Doctor' : 'General'}</TableCell>
+                          <TableCell>
+                            {c.coexistence ? 'WhatsApp Business y Recepción' : 'Recepción'}
+                          </TableCell>
+                          <TableCell>
+                            <ChannelConnection id={c.id} />
+                          </TableCell>
+                          <TableCell>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={async () => {
+                                try {
+                                  await api('/channels/' + c.id, 'PATCH', { enabled: !c.enabled });
+                                  refreshChannels();
+                                  toast.success('Canal actualizado');
+                                } catch (e) {
+                                  toast.error((e as Error).message);
+                                }
+                              }}
+                            >
+                              {c.enabled ? <Pause /> : <Play />}
+                              {c.enabled ? 'Pausar' : 'Habilitar'}
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
                 </div>
-              </div>
-              <div className="table-scroll">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Canal</th>
-                      <th>Atención</th>
-                      <th>Uso en el celular</th>
-                      <th>Conexión</th>
-                      <th>Estado</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {channels?.map((c) => (
-                      <tr key={c.id}>
-                        <td>
-                          <div className="name-cell">
-                            <span className="channel-icon">
-                              <MessageCircle size={17} />
-                            </span>
-                            <strong>{c.name}</strong>
-                          </div>
-                        </td>
-                        <td>{c.doctorId ? 'Doctor' : 'General'}</td>
-                        <td>{c.coexistence ? 'WhatsApp Business y Recepción' : 'Recepción'}</td>
-                        <td>
-                          <ChannelConnection id={c.id} />
-                        </td>
-                        <td>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={async () => {
-                              try {
-                                await api('/channels/' + c.id, 'PATCH', { enabled: !c.enabled });
-                                refreshChannels();
-                                toast.success('Canal actualizado');
-                              } catch (e) {
-                                toast.error((e as Error).message);
-                              }
-                            }}
-                          >
-                            {c.enabled ? <Pause /> : <Play />}
-                            {c.enabled ? 'Pausar' : 'Habilitar'}
-                          </Button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-            <section className="content-card wide">
-              <div className="card-toolbar">
-                <h2>Equipo de atención</h2>
-                <a href="/?view=team">Administrar equipo y conversaciones ↗</a>
-              </div>
-            </section>
+              </CardContent>
+            </Card>
+            <Card className="min-w-0 lg:col-span-5">
+              <CardHeader>
+                <CardTitle>
+                  <h2>Equipo de atención</h2>
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <a className="text-sm font-medium underline underline-offset-4" href="/?view=team">
+                  Administrar equipo y conversaciones ↗
+                </a>
+              </CardContent>
+            </Card>
           </div>
+          <AttentionSettings />
         </div>
       ) : (
         !error && <Loading />

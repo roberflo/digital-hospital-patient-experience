@@ -2,17 +2,15 @@
 // Vista del dueño de plataforma (docs/platform-owner.md). Solo configura: elige una recepción y,
 // en su nombre, revisa la conexión con Hospital y conecta WhatsApp. Sin bandeja, contactos ni
 // ajustes. La elección vive en una cookie del servidor: aquí nunca se guarda ni viaja en la URL.
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import useSWR, { useSWRConfig } from 'swr';
 import {
+  AlertCircle,
   ArrowLeftRight,
   Building2,
-  ChevronRight,
   Copy,
   HeartPulse,
-  Loader2,
   LogOut,
-  Menu,
   MessageCircle,
   Pause,
   Plus,
@@ -33,11 +31,35 @@ import {
   type ActingLost,
 } from '@/lib/session-client';
 import { cn } from '@/lib/utils';
+import { Alert, AlertDescription, AlertTitle } from './ui/alert';
+import { Badge } from './ui/badge';
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from './ui/breadcrumb';
 import { Button } from './ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from './ui/empty';
+import { InputGroup, InputGroupAddon, InputGroupInput } from './ui/input-group';
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemGroup,
+  ItemMedia,
+  ItemSeparator,
+  ItemTitle,
+} from './ui/item';
+import { Separator } from './ui/separator';
+import { Spinner } from './ui/spinner';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { HospitalConnection } from './hospital-connection';
 import { ChannelConnection } from './conversation-workspace';
 import { useWhatsAppConnect, WhatsAppLinkFlow } from './whatsapp-link-flow';
-import styles from './platform-workspace.module.css';
+import { ThemeToggle } from './theme-toggle';
 
 type ActingFor = { tenantId: string; name: string };
 type Tenant = { id: string; name: string; hospitalConfigured: boolean; whatsAppConnected: boolean };
@@ -79,109 +101,131 @@ function ReceptionPicker() {
   const tenants = unreadable ? undefined : data?.tenants;
   const matches = tenants?.filter((t) => plain(t.name).includes(plain(query.trim()))) ?? [];
   return (
-    <section className="content-card" aria-labelledby="receptions-title">
-      <div className="card-toolbar">
-        <h2 id="receptions-title">
-          <Building2 size={18} /> Recepciones
-        </h2>
+    <Card role="region" aria-labelledby="receptions-title">
+      <CardHeader>
+        <CardTitle>
+          <h2 id="receptions-title" className="flex items-center gap-2">
+            <Building2 className="size-4" /> Recepciones
+          </h2>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
         {tenants && tenants.length > 0 && (
-          <div className="search-input">
-            <Search size={16} />
-            <input
+          <InputGroup className="sm:max-w-xs">
+            <InputGroupInput
               aria-label="Buscar recepción por nombre"
               placeholder="Buscar por nombre…"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               autoComplete="off"
             />
-          </div>
+            <InputGroupAddon>
+              <Search />
+            </InputGroupAddon>
+          </InputGroup>
         )}
-      </div>
-      {unreadable ? (
-        <div className={styles.state} role="alert">
-          <p>
-            No pudimos leer la lista de recepciones. La lectura falló: no significa que no haya
-            ninguna.
-          </p>
-          <Button variant="outline" size="sm" disabled={isValidating} onClick={() => mutate()}>
-            <RefreshCw /> Reintentar
-          </Button>
-        </div>
-      ) : !tenants ? (
-        <div className="loading">
-          <Loader2 className="animate-spin" size={20} /> Leyendo las recepciones…
-        </div>
-      ) : tenants.length === 0 ? (
-        <div className="empty">
-          <span>
-            <Building2 size={28} />
-          </span>
-          <h3>Aún no hay recepciones</h3>
-          <p>
-            Una recepción aparece aquí cuando la abres para un hospital, más abajo, o cuando su
-            Administrador entra por primera vez.
-          </p>
-        </div>
-      ) : (
-        <>
-          <p className={styles.count} role="status">
-            {matches.length === tenants.length
-              ? `${tenants.length} recepciones`
-              : `${matches.length} de ${tenants.length} recepciones`}
-            {matches.length > SHOWN && ` · se muestran ${SHOWN}; escribe el nombre para afinar`}
-          </p>
-          {failure && (
-            <p className={cn('error', styles.failure)} role="alert">
-              {failure}
+        {unreadable ? (
+          <Alert variant="destructive">
+            <AlertCircle />
+            <AlertDescription className="gap-3">
+              <p>
+                No pudimos leer la lista de recepciones. La lectura falló: no significa que no haya
+                ninguna.
+              </p>
+              <Button variant="outline" size="sm" disabled={isValidating} onClick={() => mutate()}>
+                <RefreshCw /> Reintentar
+              </Button>
+            </AlertDescription>
+          </Alert>
+        ) : !tenants ? (
+          <div className="flex items-center justify-center gap-2 p-6 text-sm text-muted-foreground">
+            <Spinner /> Leyendo las recepciones…
+          </div>
+        ) : tenants.length === 0 ? (
+          <Empty>
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <Building2 />
+              </EmptyMedia>
+              <EmptyTitle>Aún no hay recepciones</EmptyTitle>
+              <EmptyDescription>
+                Una recepción aparece aquí cuando la abres para un hospital, más abajo, o cuando su
+                Administrador entra por primera vez.
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        ) : (
+          <>
+            <p className="text-sm text-muted-foreground" role="status">
+              {matches.length === tenants.length
+                ? `${tenants.length} recepciones`
+                : `${matches.length} de ${tenants.length} recepciones`}
+              {matches.length > SHOWN && ` · se muestran ${SHOWN}; escribe el nombre para afinar`}
             </p>
-          )}
-          {matches.length === 0 ? (
-            <p className={styles.state}>Ninguna recepción coincide con «{query.trim()}».</p>
-          ) : (
-            <ul className={styles.list}>
-              {matches.slice(0, SHOWN).map((t) => (
-                <li key={t.id}>
-                  <button
-                    className={styles.row}
-                    disabled={!!choosing}
-                    onClick={async () => {
-                      setChoosing(t.id);
-                      setFailure('');
-                      try {
-                        await setActing(t.id);
-                      } catch (e) {
-                        setFailure((e as Error).message);
-                        setChoosing(null);
-                      }
-                    }}
-                  >
-                    <span className="hospital-mark">
-                      <Building2 size={18} />
-                    </span>
-                    <strong>{t.name}</strong>
-                    <span className={styles.facts}>
-                      <span data-ok={t.hospitalConfigured}>
-                        <HeartPulse size={14} />
-                        {t.hospitalConfigured ? 'Hospital configurado' : 'Hospital sin configurar'}
-                      </span>
-                      <span data-ok={t.whatsAppConnected}>
-                        <MessageCircle size={14} />
-                        {t.whatsAppConnected ? 'WhatsApp conectado' : 'Sin número de WhatsApp'}
-                      </span>
-                    </span>
-                    {choosing === t.id ? (
-                      <Loader2 className="animate-spin" size={16} />
-                    ) : (
-                      <ChevronRight size={16} aria-hidden="true" />
-                    )}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </>
-      )}
-    </section>
+            {failure && (
+              <Alert variant="destructive">
+                <AlertCircle />
+                <AlertDescription>{failure}</AlertDescription>
+              </Alert>
+            )}
+            {matches.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                Ninguna recepción coincide con «{query.trim()}».
+              </p>
+            ) : (
+              <ItemGroup className="max-h-144 overflow-y-auto">
+                {matches.slice(0, SHOWN).map((t, index) => (
+                  <Fragment key={t.id}>
+                    {index > 0 && <ItemSeparator />}
+                    <Item size="sm">
+                      <ItemMedia variant="icon">
+                        <Building2 />
+                      </ItemMedia>
+                      <ItemContent className="min-w-0">
+                        <ItemTitle>{t.name}</ItemTitle>
+                        <div className="flex flex-wrap gap-2">
+                          <Badge variant={t.hospitalConfigured ? 'secondary' : 'outline'}>
+                            <HeartPulse />
+                            {t.hospitalConfigured
+                              ? 'Hospital configurado'
+                              : 'Hospital sin configurar'}
+                          </Badge>
+                          <Badge variant={t.whatsAppConnected ? 'secondary' : 'outline'}>
+                            <MessageCircle />
+                            {t.whatsAppConnected ? 'WhatsApp conectado' : 'Sin número de WhatsApp'}
+                          </Badge>
+                        </div>
+                      </ItemContent>
+                      <ItemActions>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={!!choosing}
+                          aria-label={`Elegir: ${t.name}`}
+                          onClick={async () => {
+                            setChoosing(t.id);
+                            setFailure('');
+                            try {
+                              await setActing(t.id);
+                            } catch (e) {
+                              setFailure((e as Error).message);
+                              setChoosing(null);
+                            }
+                          }}
+                        >
+                          {choosing === t.id && <Spinner />}
+                          Elegir
+                        </Button>
+                      </ItemActions>
+                    </Item>
+                  </Fragment>
+                ))}
+              </ItemGroup>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -259,23 +303,29 @@ function ReceptionOpener() {
     }
   }
   return (
-    <section className="content-card" aria-labelledby="open-reception-title">
-      <div className="card-toolbar">
-        <h2 id="open-reception-title">
-          <Plus size={18} /> Abrir la recepción de un hospital
-        </h2>
-        <div className="button-group">
+    <Card role="region" aria-labelledby="open-reception-title">
+      <CardHeader>
+        <CardTitle>
+          <h2 id="open-reception-title" className="flex items-center gap-2">
+            <Plus className="size-4" /> Abrir la recepción de un hospital
+          </h2>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        <div className="flex flex-wrap items-center gap-2">
           {open && pending && pending.length > 0 && (
-            <div className="search-input">
-              <Search size={16} />
-              <input
+            <InputGroup className="sm:max-w-xs">
+              <InputGroupInput
                 aria-label="Buscar hospital por nombre"
                 placeholder="Buscar por nombre…"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 autoComplete="off"
               />
-            </div>
+              <InputGroupAddon>
+                <Search />
+              </InputGroupAddon>
+            </InputGroup>
           )}
           <Button
             variant="outline"
@@ -286,79 +336,101 @@ function ReceptionOpener() {
             {open ? 'Ocultar' : 'Ver hospitales sin recepción'}
           </Button>
         </div>
-      </div>
-      {!open ? (
-        <p className={styles.state}>
-          Para un hospital que ya existe en Hospital y todavía no tiene Recepción. Al abrirla queda
-          elegida para configurarla.
-        </p>
-      ) : unreadable ? (
-        <div className={styles.state} role="alert">
-          <p>
-            No pudimos leer los hospitales desde Hospital. La lectura falló: no significa que todos
-            tengan ya recepción.
+        {!open ? (
+          <p className="text-sm text-muted-foreground">
+            Para un hospital que ya existe en Hospital y todavía no tiene Recepción. Al abrirla
+            queda elegida para configurarla.
           </p>
-          <Button variant="outline" size="sm" disabled={isValidating} onClick={() => mutate()}>
-            <RefreshCw /> Reintentar
-          </Button>
-        </div>
-      ) : !pending ? (
-        <div className="loading">
-          <Loader2 className="animate-spin" size={20} /> Leyendo los hospitales…
-        </div>
-      ) : pending.length === 0 ? (
-        <p className={styles.state}>Todos los hospitales ya tienen recepción.</p>
-      ) : matches.length === 0 ? (
-        <p className={styles.state}>Ningún hospital coincide con «{query.trim()}».</p>
-      ) : (
-        <>
-          <p className={styles.count} role="status">
-            {matches.length === pending.length
-              ? `${pending.length} sin recepción`
-              : `${matches.length} de ${pending.length} sin recepción`}
-            {matches.length > SHOWN && ` · se muestran ${SHOWN}; escribe el nombre para afinar`}
+        ) : unreadable ? (
+          <Alert variant="destructive">
+            <AlertCircle />
+            <AlertDescription className="gap-3">
+              <p>
+                No pudimos leer los hospitales desde Hospital. La lectura falló: no significa que
+                todos tengan ya recepción.
+              </p>
+              <Button variant="outline" size="sm" disabled={isValidating} onClick={() => mutate()}>
+                <RefreshCw /> Reintentar
+              </Button>
+            </AlertDescription>
+          </Alert>
+        ) : !pending ? (
+          <div className="flex items-center justify-center gap-2 p-6 text-sm text-muted-foreground">
+            <Spinner /> Leyendo los hospitales…
+          </div>
+        ) : pending.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Todos los hospitales ya tienen recepción.</p>
+        ) : matches.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Ningún hospital coincide con «{query.trim()}».
           </p>
-          <ul className={styles.list}>
-            {matches.slice(0, SHOWN).map((h) => {
-              const said = notes[h.id] || undefined;
-              const label = repeated.has(h.name) ? `${h.name} (${h.id.slice(0, 8)})` : h.name;
-              return (
-                <li key={h.id} className={styles.openRow}>
-                  <span className="hospital-mark">
-                    <Building2 size={18} />
-                  </span>
-                  <div>
-                    <strong>{h.name}</strong>
-                    {repeated.has(h.name) && <small> · {h.id.slice(0, 8)}</small>}
-                    {said && (
-                      <p role={said === 'already' ? 'status' : 'alert'}>
-                        {openNotes[said] ?? said}
-                      </p>
-                    )}
-                  </div>
-                  {said !== 'unknown' && (
-                    <Button
-                      variant={said ? 'outline' : 'default'}
-                      size="sm"
-                      disabled={!!busy}
-                      aria-label={`${said === 'already' ? 'Elegir' : said ? 'Reintentar' : 'Abrir'}: ${label}`}
-                      onClick={() => act(h)}
-                    >
-                      {busy === h.id ? (
-                        <Loader2 className="animate-spin" />
-                      ) : said && said !== 'already' ? (
-                        <RefreshCw />
-                      ) : null}
-                      {said === 'already' ? 'Elegir' : said ? 'Reintentar' : 'Abrir'}
-                    </Button>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        </>
-      )}
-    </section>
+        ) : (
+          <>
+            <p className="text-sm text-muted-foreground" role="status">
+              {matches.length === pending.length
+                ? `${pending.length} sin recepción`
+                : `${matches.length} de ${pending.length} sin recepción`}
+              {matches.length > SHOWN && ` · se muestran ${SHOWN}; escribe el nombre para afinar`}
+            </p>
+            <ItemGroup className="max-h-144 overflow-y-auto">
+              {matches.slice(0, SHOWN).map((h, index) => {
+                const said = notes[h.id] || undefined;
+                const label = repeated.has(h.name) ? `${h.name} (${h.id.slice(0, 8)})` : h.name;
+                return (
+                  <Fragment key={h.id}>
+                    {index > 0 && <ItemSeparator />}
+                    <Item size="sm">
+                      <ItemMedia variant="icon">
+                        <Building2 />
+                      </ItemMedia>
+                      <ItemContent className="min-w-0">
+                        <ItemTitle>
+                          {h.name}
+                          {repeated.has(h.name) && (
+                            <span className="font-normal text-muted-foreground">
+                              · {h.id.slice(0, 8)}
+                            </span>
+                          )}
+                        </ItemTitle>
+                        {said && (
+                          <p
+                            role={said === 'already' ? 'status' : 'alert'}
+                            className={cn(
+                              'text-sm',
+                              said === 'already' ? 'text-muted-foreground' : 'text-destructive',
+                            )}
+                          >
+                            {openNotes[said] ?? said}
+                          </p>
+                        )}
+                      </ItemContent>
+                      {said !== 'unknown' && (
+                        <ItemActions>
+                          <Button
+                            variant={said ? 'outline' : 'default'}
+                            size="sm"
+                            disabled={!!busy}
+                            aria-label={`${said === 'already' ? 'Elegir' : said ? 'Reintentar' : 'Abrir'}: ${label}`}
+                            onClick={() => act(h)}
+                          >
+                            {busy === h.id ? (
+                              <Spinner />
+                            ) : said && said !== 'already' ? (
+                              <RefreshCw />
+                            ) : null}
+                            {said === 'already' ? 'Elegir' : said ? 'Reintentar' : 'Abrir'}
+                          </Button>
+                        </ItemActions>
+                      )}
+                    </Item>
+                  </Fragment>
+                );
+              })}
+            </ItemGroup>
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -381,7 +453,7 @@ function WhatsAppSection() {
   const install = whatsappStep(installation, { data: [] }, {});
   const rows = channels.error
     ? undefined
-    : channels.data?.filter((c) => c.phoneNumberId !== 'demo');
+    : channels.data?.filter((c) => !c.phoneNumberId.startsWith('demo'));
   async function toggle(channel: Channel) {
     try {
       await api('/channels/' + channel.id, 'PATCH', { enabled: !channel.enabled });
@@ -398,40 +470,52 @@ function WhatsAppSection() {
     }
   }
   return (
-    <section className="content-card" aria-labelledby="platform-whatsapp-title">
-      <div className="card-toolbar">
-        <h2 id="platform-whatsapp-title">
-          <MessageCircle size={18} /> WhatsApp
-        </h2>
-      </div>
-      <div className={styles.body}>
-        {install.state === 'loading' && <p>Comprobando la instalación…</p>}
+    <Card role="region" aria-labelledby="platform-whatsapp-title">
+      <CardHeader>
+        <CardTitle>
+          <h2 id="platform-whatsapp-title" className="flex items-center gap-2">
+            <MessageCircle className="size-4" /> WhatsApp
+          </h2>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        {install.state === 'loading' && (
+          <p className="text-sm text-muted-foreground">Comprobando la instalación…</p>
+        )}
         {install.state === 'unknown' && (
-          <div role="alert">
-            <p>No pudimos leer el estado de la instalación. No sabemos si se puede conectar.</p>
-            <Button variant="outline" size="sm" onClick={() => installation.mutate()}>
-              <RefreshCw /> Reintentar
-            </Button>
-          </div>
+          <Alert variant="destructive">
+            <AlertCircle />
+            <AlertDescription className="gap-3">
+              <p>No pudimos leer el estado de la instalación. No sabemos si se puede conectar.</p>
+              <Button variant="outline" size="sm" onClick={() => installation.mutate()}>
+                <RefreshCw /> Reintentar
+              </Button>
+            </AlertDescription>
+          </Alert>
         )}
         {install.state === 'blocked' && (
-          <p className={styles.operator} role="status">
-            <Wrench size={16} aria-hidden="true" />
-            <span>
-              <strong>Tarea del operador de la instalación.</strong> Falta configurar{' '}
-              {install.missing?.map((name, n) => (
-                <span key={name}>
-                  {n > 0 && ', '}
-                  <code>{name}</code>
-                </span>
-              ))}
-              . Hasta entonces no se puede conectar ni verificar un número desde aquí.
-            </span>
-          </p>
+          <Alert role="status">
+            <Wrench aria-hidden="true" />
+            <AlertTitle className="line-clamp-none">
+              Tarea del operador de la instalación.
+            </AlertTitle>
+            <AlertDescription>
+              <p>
+                Falta configurar{' '}
+                {install.missing?.map((name, n) => (
+                  <span key={name}>
+                    {n > 0 && ', '}
+                    <code className="break-all">{name}</code>
+                  </span>
+                ))}
+                . Hasta entonces no se puede conectar ni verificar un número desde aquí.
+              </p>
+            </AlertDescription>
+          </Alert>
         )}
         {install.state === 'pending' && (
           <>
-            <p className="hint">
+            <p className="max-w-prose text-sm text-muted-foreground">
               Genera el enlace y envíalo a quien administra el número en Meta, en el hospital: es
               esa persona quien lo abre. Cuando termine, pulsa Verificar conexión. Conectar un
               número no activa respuestas automáticas.
@@ -441,7 +525,7 @@ function WhatsAppSection() {
               <Button
                 variant="outline"
                 size="sm"
-                className="mt-3"
+                className="self-start"
                 onClick={async () => {
                   try {
                     await navigator.clipboard.writeText(flow.link!.url);
@@ -457,90 +541,96 @@ function WhatsAppSection() {
           </>
         )}
         {agentActive && (
-          <p className={styles.operator} role="status">
-            <ShieldCheck size={16} aria-hidden="true" />
-            <span>
+          <Alert role="status">
+            <ShieldCheck aria-hidden="true" />
+            <AlertDescription>
               El agente de esta recepción está activo; habilitar el número lo pondría a contestar.
               Lo habilita el Administrador del hospital. Desde aquí puedes pausarlo.
-            </span>
-          </p>
+            </AlertDescription>
+          </Alert>
         )}
         {reminderNumbers.length > 0 && (
-          <p className={styles.operator} role="status">
-            <ShieldCheck size={16} aria-hidden="true" />
-            <span>
+          <Alert role="status">
+            <ShieldCheck aria-hidden="true" />
+            <AlertDescription>
               Los recordatorios automáticos de esta recepción están activos; habilitar el número
               volvería a enviarlos. Lo habilita el Administrador del hospital.
-            </span>
-          </p>
+            </AlertDescription>
+          </Alert>
         )}
-      </div>
-      <h3 className={styles.subtitle}>Números de esta recepción</h3>
-      {channels.error ? (
-        <div className={styles.state} role="alert">
-          <p>No pudimos leer los números de esta recepción.</p>
-          <Button variant="outline" size="sm" onClick={() => channels.mutate()}>
-            <RefreshCw /> Reintentar
-          </Button>
-        </div>
-      ) : !rows ? (
-        <p className={styles.state}>Leyendo los números…</p>
-      ) : rows.length === 0 ? (
-        <p className={styles.state}>Esta recepción aún no tiene números conectados.</p>
-      ) : (
-        <div className="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>Canal</th>
-                <th>Atención</th>
-                <th>Uso en el celular</th>
-                <th>Conexión</th>
-                <th>Estado</th>
-              </tr>
-            </thead>
-            <tbody>
+        <Separator />
+        <h3 className="text-sm font-medium">Números de esta recepción</h3>
+        {channels.error ? (
+          <Alert variant="destructive">
+            <AlertCircle />
+            <AlertDescription className="gap-3">
+              <p>No pudimos leer los números de esta recepción.</p>
+              <Button variant="outline" size="sm" onClick={() => channels.mutate()}>
+                <RefreshCw /> Reintentar
+              </Button>
+            </AlertDescription>
+          </Alert>
+        ) : !rows ? (
+          <p className="text-sm text-muted-foreground">Leyendo los números…</p>
+        ) : rows.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Esta recepción aún no tiene números conectados.
+          </p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Canal</TableHead>
+                <TableHead>Atención</TableHead>
+                <TableHead>Uso en el celular</TableHead>
+                <TableHead>Conexión</TableHead>
+                <TableHead>Estado</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {rows.map((c) => (
-                <tr key={c.id}>
-                  <td>
-                    <div className="name-cell">
-                      <span className="channel-icon">
-                        <MessageCircle size={17} />
-                      </span>
-                      <strong>{c.name}</strong>
+                <TableRow key={c.id}>
+                  <TableCell>
+                    <div className="flex items-center gap-2">
+                      <MessageCircle className="size-4 text-muted-foreground" />
+                      <span className="font-medium">{c.name}</span>
                     </div>
-                  </td>
-                  <td>{c.doctorId ? 'Doctor' : 'General'}</td>
-                  <td>{c.coexistence ? 'WhatsApp Business y Recepción' : 'Recepción'}</td>
-                  <td>
+                  </TableCell>
+                  <TableCell>{c.doctorId ? 'Doctor' : 'General'}</TableCell>
+                  <TableCell>
+                    {c.coexistence ? 'WhatsApp Business y Recepción' : 'Recepción'}
+                  </TableCell>
+                  <TableCell>
                     {install.state === 'pending' ? (
                       <ChannelConnection id={c.id} />
                     ) : (
-                      <span className="hint">
+                      <span className="text-muted-foreground">
                         {install.state === 'blocked' ? 'Pendiente del operador' : '—'}
                       </span>
                     )}
-                  </td>
-                  <td>
+                  </TableCell>
+                  <TableCell>
                     {c.enabled ? (
                       <Button variant="outline" size="sm" onClick={() => toggle(c)}>
                         <Pause /> Pausar
                       </Button>
                     ) : agentActive || reminderNumbers.includes(c.id) ? (
-                      <span className="hint">Pausado · lo habilita el Administrador</span>
+                      <span className="text-muted-foreground">
+                        Pausado · lo habilita el Administrador
+                      </span>
                     ) : (
                       <Button variant="outline" size="sm" onClick={() => toggle(c)}>
                         <Play /> Habilitar
                       </Button>
                     )}
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -553,7 +643,6 @@ export default function PlatformWorkspace({
 }) {
   // Before any child fetches: every request of this view names the reception it painted.
   if (typeof window !== 'undefined') expectActing(actingFor?.tenantId ?? null);
-  const [mobile, setMobile] = useState(false);
   const [changing, setChanging] = useState(false);
   // The choice is a browser-wide cookie. Once the proxy says it is no longer the one painted
   // here, this tab stops operating: nothing below is rendered, so nothing can be sent.
@@ -580,141 +669,121 @@ export default function PlatformWorkspace({
     }
   };
   return (
-    <div className="app-shell">
-      <aside className={cn('sidebar', mobile && 'open')}>
-        <a className="brand" href="/" aria-label="Recepción inicio">
-          <span className="brand-icon">
-            <HeartPulse />
+    <div className="flex min-h-svh flex-col">
+      <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4 md:px-6">
+        <a
+          className="flex shrink-0 items-center gap-2 font-medium"
+          href="/"
+          aria-label="Recepción inicio"
+        >
+          <span className="flex size-6 items-center justify-center rounded-md bg-primary text-primary-foreground">
+            <HeartPulse className="size-4" />
           </span>
-          recepción<span className="brand-dot">.</span>
+          <span className="hidden sm:inline">Recepción</span>
         </a>
-        <div className="hospital-switch">
-          <div className="hospital-mark">
-            <Building2 size={18} />
+        <Separator orientation="vertical" className="mx-2 data-[orientation=vertical]:h-4" />
+        <Breadcrumb className="min-w-0">
+          <BreadcrumbList className="flex-nowrap">
+            <BreadcrumbItem className="hidden md:block">Plataforma</BreadcrumbItem>
+            <BreadcrumbSeparator className="hidden md:block" />
+            <BreadcrumbItem className="min-w-0">
+              <BreadcrumbPage className="truncate">
+                {shown ? shown.name : 'Recepciones'}
+              </BreadcrumbPage>
+            </BreadcrumbItem>
+          </BreadcrumbList>
+        </Breadcrumb>
+        <div className="ml-auto flex shrink-0 items-center gap-3">
+          <Badge variant="outline" className="hidden lg:inline-flex">
+            <ShieldCheck /> Sesión protegida
+          </Badge>
+          <ThemeToggle />
+          <div className="hidden max-w-48 text-right text-sm leading-tight sm:grid">
+            <span className="truncate font-medium">{name}</span>
+            <span className="truncate text-xs text-muted-foreground">Dueño de plataforma</span>
           </div>
-          <div>
-            <strong>{shown?.name ?? 'Sin recepción elegida'}</strong>
-            <small>{shown ? 'Actuando en su nombre' : 'Elige una para configurarla'}</small>
-          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Cerrar sesión"
+            onClick={async () => {
+              // Signing out also drops the chosen reception (origin-checked DELETE).
+              await fetch('/api/platform/acting', { method: 'DELETE' }).catch(() => {});
+              await endSession();
+            }}
+          >
+            <LogOut />
+          </Button>
         </div>
-        <div className="nav-caption">PLATAFORMA</div>
-        <nav>
-          <a className="nav-item active" href="/" aria-current="page">
-            <Building2 size={18} />
-            <span>Recepciones</span>
-          </a>
-        </nav>
-        <div className="sidebar-bottom">
-          <div className="profile">
-            <div>
-              <strong>{name}</strong>
-              <small>Dueño de plataforma</small>
-            </div>
-            <button
-              aria-label="Cerrar sesión"
-              onClick={async () => {
-                // Signing out also drops the chosen reception (origin-checked DELETE).
-                await fetch('/api/platform/acting', { method: 'DELETE' }).catch(() => {});
-                await endSession();
-              }}
-            >
-              <LogOut size={17} />
-            </button>
-          </div>
+      </header>
+      {shown && (
+        <div
+          className="sticky top-0 z-20 flex items-center gap-3 border-b bg-muted px-4 py-2 text-sm md:px-6"
+          role="status"
+        >
+          <ArrowLeftRight className="size-4 shrink-0" aria-hidden="true" />
+          <span className="min-w-0 flex-1 break-words">
+            Actuando en nombre de <strong className="font-semibold">{shown.name}</strong>
+          </span>
+          <Button variant="outline" size="sm" disabled={changing} onClick={change}>
+            Cambiar
+          </Button>
         </div>
-      </aside>
-      {mobile && (
-        <button
-          className="mobile-shade"
-          aria-label="Cerrar menú"
-          onClick={() => setMobile(false)}
-        />
       )}
-      <main className="main">
-        <header className="topbar">
-          <div>
-            <button
-              className="mobile-menu"
-              onClick={() => setMobile(true)}
-              aria-label="Abrir menú"
-              aria-expanded={mobile}
-            >
-              <Menu />
-            </button>
-            <span className="breadcrumb">Plataforma</span>
-            <ChevronRight size={13} />
-            <strong>{shown ? shown.name : 'Recepciones'}</strong>
-          </div>
-          <div className="topbar-right">
-            <span className="secure">
-              <ShieldCheck size={15} /> Sesión protegida
-            </span>
-          </div>
-        </header>
-        {shown && (
-          <div className={styles.banner} role="status">
-            <ArrowLeftRight size={17} aria-hidden="true" />
-            <span>
-              Actuando en nombre de <strong>{shown.name}</strong>
-            </span>
-            <Button variant="outline" size="sm" disabled={changing} onClick={change}>
-              Cambiar
-            </Button>
-          </div>
+      <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 p-4 md:p-6">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {actingFor ? 'Configurar recepción' : 'Recepciones'}
+          </h1>
+          <p className="text-muted-foreground">
+            {actingFor
+              ? 'Conexión con Hospital y WhatsApp. La atención, los contactos y los ajustes son del hospital.'
+              : 'Elige la recepción que vas a configurar.'}
+          </p>
+        </div>
+        {state === 'acting_changed' ? (
+          <Alert>
+            <ArrowLeftRight />
+            <AlertTitle className="line-clamp-none">
+              Cambió de recepción en otra pestaña.
+            </AlertTitle>
+            <AlertDescription className="gap-3">
+              <p>
+                Esta pestaña mostraba {actingFor?.name ?? 'otra recepción'} y ya no actúa en su
+                nombre. No se envió nada. Recarga para ver la recepción actual.
+              </p>
+              <Button size="sm" onClick={() => window.location.assign('/')}>
+                <RefreshCw /> Recargar
+              </Button>
+            </AlertDescription>
+          </Alert>
+        ) : state === 'acting_expired' ? (
+          <Alert>
+            <AlertCircle />
+            <AlertTitle className="line-clamp-none">
+              Tu elección caducó; elige la recepción de nuevo.
+            </AlertTitle>
+            <AlertDescription className="gap-3">
+              <p>
+                La elección dura doce horas, o la recepción ya no existe. No se envió nada en su
+                nombre.
+              </p>
+              <Button size="sm" disabled={changing} onClick={change}>
+                Elegir recepción
+              </Button>
+            </AlertDescription>
+          </Alert>
+        ) : actingFor ? (
+          <>
+            <HospitalConnection platform />
+            <WhatsAppSection />
+          </>
+        ) : (
+          <>
+            <ReceptionPicker />
+            <ReceptionOpener />
+          </>
         )}
-        <div className="page-heading">
-          <div>
-            <div className="eyebrow">PLATAFORMA</div>
-            <h1>
-              {actingFor ? 'Configurar recepción' : 'Recepciones'}
-              <span className="title-dot" />
-            </h1>
-            <p>
-              {actingFor
-                ? 'Conexión con Hospital y WhatsApp. La atención, los contactos y los ajustes son del hospital.'
-                : 'Elige la recepción que vas a configurar.'}
-            </p>
-          </div>
-        </div>
-        <div className={cn('page-content', styles.sections)}>
-          {state === 'acting_changed' ? (
-            <section className="content-card" role="alert">
-              <div className={styles.state}>
-                <strong>Cambió de recepción en otra pestaña.</strong>
-                <p>
-                  Esta pestaña mostraba {actingFor?.name ?? 'otra recepción'} y ya no actúa en su
-                  nombre. No se envió nada. Recarga para ver la recepción actual.
-                </p>
-                <Button size="sm" onClick={() => window.location.assign('/')}>
-                  <RefreshCw /> Recargar
-                </Button>
-              </div>
-            </section>
-          ) : state === 'acting_expired' ? (
-            <section className="content-card" role="alert">
-              <div className={styles.state}>
-                <strong>Tu elección caducó; elige la recepción de nuevo.</strong>
-                <p>
-                  La elección dura doce horas, o la recepción ya no existe. No se envió nada en su
-                  nombre.
-                </p>
-                <Button size="sm" disabled={changing} onClick={change}>
-                  Elegir recepción
-                </Button>
-              </div>
-            </section>
-          ) : actingFor ? (
-            <>
-              <HospitalConnection platform />
-              <WhatsAppSection />
-            </>
-          ) : (
-            <>
-              <ReceptionPicker />
-              <ReceptionOpener />
-            </>
-          )}
-        </div>
       </main>
     </div>
   );

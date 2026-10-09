@@ -1,10 +1,13 @@
 'use client';
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import useSWR from 'swr';
-import { Link2, RefreshCw } from 'lucide-react';
+import { AlertCircle, Link2, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { api, fetcher } from '@/lib/api';
+import { Alert, AlertDescription } from './ui/alert';
 import { Button } from './ui/button';
+import { Field, FieldDescription, FieldLabel } from './ui/field';
+import { NativeSelect, NativeSelectOption } from './ui/native-select';
 
 export function GoogleCalendarConnection({
   connected,
@@ -21,6 +24,7 @@ export function GoogleCalendarConnection({
     { shouldRetryOnError: false },
   );
   const [busy, setBusy] = useState(false);
+  const calendarId = useId();
   async function perform(action: () => Promise<void>) {
     setBusy(true);
     try {
@@ -32,8 +36,8 @@ export function GoogleCalendarConnection({
     }
   }
   return (
-    <div className="settings-form">
-      <p className="hint">
+    <div className="flex flex-col items-start gap-4">
+      <p className="text-sm text-muted-foreground">
         Puedes copiar las citas a Google Calendar. La agenda del Hospital seguirá siendo la que
         utiliza tu equipo.
       </p>
@@ -53,15 +57,22 @@ export function GoogleCalendarConnection({
       {connected && (
         <>
           {error ? (
-            <p role="alert">
-              No pudimos consultar tus calendarios. Vuelve a conectar Google para revisar el acceso.
-            </p>
+            <Alert variant="destructive">
+              <AlertCircle />
+              <AlertDescription>
+                No pudimos consultar tus calendarios. Vuelve a conectar Google para revisar el
+                acceso.
+              </AlertDescription>
+            </Alert>
           ) : !calendars ? (
-            <p role="status">Buscando tus calendarios…</p>
+            <p className="text-sm text-muted-foreground" role="status">
+              Buscando tus calendarios…
+            </p>
           ) : (
-            <label>
-              Calendario para las citas
-              <select
+            <Field>
+              <FieldLabel htmlFor={calendarId}>Calendario para las citas</FieldLabel>
+              <NativeSelect
+                id={calendarId}
                 aria-label="Calendario para las citas"
                 disabled={busy}
                 value={calendars.some((c) => c.id === selected) ? selected : ''}
@@ -75,23 +86,23 @@ export function GoogleCalendarConnection({
                     });
                 }}
               >
-                <option value="" disabled>
+                <NativeSelectOption value="" disabled>
                   {selected ? 'Revisa y selecciona el calendario' : 'Elige un calendario'}
-                </option>
+                </NativeSelectOption>
                 {calendars.map((c) => (
-                  <option key={c.id} value={c.id}>
+                  <NativeSelectOption key={c.id} value={c.id}>
                     {c.name}
                     {c.primary ? ' · Principal' : ''}
-                  </option>
+                  </NativeSelectOption>
                 ))}
-              </select>
+              </NativeSelect>
               {!calendars.length && (
-                <small>
+                <FieldDescription>
                   No hay calendarios con permiso para guardar citas. Revisa los permisos de tu
                   cuenta de Google.
-                </small>
+                </FieldDescription>
               )}
-            </label>
+            </Field>
           )}
           {selected && (
             <Button
@@ -111,8 +122,9 @@ export function GoogleCalendarConnection({
               Sincronizar próximos 7 días
             </Button>
           )}
-          <button
-            className="text-button"
+          <Button
+            variant="ghost"
+            size="sm"
             disabled={busy}
             onClick={() =>
               perform(async () => {
@@ -122,7 +134,7 @@ export function GoogleCalendarConnection({
             }
           >
             Desconectar Google
-          </button>
+          </Button>
         </>
       )}
     </div>

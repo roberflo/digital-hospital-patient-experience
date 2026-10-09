@@ -97,7 +97,13 @@ export type Activity = {
   createdAt: string;
   contactId?: string;
 };
-export type Member = { subject: string; name: string; role: string; disabled: boolean };
+export type Member = {
+  subject: string;
+  name: string;
+  role: string;
+  disabled: boolean;
+  whatsAppPhone?: string | null;
+};
 export type Opportunity = {
   hospitalQuote?: string;
   hospitalPurchaseId?: string;

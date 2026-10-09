@@ -1,10 +1,25 @@
 'use client';
 import { useState } from 'react';
 import useSWR from 'swr';
-import { Bell, RefreshCw } from 'lucide-react';
+import { AlertCircle, Bell, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { api, fetcher, type Channel, type Me } from '@/lib/api';
+import { Alert, AlertDescription } from './ui/alert';
+import { Badge } from './ui/badge';
 import { Button } from './ui/button';
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
+import { Field, FieldLabel } from './ui/field';
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemSeparator,
+  ItemTitle,
+} from './ui/item';
+import { NativeSelect, NativeSelectOption } from './ui/native-select';
+import { Separator } from './ui/separator';
 
 type Reminder = {
   id: string;
@@ -39,6 +54,14 @@ const statuses: Record<string, string> = {
   cancelled: 'Cancelado',
   skipped: 'Omitido',
 };
+const tones: Record<string, 'secondary' | 'destructive'> = {
+  sent: 'secondary',
+  delivered: 'secondary',
+  read: 'secondary',
+  failed: 'destructive',
+  uncertain: 'destructive',
+};
+const hint = 'text-sm text-muted-foreground';
 export function AppointmentReminders({ me }: { me: Me }) {
   const { data, error, mutate } = useSWR<Settings>('/appointment-reminders', fetcher, {
     refreshInterval: 15000,
@@ -68,28 +91,37 @@ export function AppointmentReminders({ me }: { me: Me }) {
       timeStyle: 'short',
     });
   return (
-    <section className="content-card appointment-reminder-settings">
-      <div className="card-toolbar">
-        <h2>
-          <Bell size={18} /> Recordatorios de citas
-        </h2>
-        <span className="tag">{data?.enabled ? 'Servicio activo' : 'Servicio en pausa'}</span>
-      </div>
-      <div className="reminder-settings-body">
-        <p>
-          A las <strong>09:00 del día anterior</strong> y <strong>una hora antes</strong> ·{' '}
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          <h2 className="flex items-center gap-2">
+            <Bell className="size-4" /> Recordatorios de citas
+          </h2>
+        </CardTitle>
+        <CardDescription>
+          A las <strong className="font-medium text-foreground">09:00 del día anterior</strong> y{' '}
+          <strong className="font-medium text-foreground">una hora antes</strong> ·{' '}
           {me.tenant.timeZone}. Se confirma el horario con Hospital antes de cada aviso.
-        </p>
+        </CardDescription>
+        <CardAction>
+          <Badge variant={data?.enabled ? 'default' : 'secondary'}>
+            {data?.enabled ? 'Servicio activo' : 'Servicio en pausa'}
+          </Badge>
+        </CardAction>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
         {error && (
-          <p role="alert" className="error">
-            {error.message}
-          </p>
+          <Alert variant="destructive">
+            <AlertCircle />
+            <AlertDescription>{error.message}</AlertDescription>
+          </Alert>
         )}
         {data && (
           <>
-            <label className="field">
-              Número general para recordatorios
-              <select
+            <Field className="max-w-md">
+              <FieldLabel htmlFor="reminder-channel">Número general para recordatorios</FieldLabel>
+              <NativeSelect
+                id="reminder-channel"
                 aria-label="Número para recordatorios"
                 value={data.channelId ?? ''}
                 disabled={busy}
@@ -98,17 +130,17 @@ export function AppointmentReminders({ me }: { me: Me }) {
                   void save(false, e.target.value);
                 }}
               >
-                <option value="">Seleccionar número</option>
+                <NativeSelectOption value="">Seleccionar número</NativeSelectOption>
                 {channels
                   ?.filter((c) => c.enabled && !c.doctorId)
                   .map((c) => (
-                    <option key={c.id} value={c.id}>
+                    <NativeSelectOption key={c.id} value={c.id}>
                       {c.name}
-                    </option>
+                    </NativeSelectOption>
                   ))}
-              </select>
-            </label>
-            <div className="reminder-actions">
+              </NativeSelect>
+            </Field>
+            <div className="flex flex-wrap gap-2">
               <Button
                 disabled={busy || !data.channelId}
                 variant={data.enabled ? 'outline' : 'default'}
@@ -132,7 +164,7 @@ export function AppointmentReminders({ me }: { me: Me }) {
                   }
                 }}
               >
-                <RefreshCw size={14} />
+                <RefreshCw />
                 Consultar agenda ahora
               </Button>
               <Button
@@ -152,74 +184,85 @@ export function AppointmentReminders({ me }: { me: Me }) {
                 Comprobar plantillas
               </Button>
             </div>
-            {!data.sendEnabled && (
-              <p className="hint">
-                Envío de notificaciones pausado en la instalación. La cola se puede consultar sin
-                enviar mensajes.
+            <div className="flex flex-col gap-2">
+              {!data.sendEnabled && (
+                <p className={hint}>
+                  Envío de notificaciones pausado en la instalación. La cola se puede consultar sin
+                  enviar mensajes.
+                </p>
+              )}
+              <p className={hint}>
+                {data.consentingContacts} pacientes vinculados con autorización. Regístrala en la
+                ficha de la conversación o pide al paciente escribir ACTIVAR RECORDATORIOS. BAJA
+                desactiva los avisos.
               </p>
-            )}
-            <p className="hint">
-              {data.consentingContacts} pacientes vinculados con autorización. Regístrala en la
-              ficha de la conversación o pide al paciente escribir ACTIVAR RECORDATORIOS. BAJA
-              desactiva los avisos.
-            </p>
-            <p className="hint">
-              Se usan dos plantillas de notificación aprobadas. No se incluyen recetas ni
-              información clínica en el recordatorio.
-            </p>
-            {templates?.map((t, i) => (
-              <p key={t.name} className="hint">
-                {i === 0 ? 'Día anterior' : 'Una hora antes'}:{' '}
-                {t.ready
-                  ? 'Aprobada y lista'
-                  : t.status === 'PENDING'
-                    ? 'Pendiente de aprobación'
-                    : t.status === 'NOT_FOUND'
-                      ? 'No registrada'
-                      : t.status === 'REJECTED'
-                        ? 'Rechazada'
-                        : t.status + ' · revisar compatibilidad'}
+              <p className={hint}>
+                Se usan dos plantillas de notificación aprobadas. No se incluyen recetas ni
+                información clínica en el recordatorio.
               </p>
-            ))}
-            {data.lastSyncAt && (
-              <p className="hint">Última consulta a Hospital: {format(data.lastSyncAt)}</p>
-            )}
+              {templates?.map((t, i) => (
+                <p key={t.name} className={hint}>
+                  {i === 0 ? 'Día anterior' : 'Una hora antes'}:{' '}
+                  {t.ready
+                    ? 'Aprobada y lista'
+                    : t.status === 'PENDING'
+                      ? 'Pendiente de aprobación'
+                      : t.status === 'NOT_FOUND'
+                        ? 'No registrada'
+                        : t.status === 'REJECTED'
+                          ? 'Rechazada'
+                          : t.status + ' · revisar compatibilidad'}
+                </p>
+              ))}
+              {data.lastSyncAt && (
+                <p className={hint}>Última consulta a Hospital: {format(data.lastSyncAt)}</p>
+              )}
+            </div>
             {data.error && (
-              <p role="alert" className="error">
-                {data.error}
-              </p>
+              <Alert variant="destructive">
+                <AlertCircle />
+                <AlertDescription>{data.error}</AlertDescription>
+              </Alert>
             )}
-            <h3>Últimos 100 recordatorios</h3>
+            <Separator />
+            <h3 className="text-sm font-medium">Últimos 100 recordatorios</h3>
             {!data.rows.length && (
-              <p className="hint">
+              <p className={hint}>
                 Todavía no hay avisos programados. Se generan para citas futuras de pacientes
                 vinculados con autorización.
               </p>
             )}
-            <div className="reminder-queue">
-              {data.rows.map((r) => (
-                <article key={r.id} className="reminder-row">
-                  <div>
-                    <strong>{r.patientName ?? 'Paciente'}</strong>
-                    <p>Cita: {format(r.startsAt)}</p>
-                    <small>
-                      Aviso: {format(r.dueAt)} ·{' '}
-                      {r.window === 'day_before' ? 'Día anterior' : 'Una hora antes'}
-                    </small>
-                  </div>
-                  <div>
-                    <span className="tag">
-                      {statuses[r.deliveryStatus ?? r.status] ?? r.status}
-                    </span>
-                    {r.reason && <p className="hint">{r.reason}</p>}
-                  </div>
-                </article>
+            <ItemGroup>
+              {data.rows.map((r, index) => (
+                <div key={r.id} role="listitem" className="flex flex-col">
+                  {index > 0 && <ItemSeparator />}
+                  <Item size="sm" className="px-0">
+                    <ItemContent className="min-w-0">
+                      <ItemTitle>{r.patientName ?? 'Paciente'}</ItemTitle>
+                      <ItemDescription className="line-clamp-none">
+                        Cita: {format(r.startsAt)}
+                      </ItemDescription>
+                      <p className="text-xs text-muted-foreground">
+                        Aviso: {format(r.dueAt)} ·{' '}
+                        {r.window === 'day_before' ? 'Día anterior' : 'Una hora antes'}
+                      </p>
+                      {r.reason && (
+                        <p className="text-xs wrap-anywhere text-muted-foreground">{r.reason}</p>
+                      )}
+                    </ItemContent>
+                    <ItemActions>
+                      <Badge variant={tones[r.deliveryStatus ?? r.status] ?? 'outline'}>
+                        {statuses[r.deliveryStatus ?? r.status] ?? r.status}
+                      </Badge>
+                    </ItemActions>
+                  </Item>
+                </div>
               ))}
-            </div>
+            </ItemGroup>
           </>
         )}
-      </div>
-    </section>
+      </CardContent>
+    </Card>
   );
 }
 export function ReminderConsent({ contactId }: { contactId: string }) {
@@ -229,15 +272,15 @@ export function ReminderConsent({ contactId }: { contactId: string }) {
   );
   const [busy, setBusy] = useState(false);
   return (
-    <div className="detail-section">
-      <div className="section-heading">
-        <h4>Recordatorios de citas</h4>
-        <Bell size={14} />
+    <section className="flex flex-col gap-2">
+      <div className="flex items-center justify-between gap-2">
+        <h4 className="text-sm font-medium">Recordatorios de citas</h4>
+        <Bell className="size-4 text-muted-foreground" />
       </div>
-      {error && <p className="hint">No se pudo consultar la autorización.</p>}
+      {error && <p className="text-sm text-destructive">No se pudo consultar la autorización.</p>}
       {data && (
         <>
-          <p className="hint">
+          <p className={hint}>
             {data.enabled
               ? 'El paciente autorizó recordatorios por WhatsApp.'
               : 'Registra la autorización sólo cuando el paciente haya aceptado recibir avisos.'}{' '}
@@ -246,6 +289,7 @@ export function ReminderConsent({ contactId }: { contactId: string }) {
           <Button
             variant="outline"
             size="sm"
+            className="h-auto min-h-8 w-full whitespace-normal"
             disabled={busy || (!data.enabled && !data.linked)}
             onClick={async () => {
               setBusy(true);
@@ -266,9 +310,9 @@ export function ReminderConsent({ contactId }: { contactId: string }) {
               ? 'Desactivar avisos del paciente'
               : 'Registrar autorización del paciente'}
           </Button>
-          {!data.linked && <p className="hint">Vincula primero el expediente de Hospital.</p>}
+          {!data.linked && <p className={hint}>Vincula primero el expediente de Hospital.</p>}
         </>
       )}
-    </div>
+    </section>
   );
 }

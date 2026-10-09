@@ -111,11 +111,11 @@ test('patient search requires explicit selection and phone verification when lin
 test('connection outage keeps identity visible and offers a plain-language retry', async ({
   page,
 }) => {
-  let attempts = 0;
+  // The dashboard's «Primeros pasos» checks the connection too, so the outage lasts until the retry.
+  let offline = true;
   await page.route('**/api/crm/hospital/connection**', (route) => {
     if (route.request().url().endsWith('/check')) {
-      attempts++;
-      return attempts === 1
+      return offline
         ? route.fulfill({ status: 503, json: { title: 'hospital.offline' } })
         : route.fulfill({ json: { connected: true } });
     }
@@ -127,6 +127,7 @@ test('connection outage keeps identity visible and offers a plain-language retry
   await expect(
     page.getByRole('alert').filter({ hasText: 'No pudimos comunicarnos con Hospital' }),
   ).toContainText('Tu cuenta y tus datos siguen vinculados');
+  offline = false;
   await page.getByRole('button', { name: 'Volver a intentar' }).click();
   await expect(page.getByRole('status')).toHaveText('Hospital conectado');
   await expect(

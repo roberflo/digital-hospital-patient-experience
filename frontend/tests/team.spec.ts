@@ -1,5 +1,5 @@
 import { test, expect, type Browser, type Page } from '@playwright/test';
-import { login, users, type User } from './login';
+import { login, users, type User, openMenu } from './login';
 test.afterEach(async ({ page }) => {
   await page.unrouteAll({ behavior: 'wait' });
 });
@@ -15,8 +15,7 @@ async function subject(page: Page, user: User): Promise<string> {
   return members.find((m: { name: string }) => m.name === users[user].name).subject;
 }
 async function nav(page: Page, name: string) {
-  const menu = page.getByRole('button', { name: 'Abrir menú' });
-  if (await menu.isVisible()) await menu.click();
+  await openMenu(page);
   await page.getByRole('button', { name, exact: true }).click();
 }
 test('team assigns multiple conversations, filters workload and transfers one with CRM history', async ({

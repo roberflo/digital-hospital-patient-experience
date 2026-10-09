@@ -1,7 +1,7 @@
 'use client';
 import { useState, type ReactNode } from 'react';
 import useSWR, { useSWRConfig } from 'swr';
-import { AlertTriangle, CheckCircle2, Circle, Loader2, RefreshCw, Wrench } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Circle, RefreshCw, Wrench } from 'lucide-react';
 import { toast } from 'sonner';
 import { api, fetcher, type Me } from '@/lib/api';
 import {
@@ -15,13 +15,31 @@ import {
   type StepState,
 } from '@/lib/first-steps';
 import { refreshHospitalIdentity } from '@/lib/hospital-identity';
+import { Badge } from './ui/badge';
 import { Button } from './ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
+import {
+  Item,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemMedia,
+  ItemSeparator,
+  ItemTitle,
+} from './ui/item';
+import { Progress } from './ui/progress';
+import { Spinner } from './ui/spinner';
 import { CopyAccessLink, type Workload } from './team-workspace';
 import { useWhatsAppConnect, WhatsAppLinkFlow } from './whatsapp-link-flow';
-import styles from './first-steps.module.css';
 
 type Connection = { configured: boolean; hospital: Me['tenant'] };
-type Settings = { name: string; timeZone: string; guide: string; emergencyPhone?: string | null };
+type Settings = {
+  name: string;
+  timeZone: string;
+  guide: string;
+  emergencyPhone?: string | null;
+  emergencyWhatsApp?: boolean;
+};
 
 const copy: Record<StepId, { title: string; detail: string }> = {
   hospital: {
@@ -53,10 +71,27 @@ const icons = {
   done: CheckCircle2,
   pending: Circle,
   failed: AlertTriangle,
-  loading: Loader2,
+  loading: Spinner,
   unknown: AlertTriangle,
   blocked: Wrench,
 };
+const tone: Record<StepState, string> = {
+  done: 'text-primary',
+  pending: 'text-muted-foreground',
+  failed: 'text-destructive',
+  loading: 'text-muted-foreground',
+  unknown: 'text-destructive',
+  blocked: 'text-destructive',
+};
+const badge: Record<StepState, 'secondary' | 'outline' | 'destructive'> = {
+  done: 'secondary',
+  pending: 'outline',
+  failed: 'destructive',
+  loading: 'outline',
+  unknown: 'destructive',
+  blocked: 'destructive',
+};
+const note = 'text-sm text-muted-foreground';
 // One Kapso/Hospital round trip per visit, never on focus or on a timer.
 const once = { revalidateOnFocus: false, shouldRetryOnError: false, dedupingInterval: 30000 };
 const post = <T,>([path]: [string, string]) => api<T>(path, 'POST', {});
@@ -125,6 +160,7 @@ export function FirstSteps({ me, onNavigate }: { me: Me; onNavigate: (view: stri
         timeZone: s.timeZone,
         guide: s.guide,
         emergencyPhone: s.emergencyPhone,
+        emergencyWhatsApp: s.emergencyWhatsApp ?? false,
         agentEnabled: true,
       });
       await Promise.all([globalMutate('/me'), globalMutate('/settings')]);
@@ -142,8 +178,9 @@ export function FirstSteps({ me, onNavigate }: { me: Me; onNavigate: (view: stri
       if (state === 'done')
         return (
           hospital && (
-            <p>
-              <strong>{hospital.name}</strong> · zona horaria {hospital.timeZone}
+            <p className={note}>
+              <span className="font-medium text-foreground">{hospital.name}</span> · zona horaria{' '}
+              {hospital.timeZone}
             </p>
           )
         );
@@ -156,13 +193,14 @@ export function FirstSteps({ me, onNavigate }: { me: Me; onNavigate: (view: stri
       );
     },
     whatsapp: ({ state, need, channel }) => {
-      if (state === 'done') return channel?.name && <p>{channel.name} · recibe mensajes</p>;
+      if (state === 'done')
+        return channel?.name && <p className={note}>{channel.name} · recibe mensajes</p>;
       if (state !== 'pending') return null;
       return (
         <>
           {need === 'activate' && channel && (
             <>
-              <p>
+              <p className={note}>
                 {channel.name ?? 'Tu número'} está vinculado pero inactivo: todavía no entra ningún
                 mensaje.
               </p>
@@ -172,7 +210,7 @@ export function FirstSteps({ me, onNavigate }: { me: Me; onNavigate: (view: stri
             </>
           )}
           {need === 'reception' && (
-            <p className={styles.warning}>
+            <p className="text-sm text-destructive">
               {channel?.name ?? 'Tu número'} está activo, pero Kapso aún no entrega sus mensajes a
               Recepción. Pulsa Verificar conexión para registrar la recepción de nuevo.
             </p>
@@ -184,11 +222,11 @@ export function FirstSteps({ me, onNavigate }: { me: Me; onNavigate: (view: stri
     team: ({ state }) =>
       state === 'pending' && (
         <>
-          <p>
+          <p className={note}>
             Las cuentas se crean en Hospital; aquí no hay alta. Comparte el enlace: cada persona
             aparece en tu equipo al iniciar sesión con su cuenta del hospital.
           </p>
-          <div className={styles.actions}>
+          <div className="flex flex-wrap gap-2">
             <CopyAccessLink size="sm" />
             <Button size="sm" variant="outline" onClick={() => onNavigate('team')}>
               Ir a Equipo
@@ -199,7 +237,9 @@ export function FirstSteps({ me, onNavigate }: { me: Me; onNavigate: (view: stri
     agent: ({ state }) =>
       state === 'pending' && (
         <>
-          <p>Al activarlo, el agente atiende las conversaciones nuevas de tus números activos.</p>
+          <p className={note}>
+            Al activarlo, el agente atiende las conversaciones nuevas de tus números activos.
+          </p>
           <Button size="sm" disabled={busy} onClick={activateAgent}>
             Activar agente
           </Button>
@@ -207,60 +247,71 @@ export function FirstSteps({ me, onNavigate }: { me: Me; onNavigate: (view: stri
       ),
   };
 
+  const ready = steps.filter((s) => s.state === 'done').length;
+
   return (
-    <section className={`content-card ${styles.guide}`} aria-labelledby="first-steps-title">
-      <div className="card-toolbar">
-        <h2 id="first-steps-title">Primeros pasos</h2>
-        <span className={styles.progress}>
-          {steps.filter((s) => s.state === 'done').length} de {steps.length} listos
-        </span>
-      </div>
-      <ol className={styles.steps}>
-        {steps.map((step) => {
-          const { id, state, missing } = step;
-          const { title, detail } = copy[id];
-          const Icon = icons[state];
-          return (
-            <li key={id} className={styles.step} data-state={state}>
-              <Icon
-                aria-hidden="true"
-                size={20}
-                className={state === 'loading' ? 'animate-spin' : undefined}
-              />
-              <div className={styles.text}>
-                <strong>{title}</strong>
-                <span>{detail}</span>
-                <span className={styles.status}>{status[state]}</span>
-                {state === 'blocked' && (
-                  <p>
-                    Esto lo resuelve el operador de la plataforma, no tú. Falta en la instalación:{' '}
-                    {missing?.map((name, n) => (
-                      <span key={name}>
-                        {n > 0 && ', '}
-                        <code>{name}</code>
-                      </span>
-                    ))}
-                    .
-                  </p>
-                )}
-                {body[id](step)}
-                {(state === 'unknown' || state === 'failed') && (
-                  <div className={styles.actions}>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      aria-label={`Reintentar: ${title}`}
-                      onClick={() => retry[id]()}
-                    >
-                      <RefreshCw /> Reintentar
-                    </Button>
-                  </div>
-                )}
-              </div>
-            </li>
-          );
-        })}
-      </ol>
+    <section aria-labelledby="first-steps-title">
+      <Card>
+        <CardHeader>
+          <CardTitle>
+            <h2 id="first-steps-title">Primeros pasos</h2>
+          </CardTitle>
+          <CardDescription>
+            {ready} de {steps.length} listos
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <Progress value={(ready / steps.length) * 100} aria-label="Avance de primeros pasos" />
+          <ItemGroup>
+            {steps.map((step, index) => {
+              const { id, state, missing } = step;
+              const { title, detail } = copy[id];
+              const Icon = icons[state];
+              return (
+                <div key={id} role="listitem" data-state={state} className="flex flex-col">
+                  {index > 0 && <ItemSeparator />}
+                  <Item className="px-0">
+                    <ItemMedia className="self-start">
+                      <Icon aria-hidden="true" className={`size-5 ${tone[state]}`} />
+                    </ItemMedia>
+                    <ItemContent className="min-w-0 items-start gap-2">
+                      <ItemTitle>{title}</ItemTitle>
+                      <ItemDescription className="line-clamp-none">{detail}</ItemDescription>
+                      <Badge variant={badge[state]} className="max-w-full">
+                        <span className="truncate">{status[state]}</span>
+                      </Badge>
+                      {state === 'blocked' && (
+                        <p className="text-sm text-destructive">
+                          Esto lo resuelve el operador de la plataforma, no tú. Falta en la
+                          instalación:{' '}
+                          {missing?.map((name, n) => (
+                            <span key={name}>
+                              {n > 0 && ', '}
+                              <code>{name}</code>
+                            </span>
+                          ))}
+                          .
+                        </p>
+                      )}
+                      {body[id](step)}
+                      {(state === 'unknown' || state === 'failed') && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          aria-label={`Reintentar: ${title}`}
+                          onClick={() => retry[id]()}
+                        >
+                          <RefreshCw /> Reintentar
+                        </Button>
+                      )}
+                    </ItemContent>
+                  </Item>
+                </div>
+              );
+            })}
+          </ItemGroup>
+        </CardContent>
+      </Card>
     </section>
   );
 }

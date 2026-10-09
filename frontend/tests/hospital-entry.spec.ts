@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { devPassword, login, users, type User } from './login';
+import { devPassword, login, openMenu, users, type User } from './login';
 
 const subject = async (page: Page): Promise<string> =>
   (await (await page.request.get('/api/crm/me')).json()).subject;
@@ -24,6 +24,7 @@ test('the same person enters Recepción without seeing Keycloak', async ({ page 
   const { admin } = await twoPeople(page);
   await page.goto('/login?as=' + admin);
   await page.waitForURL((url) => url.pathname === '/');
+  await openMenu(page);
   await expect(page.locator('.profile')).toContainText(users.admin.name);
 });
 
@@ -33,6 +34,7 @@ test('another person is asked for credentials and enters as them', async ({ page
   await expect(page.locator('#password')).toBeVisible();
   await credentials(page, 'other');
   await page.waitForURL((url) => url.pathname === '/');
+  await openMenu(page);
   await expect(page.locator('.profile')).toContainText(users.other.name);
 });
 

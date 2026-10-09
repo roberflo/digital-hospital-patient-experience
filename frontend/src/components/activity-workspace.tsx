@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import useSWR from 'swr';
 import {
   Activity,
+  AlertCircle,
   ArrowUpRight,
   Bot,
   CalendarDays,
@@ -16,7 +17,25 @@ import {
 } from 'lucide-react';
 import { fetcher, type Me } from '@/lib/api';
 import { AgentMetrics } from './agent-metrics';
+import { Alert, AlertDescription } from './ui/alert';
+import { Badge } from './ui/badge';
 import { Button } from './ui/button';
+import { Card, CardContent } from './ui/card';
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from './ui/empty';
+import { Field, FieldLabel } from './ui/field';
+import { Input } from './ui/input';
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from './ui/input-group';
+import { Item, ItemContent, ItemMedia, ItemTitle } from './ui/item';
+import { NativeSelect, NativeSelectOption } from './ui/native-select';
+import { Spinner } from './ui/spinner';
+import { Toggle } from './ui/toggle';
 
 type Event = {
   id: string;
@@ -104,15 +123,20 @@ const states: Record<string, string> = {
   snoozed: 'Pospuesta',
   resolved: 'Resuelta',
 };
+const roleTone: Record<string, 'default' | 'secondary' | 'outline'> = {
+  ai: 'secondary',
+  reception: 'default',
+  doctor: 'outline',
+};
 function ActorIcon({ type }: { type: string }) {
   return type === 'ai' ? (
-    <Bot size={19} />
+    <Bot />
   ) : type === 'doctor' ? (
-    <Stethoscope size={19} />
+    <Stethoscope />
   ) : type === 'reception' ? (
-    <UserRound size={19} />
+    <UserRound />
   ) : (
-    <Users size={19} />
+    <Users />
   );
 }
 function EventCard({
@@ -127,81 +151,94 @@ function EventCard({
   const [expanded, setExpanded] = useState(false);
   const deliveryProblem = ['failed', 'uncertain'].includes(event.deliveryStatus ?? '');
   return (
-    <article className={`care-event care-${event.careType}`}>
-      <div className="care-event-icon">
-        <ActorIcon type={event.careType} />
-      </div>
-      <div className="care-event-content">
-        <div className="care-event-top">
-          <span className="care-role">
-            {careOptions.find(([key]) => key === event.careType)?.[1] ?? 'Histórico sin rol'}
-          </span>
-          <time dateTime={event.createdAt}>
-            {new Date(event.createdAt).toLocaleTimeString('es-SV', {
-              timeZone: zone,
-              hour: '2-digit',
-              minute: '2-digit',
-            })}
-          </time>
-        </div>
-        <h3>{event.patientName ?? 'Actividad general del hospital'}</h3>
-        <p className="care-event-action">
-          <strong>{event.actor}</strong> ·{' '}
-          {event.kind === 'response' && deliveryProblem
-            ? 'Intentó responder al paciente'
-            : event.kind === 'response' && event.deliveryStatus === 'sending'
-              ? 'Está enviando una respuesta'
-              : (titles[event.kind] ?? 'Registró una acción en el CRM')}
-        </p>
-        {event.careType === 'unknown' && (
-          <small>Este registro anterior no guardó el rol de quien realizó la acción.</small>
-        )}
-        <p className="care-event-body">
-          {!expanded && event.body.length > 300 ? event.body.slice(0, 300) + '…' : event.body}
-        </p>
-        {event.body.length > 300 && (
-          <button
-            className="care-text-button"
-            aria-expanded={expanded}
-            onClick={() => setExpanded(!expanded)}
-          >
-            {expanded ? 'Mostrar menos' : 'Leer nota completa'}
-          </button>
-        )}
-        <div className="care-event-bottom">
-          {event.deliveryStatus && (
-            <span className={`care-delivery ${deliveryProblem ? 'care-delivery-error' : ''}`}>
-              {statuses[event.deliveryStatus] ?? event.deliveryStatus}
-            </span>
-          )}
-          {event.conversationState && (
-            <span className="care-state">
-              Ahora: {states[event.conversationState] ?? event.conversationState}
-            </span>
-          )}
-          {event.channelName && <span className="care-channel">{event.channelName}</span>}
-          <div className="care-event-links">
-            {event.contactId && (
-              <button
-                className="care-text-button"
-                onClick={onPatient}
-                aria-label={`Ver historial de ${event.patientName}`}
-              >
-                Historial del paciente
-              </button>
-            )}
-            {event.conversationId && (
-              <a
-                href={`/?view=inbox&conversationId=${event.conversationId}`}
-                className="care-text-button"
-              >
-                Abrir conversación <ArrowUpRight size={14} />
-              </a>
-            )}
+    <Item variant="outline" asChild>
+      <article>
+        <ItemMedia variant="icon" className="self-start">
+          <ActorIcon type={event.careType} />
+        </ItemMedia>
+        <ItemContent className="min-w-0 gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            {/* `care-role` carries no style: the Playwright suite finds the role chip by it. */}
+            <Badge variant={roleTone[event.careType] ?? 'outline'} className="care-role">
+              {careOptions.find(([key]) => key === event.careType)?.[1] ?? 'Histórico sin rol'}
+            </Badge>
+            <time dateTime={event.createdAt} className="text-xs text-muted-foreground">
+              {new Date(event.createdAt).toLocaleTimeString('es-SV', {
+                timeZone: zone,
+                hour: '2-digit',
+                minute: '2-digit',
+              })}
+            </time>
           </div>
-        </div>
-      </div>
-    </article>
+          <ItemTitle>
+            <h3>{event.patientName ?? 'Actividad general del hospital'}</h3>
+          </ItemTitle>
+          <p className="text-sm text-muted-foreground">
+            <strong className="font-medium text-foreground">{event.actor}</strong> ·{' '}
+            {event.kind === 'response' && deliveryProblem
+              ? 'Intentó responder al paciente'
+              : event.kind === 'response' && event.deliveryStatus === 'sending'
+                ? 'Está enviando una respuesta'
+                : (titles[event.kind] ?? 'Registró una acción en el CRM')}
+          </p>
+          {event.careType === 'unknown' && (
+            <small className="text-xs text-muted-foreground">
+              Este registro anterior no guardó el rol de quien realizó la acción.
+            </small>
+          )}
+          <p className="text-sm wrap-anywhere whitespace-pre-wrap">
+            {!expanded && event.body.length > 300 ? event.body.slice(0, 300) + '…' : event.body}
+          </p>
+          {event.body.length > 300 && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="self-start"
+              aria-expanded={expanded}
+              onClick={() => setExpanded(!expanded)}
+            >
+              {expanded ? 'Mostrar menos' : 'Leer nota completa'}
+            </Button>
+          )}
+          <div className="flex flex-wrap items-center gap-2">
+            {event.deliveryStatus && (
+              <Badge variant={deliveryProblem ? 'destructive' : 'outline'}>
+                {statuses[event.deliveryStatus] ?? event.deliveryStatus}
+              </Badge>
+            )}
+            {event.conversationState && (
+              <Badge variant="outline">
+                Ahora: {states[event.conversationState] ?? event.conversationState}
+              </Badge>
+            )}
+            {event.channelName && (
+              <span className="min-w-0 truncate text-xs text-muted-foreground">
+                {event.channelName}
+              </span>
+            )}
+            <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
+              {event.contactId && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={onPatient}
+                  aria-label={`Ver historial de ${event.patientName}`}
+                >
+                  Historial del paciente
+                </Button>
+              )}
+              {event.conversationId && (
+                <Button variant="ghost" size="sm" asChild>
+                  <a href={`/?view=inbox&conversationId=${event.conversationId}`}>
+                    Abrir conversación <ArrowUpRight />
+                  </a>
+                </Button>
+              )}
+            </div>
+          </div>
+        </ItemContent>
+      </article>
+    </Item>
   );
 }
 export function ActivityWorkspace({
@@ -257,103 +294,146 @@ export function ActivityWorkspace({
   }
   const filtered = !!(search || care || category || from || to || patient);
   return (
-    <section className="activity-workspace" aria-label="Historial de atención">
-      <div className="care-filters">
-        <div className="care-search-row">
-          <label className="care-search">
-            <Search size={18} />
-            <input
-              aria-label="Buscar en el historial"
-              placeholder="Paciente, teléfono, profesional o contenido de una nota…"
-              value={search}
-              maxLength={150}
-              onChange={(e) => onSearch(e.target.value)}
-            />
-            {search && (
-              <button aria-label="Borrar búsqueda" onClick={() => onSearch('')}>
-                <X size={16} />
-              </button>
-            )}
-          </label>
-          <Button
-            variant="outline"
-            onClick={() => mutate()}
-            disabled={isValidating || invalidDates}
-          >
-            <RefreshCw className={isValidating ? 'animate-spin' : ''} />
-            Actualizar
-          </Button>
-        </div>
-        <div className="care-filter-row">
-          <label>
-            Quién realizó la acción
-            <select value={care} onChange={(e) => setCare(e.target.value)}>
-              {careOptions.map(([key, text]) => (
-                <option key={key} value={key}>
-                  {text}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Tipo de acción
-            <select value={category} onChange={(e) => setCategory(e.target.value)}>
-              {categories.map(([key, text]) => (
-                <option key={key} value={key}>
-                  {text}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Desde
-            <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
-          </label>
-          <label>
-            Hasta
-            <input type="date" value={to} onChange={(e) => setTo(e.target.value)} />
-          </label>
-        </div>
-        <div className="care-filter-summary">
-          <span>
-            <CalendarDays size={14} /> Fechas y horas de {me.tenant.timeZone}
-          </span>
-          {patient && (
-            <span className="care-patient-filter">
-              {patient.name}
-              <button aria-label="Quitar filtro de paciente" onClick={() => setPatient(undefined)}>
-                <X size={14} />
-              </button>
+    <section
+      className="mx-auto flex w-full max-w-6xl flex-col gap-6"
+      aria-label="Historial de atención"
+    >
+      <Card>
+        <CardContent className="flex flex-col gap-4">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <InputGroup className="sm:flex-1">
+              <InputGroupInput
+                aria-label="Buscar en el historial"
+                placeholder="Paciente, teléfono, profesional o contenido de una nota…"
+                value={search}
+                maxLength={150}
+                onChange={(e) => onSearch(e.target.value)}
+              />
+              <InputGroupAddon>
+                <Search />
+              </InputGroupAddon>
+              {search && (
+                <InputGroupAddon align="inline-end">
+                  <InputGroupButton
+                    size="icon-xs"
+                    aria-label="Borrar búsqueda"
+                    onClick={() => onSearch('')}
+                  >
+                    <X />
+                  </InputGroupButton>
+                </InputGroupAddon>
+              )}
+            </InputGroup>
+            <Button
+              variant="outline"
+              onClick={() => mutate()}
+              disabled={isValidating || invalidDates}
+            >
+              {isValidating ? <Spinner /> : <RefreshCw />}
+              Actualizar
+            </Button>
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <Field className="min-w-0 gap-2">
+              <FieldLabel htmlFor="activity-care">Quién realizó la acción</FieldLabel>
+              <NativeSelect
+                id="activity-care"
+                value={care}
+                onChange={(e) => setCare(e.target.value)}
+              >
+                {careOptions.map(([key, text]) => (
+                  <NativeSelectOption key={key} value={key}>
+                    {text}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            </Field>
+            <Field className="min-w-0 gap-2">
+              <FieldLabel htmlFor="activity-category">Tipo de acción</FieldLabel>
+              <NativeSelect
+                id="activity-category"
+                value={category}
+                onChange={(e) => setCategory(e.target.value)}
+              >
+                {categories.map(([key, text]) => (
+                  <NativeSelectOption key={key} value={key}>
+                    {text}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            </Field>
+            <Field className="min-w-0 gap-2">
+              <FieldLabel htmlFor="activity-from">Desde</FieldLabel>
+              <Input
+                id="activity-from"
+                type="date"
+                value={from}
+                onChange={(e) => setFrom(e.target.value)}
+              />
+            </Field>
+            <Field className="min-w-0 gap-2">
+              <FieldLabel htmlFor="activity-to">Hasta</FieldLabel>
+              <Input
+                id="activity-to"
+                type="date"
+                value={to}
+                onChange={(e) => setTo(e.target.value)}
+              />
+            </Field>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+            <span className="flex items-center gap-2">
+              <CalendarDays className="size-4 shrink-0" /> Fechas y horas de {me.tenant.timeZone}
             </span>
-          )}
-          {filtered && (
-            <button className="care-text-button" onClick={clear}>
-              Limpiar filtros
-            </button>
-          )}
-        </div>
-      </div>
+            {patient && (
+              <span className="flex min-w-0 items-center gap-1">
+                <Badge variant="secondary" className="max-w-48">
+                  <span className="truncate">{patient.name}</span>
+                </Badge>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label="Quitar filtro de paciente"
+                  onClick={() => setPatient(undefined)}
+                >
+                  <X />
+                </Button>
+              </span>
+            )}
+            {filtered && (
+              <Button variant="ghost" size="sm" onClick={clear}>
+                Limpiar filtros
+              </Button>
+            )}
+          </div>
+        </CardContent>
+      </Card>
       {invalidDates ? (
-        <p role="alert" className="error">
-          La fecha Desde debe ser anterior o igual a Hasta.
-        </p>
+        <Alert variant="destructive">
+          <AlertCircle />
+          <AlertDescription>La fecha Desde debe ser anterior o igual a Hasta.</AlertDescription>
+        </Alert>
       ) : (
         <>
           <AgentMetrics />
-          <div className="care-results-bar">
-            <div>
-              <h2>
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="flex min-w-0 flex-col gap-1">
+              <h2 className="text-lg font-semibold tracking-tight">
                 {data
                   ? `${data.total} ${data.total === 1 ? 'acción encontrada' : 'acciones encontradas'}`
                   : 'Historial de atención'}
               </h2>
-              <p>
+              <p className="text-sm text-muted-foreground">
                 Del registro más reciente al más antiguo · las notas internas no se envían al
                 paciente.
               </p>
             </div>
             {data && (
-              <div className="care-quick-filters" aria-label="Filtrar por tipo de atención">
+              <div
+                role="group"
+                className="flex flex-wrap gap-2"
+                aria-label="Filtrar por tipo de atención"
+              >
                 {[
                   ['ai', 'IA', Bot],
                   ['reception', 'Recepción', UserRound],
@@ -362,58 +442,78 @@ export function ActivityWorkspace({
                   const key = id as string;
                   const Symbol = Icon as typeof Bot;
                   return (
-                    <button
+                    <Toggle
                       key={key}
-                      aria-pressed={care === key}
-                      className={`care-quick care-${key}`}
-                      onClick={() => setCare(care === key ? '' : key)}
+                      variant="outline"
+                      size="sm"
+                      pressed={care === key}
+                      onPressedChange={() => setCare(care === key ? '' : key)}
                     >
-                      <Symbol size={15} />
+                      <Symbol />
                       {title as string}
-                      <strong>{data.careCounts[key] ?? 0}</strong>
-                    </button>
+                      <strong className="font-semibold">{data.careCounts[key] ?? 0}</strong>
+                    </Toggle>
                   );
                 })}
               </div>
             )}
           </div>
           {error && (
-            <div className="care-empty" role="alert">
-              <p>{error.message}</p>
-              <Button variant="outline" onClick={() => mutate()}>
-                Reintentar
-              </Button>
-            </div>
+            <Alert variant="destructive">
+              <AlertCircle />
+              <AlertDescription>
+                <p>{error.message}</p>
+                <Button variant="outline" size="sm" onClick={() => mutate()}>
+                  Reintentar
+                </Button>
+              </AlertDescription>
+            </Alert>
           )}
           {isLoading && (
-            <div className="care-empty" role="status">
+            <div
+              className="flex items-center justify-center gap-2 p-10 text-sm text-muted-foreground"
+              role="status"
+            >
+              <Spinner aria-hidden="true" role="presentation" />
               Buscando en el historial del hospital…
             </div>
           )}
           {!error && data?.items.length === 0 && (
-            <div className="care-empty">
-              <Activity size={30} />
-              <h3>
-                {filtered
-                  ? 'No hay actividad que coincida'
-                  : 'Aquí verás cómo se atendió a cada paciente'}
-              </h3>
-              <p>
-                {filtered
-                  ? 'Prueba otro paciente, tipo de atención o rango de fechas.'
-                  : 'Aparecerán respuestas, transferencias, citas y notas del agente, recepción y doctores.'}
-              </p>
+            <Empty>
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <Activity />
+                </EmptyMedia>
+                <EmptyTitle>
+                  <h3>
+                    {filtered
+                      ? 'No hay actividad que coincida'
+                      : 'Aquí verás cómo se atendió a cada paciente'}
+                  </h3>
+                </EmptyTitle>
+                <EmptyDescription>
+                  {filtered
+                    ? 'Prueba otro paciente, tipo de atención o rango de fechas.'
+                    : 'Aparecerán respuestas, transferencias, citas y notas del agente, recepción y doctores.'}
+                </EmptyDescription>
+              </EmptyHeader>
               {filtered && (
-                <Button variant="outline" onClick={clear}>
-                  Mostrar toda la actividad
-                </Button>
+                <EmptyContent>
+                  <Button variant="outline" onClick={clear}>
+                    Mostrar toda la actividad
+                  </Button>
+                </EmptyContent>
               )}
-            </div>
+            </Empty>
           )}
           {!error &&
             [...groups.entries()].map(([day, events]) => (
-              <section className="care-day" key={day} aria-label={`Actividad del ${day}`}>
-                <h2 className="care-day-title">
+              <section
+                className="flex flex-col gap-2"
+                key={day}
+                aria-label={`Actividad del ${day}`}
+              >
+                <h2 className="text-sm font-medium text-muted-foreground first-letter:uppercase">
                   {new Date(day + 'T12:00:00Z').toLocaleDateString('es-SV', {
                     timeZone: 'UTC',
                     weekday: 'long',
@@ -435,19 +535,24 @@ export function ActivityWorkspace({
               </section>
             ))}
           {data && data.total > 0 && (
-            <nav className="care-pagination" aria-label="Páginas de actividad">
+            <nav
+              className="flex flex-wrap items-center justify-center gap-4"
+              aria-label="Páginas de actividad"
+            >
               <Button
                 variant="outline"
+                size="sm"
                 disabled={page <= 1 || isValidating}
                 onClick={() => setPage(page - 1)}
               >
                 Anterior
               </Button>
-              <span>
+              <span className="text-sm text-muted-foreground">
                 Página {page} de {Math.max(1, Math.ceil(data.total / data.pageSize))}
               </span>
               <Button
                 variant="outline"
+                size="sm"
                 disabled={page * data.pageSize >= data.total || isValidating}
                 onClick={() => setPage(page + 1)}
               >
@@ -455,8 +560,8 @@ export function ActivityWorkspace({
               </Button>
             </nav>
           )}
-          <p className="care-footnote">
-            <FileText size={14} />
+          <p className="flex items-start gap-2 text-xs text-muted-foreground">
+            <FileText className="size-4 shrink-0" />
             El rol mostrado corresponde al momento de la acción. El estado de la conversación indica
             su situación actual.
           </p>

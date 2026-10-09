@@ -1,10 +1,24 @@
 'use client';
-import { useEffect, useState } from 'react';
-import { FileHeart, RefreshCw, ArrowLeft } from 'lucide-react';
+import { useEffect, useId, useState } from 'react';
+import { AlertCircle, AlertTriangle, FileHeart, RefreshCw, ArrowLeft } from 'lucide-react';
 import { api, type Chat, type Me } from '@/lib/api';
 import { SESSION_EXPIRED } from '@/lib/session-client';
+import { Alert, AlertDescription } from './ui/alert';
+import { Badge } from './ui/badge';
 import { Button } from './ui/button';
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from './ui/dialog';
+import { Checkbox } from './ui/checkbox';
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog';
+import { Field, FieldLabel } from './ui/field';
+import { Item, ItemActions, ItemContent, ItemGroup, ItemTitle } from './ui/item';
+import { Spinner } from './ui/spinner';
 
 type Entry = {
   entryId: string;
@@ -150,8 +164,11 @@ function ClinicalRead<T>({
   return (
     <>
       {error ? (
-        <div role="alert">
-          <p className="error">{error}</p>
+        <div className="flex flex-col items-start gap-3">
+          <Alert variant="destructive">
+            <AlertCircle />
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
           <Button variant="outline" onClick={() => setAttempt(attempt + 1)}>
             <RefreshCw />
             Reintentar consulta
@@ -160,7 +177,10 @@ function ClinicalRead<T>({
       ) : data ? (
         children(data)
       ) : (
-        <p role="status">Consultando Hospital…</p>
+        <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Spinner role={undefined} aria-label={undefined} aria-hidden />
+          Consultando Hospital…
+        </p>
       )}
     </>
   );
@@ -168,133 +188,169 @@ function ClinicalRead<T>({
 
 function PresenceView({ value }: { value: Presence }) {
   return (
-    <>
-      <p className="tag">{label(value.state)}</p>
-      {value.note && <p>{value.note}</p>}
-      {value.reason && <p>Motivo: {value.reason}</p>}
-      {value.assertedAt && (
-        <small>
-          Declarado: {value.assertedAt.slice(0, 10)} · {value.assertedBy ?? 'Autor no informado'}
-        </small>
+    <div className="flex flex-col items-start gap-2">
+      <Badge variant="secondary">{label(value.state)}</Badge>
+      {value.note && <p className="text-sm break-words whitespace-pre-wrap">{value.note}</p>}
+      {value.reason && (
+        <p className="text-sm break-words whitespace-pre-wrap">Motivo: {value.reason}</p>
       )}
-      {value.items?.map((fact, index) => (
-        <article className="clinical-fact" key={fact.id ?? fact.allergyId ?? index}>
-          <strong>{fact.label ?? fact.substance}</strong>
-          <p>
-            {[
-              fact.severity && label(fact.severity),
-              fact.verification && label(fact.verification),
-              fact.provenance,
-            ]
-              .filter(Boolean)
-              .join(' · ')}
-          </p>
-          {fact.isActive === false && <p>Registro inactivo</p>}
-          {fact.currentTreatment && <p>Tratamiento registrado: {fact.currentTreatment}</p>}
-          {fact.note && <p>{fact.note}</p>}
-          <small>
-            {fact.assertedAt?.slice(0, 10)} · {fact.assertedBy ?? 'Autor no informado'}
-          </small>
-        </article>
-      ))}
-    </>
+      {value.assertedAt && (
+        <p className="text-xs text-muted-foreground">
+          Declarado: {value.assertedAt.slice(0, 10)} · {value.assertedBy ?? 'Autor no informado'}
+        </p>
+      )}
+      {!!value.items?.length && (
+        <ItemGroup className="w-full gap-2">
+          {value.items.map((fact, index) => (
+            <Item variant="outline" size="sm" key={fact.id ?? fact.allergyId ?? index}>
+              <ItemContent className="min-w-0">
+                <ItemTitle>{fact.label ?? fact.substance}</ItemTitle>
+                <p className="text-sm break-words whitespace-pre-wrap">
+                  {[
+                    fact.severity && label(fact.severity),
+                    fact.verification && label(fact.verification),
+                    fact.provenance,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </p>
+                {fact.isActive === false && <p className="text-sm">Registro inactivo</p>}
+                {fact.currentTreatment && (
+                  <p className="text-sm break-words whitespace-pre-wrap">
+                    Tratamiento registrado: {fact.currentTreatment}
+                  </p>
+                )}
+                {fact.note && (
+                  <p className="text-sm break-words whitespace-pre-wrap">{fact.note}</p>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  {fact.assertedAt?.slice(0, 10)} · {fact.assertedBy ?? 'Autor no informado'}
+                </p>
+              </ItemContent>
+            </Item>
+          ))}
+        </ItemGroup>
+      )}
+    </div>
   );
 }
 
 function PrescriptionView({ value }: { value: Prescription }) {
   return (
-    <>
-      <p>
-        <span className="tag">{label(value.state)}</span> · {value.clinicalDate}{' '}
+    <div className="flex flex-col gap-3">
+      <p className="flex flex-wrap items-center gap-2 text-sm">
+        <Badge variant="secondary">{label(value.state)}</Badge> · {value.clinicalDate}{' '}
         {value.documentSerial && `· ${value.documentSerial}`}
       </p>
       {value.state !== 'signed' && (
-        <p className="error">
-          Documento histórico {label(value.state).toLowerCase()}. No representa una indicación
-          vigente.
-        </p>
+        <Alert variant="destructive">
+          <AlertTriangle />
+          <AlertDescription>
+            Documento histórico {label(value.state).toLowerCase()}. No representa una indicación
+            vigente.
+          </AlertDescription>
+        </Alert>
       )}
       {value.signedOverAllergyOverride && (
-        <p className="error">Hospital registra una excepción por alergia al firmar esta receta.</p>
+        <Alert variant="destructive">
+          <AlertTriangle />
+          <AlertDescription>
+            Hospital registra una excepción por alergia al firmar esta receta.
+          </AlertDescription>
+        </Alert>
       )}
       {value.contentWithheld ? (
-        <p role="status">Hospital ha restringido el contenido de esta receta.</p>
+        <Alert role="status">
+          <AlertCircle />
+          <AlertDescription>Hospital ha restringido el contenido de esta receta.</AlertDescription>
+        </Alert>
       ) : (
-        value.lines.map((line) => (
-          <article className="clinical-fact" key={line.medicationLineId}>
-            <h4>{line.drugName}</h4>
-            {line.strengthAmount != null && (
-              <p>
-                Concentración: {line.strengthAmount} {line.strengthUnit}
-              </p>
-            )}
-            <p>
-              Dosis registrada: {line.doseAmount} {label(line.doseUnit)} · Vía: {label(line.route)}
-            </p>
-            <p>
-              Frecuencia:{' '}
-              {line.frequencyIsSingleDose
-                ? 'Dosis única'
-                : line.frequencyIntervalHours != null
-                  ? `Cada ${line.frequencyIntervalHours} horas`
-                  : 'No informada'}
-            </p>
-            <p>
-              Duración:{' '}
-              {line.durationIsIndefinite
-                ? 'Indefinida según receta'
-                : line.durationDays != null
-                  ? `${line.durationDays} días`
-                  : 'No informada'}
-            </p>
-            {line.administrationCondition && (
-              <p>Condición: {label(line.administrationCondition)}</p>
-            )}
-            {line.indication && <p>Indicación: {line.indication}</p>}
-            {line.specialInstructions && <p>Instrucciones: {line.specialInstructions}</p>}
-            {line.quantityToDispense != null && (
-              <p>Cantidad a dispensar: {line.quantityToDispense}</p>
-            )}
-          </article>
-        ))
+        <ItemGroup className="gap-2">
+          {value.lines.map((line) => (
+            <Item variant="outline" size="sm" key={line.medicationLineId}>
+              <ItemContent className="min-w-0 text-sm break-words whitespace-pre-wrap">
+                <h4 className="font-medium">{line.drugName}</h4>
+                {line.strengthAmount != null && (
+                  <p>
+                    Concentración: {line.strengthAmount} {line.strengthUnit}
+                  </p>
+                )}
+                <p>
+                  Dosis registrada: {line.doseAmount} {label(line.doseUnit)} · Vía:{' '}
+                  {label(line.route)}
+                </p>
+                <p>
+                  Frecuencia:{' '}
+                  {line.frequencyIsSingleDose
+                    ? 'Dosis única'
+                    : line.frequencyIntervalHours != null
+                      ? `Cada ${line.frequencyIntervalHours} horas`
+                      : 'No informada'}
+                </p>
+                <p>
+                  Duración:{' '}
+                  {line.durationIsIndefinite
+                    ? 'Indefinida según receta'
+                    : line.durationDays != null
+                      ? `${line.durationDays} días`
+                      : 'No informada'}
+                </p>
+                {line.administrationCondition && (
+                  <p>Condición: {label(line.administrationCondition)}</p>
+                )}
+                {line.indication && <p>Indicación: {line.indication}</p>}
+                {line.specialInstructions && <p>Instrucciones: {line.specialInstructions}</p>}
+                {line.quantityToDispense != null && (
+                  <p>Cantidad a dispensar: {line.quantityToDispense}</p>
+                )}
+              </ItemContent>
+            </Item>
+          ))}
+        </ItemGroup>
       )}
-    </>
+    </div>
   );
 }
 
 function NoteView({ value }: { value: Note }) {
   return (
-    <>
-      <p>
-        <span className="tag">{label(value.note.state)}</span> ·{' '}
+    <div className="flex flex-col gap-3">
+      <p className="flex flex-wrap items-center gap-2 text-sm">
+        <Badge variant="secondary">{label(value.note.state)}</Badge> ·{' '}
         {value.note.signer?.displayName ?? 'Firmante sin nombre registrado'} ·{' '}
         {value.note.signer?.signedAt.slice(0, 10)}
       </p>
-      {Object.entries(value.note.sectionText).map(([id, text]) => {
-        const spec = value.template.sections.find((s) => s.id === id);
-        const title =
-          spec?.labels.find((l) => l.language === 'es')?.text ??
-          spec?.labels[0]?.text ??
-          spec?.role ??
-          'Sección clínica';
-        return (
-          <article className="clinical-fact" key={id}>
-            <h4>{title}</h4>
-            <p>{text}</p>
-          </article>
-        );
-      })}
-      {value.note.diagnoses.length > 0 && (
-        <article className="clinical-fact">
-          <h4>Diagnósticos registrados</h4>
-          {value.note.diagnoses.map((d, i) => (
-            <p key={i}>
-              {d.code} · {d.displaySnapshot} {d.clarifier}
-            </p>
-          ))}
-        </article>
-      )}
-    </>
+      <ItemGroup className="gap-2">
+        {Object.entries(value.note.sectionText).map(([id, text]) => {
+          const spec = value.template.sections.find((s) => s.id === id);
+          const title =
+            spec?.labels.find((l) => l.language === 'es')?.text ??
+            spec?.labels[0]?.text ??
+            spec?.role ??
+            'Sección clínica';
+          return (
+            <Item variant="outline" size="sm" key={id}>
+              <ItemContent className="min-w-0 text-sm break-words whitespace-pre-wrap">
+                <h4 className="font-medium">{title}</h4>
+                <p>{text}</p>
+              </ItemContent>
+            </Item>
+          );
+        })}
+        {value.note.diagnoses.length > 0 && (
+          <Item variant="outline" size="sm">
+            <ItemContent className="min-w-0 text-sm break-words whitespace-pre-wrap">
+              <h4 className="font-medium">Diagnósticos registrados</h4>
+              {value.note.diagnoses.map((d, i) => (
+                <p key={i}>
+                  {d.code} · {d.displaySnapshot} {d.clarifier}
+                </p>
+              ))}
+            </ItemContent>
+          </Item>
+        )}
+      </ItemGroup>
+    </div>
   );
 }
 
@@ -303,11 +359,12 @@ function ClinicalReader({ chat }: { chat: Chat }) {
   const [cursors, setCursors] = useState<string[]>([]);
   const [onlyPrescriptions, setOnlyPrescriptions] = useState(false);
   const [selected, setSelected] = useState<Entry>();
+  const filterId = useId();
   const base = `/hospital/conversations/${chat.conversation.id}/clinical`;
   const path = `${base}/${tab}${tab === 'timeline' && cursors.length ? '?cursor=' + encodeURIComponent(cursors.at(-1)!) : ''}`;
   return (
     <>
-      <nav className="clinical-tabs" aria-label="Secciones del expediente">
+      <nav className="flex flex-wrap gap-2" aria-label="Secciones del expediente">
         {[
           ['timeline', 'Historial y recetas'],
           ['antecedentes', 'Antecedentes'],
@@ -315,6 +372,7 @@ function ClinicalReader({ chat }: { chat: Chat }) {
         ].map(([id, title]) => (
           <Button
             key={id}
+            size="sm"
             variant={id === tab ? 'default' : 'outline'}
             aria-pressed={id === tab}
             onClick={() => {
@@ -327,85 +385,109 @@ function ClinicalReader({ chat }: { chat: Chat }) {
         ))}
       </nav>
       {selected ? (
-        <>
-          <Button variant="ghost" onClick={() => setSelected(undefined)}>
+        <div className="flex flex-col items-start gap-3">
+          <Button variant="ghost" size="sm" onClick={() => setSelected(undefined)}>
             <ArrowLeft />
             Volver al historial
           </Button>
-          <h3>
+          <h3 className="font-semibold">
             {label(selected.entryType ?? '')} ·{' '}
             {selected.signerDisplay ??
               selected.authorDisplay ??
               'Profesional sin nombre registrado'}
           </h3>
-          {selected.entryType === 'prescription' ? (
-            <ClinicalRead<Prescription>
-              key={selected.entryId}
-              path={`${base}/prescriptions/${selected.sourceRef!.id}`}
-            >
-              {(value) => <PrescriptionView value={value} />}
-            </ClinicalRead>
-          ) : (
-            <ClinicalRead<Note>
-              key={selected.entryId}
-              path={`${base}/notes/${selected.sourceRef!.id}`}
-            >
-              {(value) => <NoteView value={value} />}
-            </ClinicalRead>
-          )}
-        </>
+          <div className="w-full">
+            {selected.entryType === 'prescription' ? (
+              <ClinicalRead<Prescription>
+                key={selected.entryId}
+                path={`${base}/prescriptions/${selected.sourceRef!.id}`}
+              >
+                {(value) => <PrescriptionView value={value} />}
+              </ClinicalRead>
+            ) : (
+              <ClinicalRead<Note>
+                key={selected.entryId}
+                path={`${base}/notes/${selected.sourceRef!.id}`}
+              >
+                {(value) => <NoteView value={value} />}
+              </ClinicalRead>
+            )}
+          </div>
+        </div>
       ) : tab === 'timeline' ? (
         <ClinicalRead<Timeline> key={path} path={path}>
           {(data) => (
-            <>
-              <label className="clinical-filter">
-                <input
-                  type="checkbox"
+            <div className="flex flex-col gap-3">
+              <Field orientation="horizontal">
+                <Checkbox
+                  id={filterId}
                   checked={onlyPrescriptions}
-                  onChange={(e) => setOnlyPrescriptions(e.target.checked)}
+                  onCheckedChange={(checked) => setOnlyPrescriptions(checked === true)}
                 />
-                Solo recetas de esta página
-              </label>
-              <p className="hint">
+                <FieldLabel htmlFor={filterId}>Solo recetas de esta página</FieldLabel>
+              </Field>
+              <p className="text-xs text-muted-foreground">
                 Historial de Hospital · 30 registros por página. Las recetas anteriores no implican
                 tratamiento vigente.
               </p>
               {data.recordOrigin === 'migrated' && (
-                <p>Expediente migrado: parte del historial puede no estar digitalizada.</p>
+                <p className="text-sm">
+                  Expediente migrado: parte del historial puede no estar digitalizada.
+                </p>
               )}
               {data.items.filter(
                 (entry) => !onlyPrescriptions || entry.entryType === 'prescription',
-              ).length === 0 && <p>No hay registros para esta vista en la página consultada.</p>}
-              {data.items
-                .filter((entry) => !onlyPrescriptions || entry.entryType === 'prescription')
-                .map((entry) => (
-                  <article className="clinical-fact" key={entry.entryId}>
-                    <div className="clinical-entry-heading">
-                      <strong>{label(entry.entryType ?? 'Registro')}</strong>
-                      <span className="tag">{label(entry.state)}</span>
-                    </div>
-                    <p>
-                      {entry.clinicalDate} ·{' '}
-                      {entry.signerDisplay ??
-                        entry.authorDisplay ??
-                        'Profesional sin nombre registrado'}
-                    </p>
-                    {entry.summaryKey === 'entered-in-error' && <p>{label(entry.summaryKey)}</p>}
-                    {entry.sourceRef &&
-                    entry.state !== 'draft' &&
-                    entry.summaryKey !== 'entered-in-error' &&
-                    ['prescription', 'note'].includes(entry.entryType ?? '') ? (
-                      <Button variant="outline" size="sm" onClick={() => setSelected(entry)}>
-                        Ver {entry.entryType === 'prescription' ? 'receta' : 'nota clínica'}
-                      </Button>
-                    ) : (
-                      <small>Detalle disponible en Hospital según tus permisos.</small>
-                    )}
-                  </article>
-                ))}
-              <div className="clinical-pagination">
+              ).length === 0 && (
+                <p className="text-sm text-muted-foreground">
+                  No hay registros para esta vista en la página consultada.
+                </p>
+              )}
+              <ItemGroup className="gap-2">
+                {data.items
+                  .filter((entry) => !onlyPrescriptions || entry.entryType === 'prescription')
+                  .map((entry) => {
+                    const readable =
+                      entry.sourceRef &&
+                      entry.state !== 'draft' &&
+                      entry.summaryKey !== 'entered-in-error' &&
+                      ['prescription', 'note'].includes(entry.entryType ?? '');
+                    return (
+                      <Item variant="outline" size="sm" key={entry.entryId}>
+                        <ItemContent className="min-w-0">
+                          <ItemTitle>
+                            {label(entry.entryType ?? 'Registro')}
+                            <Badge variant="secondary">{label(entry.state)}</Badge>
+                          </ItemTitle>
+                          <p className="text-sm text-muted-foreground">
+                            {entry.clinicalDate} ·{' '}
+                            {entry.signerDisplay ??
+                              entry.authorDisplay ??
+                              'Profesional sin nombre registrado'}
+                          </p>
+                          {entry.summaryKey === 'entered-in-error' && (
+                            <p className="text-sm">{label(entry.summaryKey)}</p>
+                          )}
+                          {!readable && (
+                            <p className="text-xs text-muted-foreground">
+                              Detalle disponible en Hospital según tus permisos.
+                            </p>
+                          )}
+                        </ItemContent>
+                        {readable && (
+                          <ItemActions>
+                            <Button variant="outline" size="sm" onClick={() => setSelected(entry)}>
+                              Ver {entry.entryType === 'prescription' ? 'receta' : 'nota clínica'}
+                            </Button>
+                          </ItemActions>
+                        )}
+                      </Item>
+                    );
+                  })}
+              </ItemGroup>
+              <div className="flex flex-wrap gap-2">
                 <Button
                   variant="outline"
+                  size="sm"
                   disabled={!cursors.length}
                   onClick={() => setCursors(cursors.slice(0, -1))}
                 >
@@ -413,26 +495,27 @@ function ClinicalReader({ chat }: { chat: Chat }) {
                 </Button>
                 <Button
                   variant="outline"
+                  size="sm"
                   disabled={!data.nextCursor}
                   onClick={() => setCursors([...cursors, data.nextCursor!])}
                 >
                   Siguiente página
                 </Button>
               </div>
-            </>
+            </div>
           )}
         </ClinicalRead>
       ) : tab === 'antecedentes' ? (
         <ClinicalRead<Antecedentes> key={path} path={path}>
           {(data) => (
-            <>
+            <div className="flex flex-col gap-4">
               {Object.entries(data.byCategory).map(([category, value]) => (
-                <section key={category}>
-                  <h3>{label(category)}</h3>
+                <section className="flex flex-col gap-2" key={category}>
+                  <h3 className="font-semibold">{label(category)}</h3>
                   <PresenceView value={value} />
                 </section>
               ))}
-            </>
+            </div>
           )}
         </ClinicalRead>
       ) : (
@@ -456,28 +539,35 @@ export function PatientClinical({ chat, me }: { chat: Chat; me: Me }) {
     chat.conversation.assignedTo === me.subject && chat.conversation.status !== 'agent';
   const allowed = assigned && !!chat.contact.patientId;
   return (
-    <div className="clinical-access">
+    <div className="flex min-w-0 flex-wrap items-center gap-2">
       <Button variant="outline" size="sm" disabled={!allowed} onClick={() => setOpen(true)}>
         <FileHeart />
         Expediente y recetas
       </Button>
       {!allowed && (
-        <small>
+        <span className="max-w-72 text-xs text-muted-foreground">
           {!chat.contact.patientId
             ? 'Vincula al paciente con Hospital desde sus detalles.'
             : 'Toma la conversación o solicita que te la asignen para consultar el expediente.'}
-        </small>
+        </span>
       )}
       <Dialog open={open && allowed} onOpenChange={setOpen}>
-        <DialogContent className="clinical-reader">
-          <DialogTitle>Expediente y recetas · {chat.contact.name}</DialogTitle>
-          <DialogDescription>
-            Consulta médica en Hospital. La información permanece en esta ventana y no se envía al
-            chat ni al agente.
-          </DialogDescription>
+        <DialogContent showCloseButton={false} className="max-h-dvh overflow-y-auto sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Expediente y recetas · {chat.contact.name}</DialogTitle>
+            <DialogDescription>
+              Consulta médica en Hospital. La información permanece en esta ventana y no se envía al
+              chat ni al agente.
+            </DialogDescription>
+          </DialogHeader>
           {open && allowed && (
             <ClinicalReader key={`${chat.conversation.id}:${chat.contact.patientId}`} chat={chat} />
           )}
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button variant="outline">Cerrar</Button>
+            </DialogClose>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

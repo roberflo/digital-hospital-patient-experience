@@ -1,9 +1,13 @@
 'use client';
 import { useState } from 'react';
 import useSWR from 'swr';
-import { CalendarDays, RefreshCw } from 'lucide-react';
+import { AlertCircle, CalendarDays, RefreshCw } from 'lucide-react';
 import { fetcher, type Contact, type Me } from '@/lib/api';
+import { Alert, AlertDescription } from './ui/alert';
+import { Badge } from './ui/badge';
 import { Button } from './ui/button';
+import { Item, ItemActions, ItemContent, ItemTitle } from './ui/item';
+import { Spinner } from './ui/spinner';
 
 type Appointment = {
   appointmentId: string;
@@ -27,13 +31,15 @@ export function PatientAppointments({ contact, me }: { contact: Contact; me: Me 
     { shouldRetryOnError: false },
   );
   return (
-    <div className="detail-section">
-      <div className="section-heading">
-        <h4>Citas en Hospital</h4>
-        <CalendarDays size={14} />
+    <section className="flex flex-col gap-3">
+      <div className="flex items-center justify-between gap-2">
+        <h4 className="text-sm font-medium">Citas en Hospital</h4>
+        <CalendarDays className="size-4 text-muted-foreground" />
       </div>
       {!contact.patientId ? (
-        <p className="hint">Vincula el expediente para consultar las citas del paciente.</p>
+        <p className="text-xs text-muted-foreground">
+          Vincula el expediente para consultar las citas del paciente.
+        </p>
       ) : (
         <>
           <Button
@@ -46,52 +52,68 @@ export function PatientAppointments({ contact, me }: { contact: Contact; me: Me 
           </Button>
           {expanded && (
             <>
-              <p className="hint">Próximos 31 días · {me.tenant.timeZone}</p>
-              {isLoading && <p className="hint">Consultando Hospital…</p>}
-              {error && (
-                <p role="alert" className="error">
-                  {error.message}
+              <p className="text-xs text-muted-foreground">
+                Próximos 31 días · {me.tenant.timeZone}
+              </p>
+              {isLoading && (
+                <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Spinner role={undefined} aria-label={undefined} aria-hidden />
+                  Consultando Hospital…
                 </p>
               )}
-              {data?.rows.length === 0 && <p className="hint">No hay citas en este período.</p>}
+              {error && (
+                <Alert variant="destructive">
+                  <AlertCircle />
+                  <AlertDescription>{error.message}</AlertDescription>
+                </Alert>
+              )}
+              {data?.rows.length === 0 && (
+                <p className="text-xs text-muted-foreground">No hay citas en este período.</p>
+              )}
               {data?.rows.map((a) => (
-                <div className="conversation-followup" key={a.appointmentId}>
-                  <strong>{a.clinicianName}</strong>
-                  <p>
-                    {new Date(a.scheduledStart).toLocaleString('es-SV', {
-                      timeZone: me.tenant.timeZone,
-                      dateStyle: 'short',
-                      timeStyle: 'short',
-                    })}{' '}
-                    · {a.durationMinutes} min
-                  </p>
-                  <span className="tag">
-                    {(
-                      {
-                        booked: 'Programada',
-                        'cancelled-by-patient': 'Cancelada por paciente',
-                        'cancelled-by-clinic': 'Cancelada por hospital',
-                        arrived: 'Presente',
-                        fulfilled: 'Atendida',
-                        'no-show': 'No asistió',
-                        'not-recorded': 'Sin registrar',
-                        'entered-in-error': 'Registrada por error',
-                      } as Record<string, string>
-                    )[a.status] ?? a.status}
-                  </span>
-                </div>
+                <Item variant="outline" size="sm" key={a.appointmentId}>
+                  <ItemContent className="min-w-0">
+                    <ItemTitle>{a.clinicianName}</ItemTitle>
+                    <p className="text-xs text-muted-foreground">
+                      {new Date(a.scheduledStart).toLocaleString('es-SV', {
+                        timeZone: me.tenant.timeZone,
+                        dateStyle: 'short',
+                        timeStyle: 'short',
+                      })}{' '}
+                      · {a.durationMinutes} min
+                    </p>
+                  </ItemContent>
+                  <ItemActions>
+                    <Badge variant="secondary">
+                      {(
+                        {
+                          booked: 'Programada',
+                          'cancelled-by-patient': 'Cancelada por paciente',
+                          'cancelled-by-clinic': 'Cancelada por hospital',
+                          arrived: 'Presente',
+                          fulfilled: 'Atendida',
+                          'no-show': 'No asistió',
+                          'not-recorded': 'Sin registrar',
+                          'entered-in-error': 'Registrada por error',
+                        } as Record<string, string>
+                      )[a.status] ?? a.status}
+                    </Badge>
+                  </ItemActions>
+                </Item>
               ))}
-              <Button variant="ghost" size="sm" onClick={() => mutate()}>
-                <RefreshCw size={13} />
-                Actualizar citas
-              </Button>
-              <a className="media-link" href="/?view=calendar">
-                Gestionar en Agenda
-              </a>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <Button variant="ghost" size="sm" onClick={() => mutate()}>
+                  <RefreshCw />
+                  Actualizar citas
+                </Button>
+                <Button asChild variant="link" size="sm">
+                  <a href="/?view=calendar">Gestionar en Agenda</a>
+                </Button>
+              </div>
             </>
           )}
         </>
       )}
-    </div>
+    </section>
   );
 }
