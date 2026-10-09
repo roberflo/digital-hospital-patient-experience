@@ -102,6 +102,24 @@ public static class CrmEndpoints
             ApplySettings(row, b, owned);
             Audit(db, t, u, "settings.updated", t.Id); await db.SaveChangesAsync(); return Results.Ok();
         });
+        // «Cómo atiende mi recepción»: the hospital's choices, ours beside them, and what its setup makes possible, so the screen
+        // never offers a choice that would do nothing (an emergency button with no emergency number, a doctor's chat with no doctor).
+        api.MapGet("/settings/attention", async (CrmDb db, TenantScope t, CurrentUser u) =>
+        {
+            u.RequireAdmin(); var tenant = await db.Tenants.SingleAsync(x => x.Id == t.Id);
+            var doctors = await db.Members.Where(x => x.Role == "doctor" && !x.Disabled).Select(x => x.WhatsAppPhone).ToListAsync();
+            return new
+            {
+                settings = Attention.Read(tenant.Attention), recommended = Attention.Recommended, menuOptions = Attention.MenuOptions,
+                context = new { emergencyPhone = tenant.EmergencyPhone is { Length: > 0 }, emergencyWhatsApp = tenant.EmergencyWhatsApp, doctors = doctors.Count, doctorsWithWhatsApp = doctors.Count(phone => Choices.WhatsApp(phone) is not null) }
+            };
+        });
+        api.MapPut("/settings/attention", async (Attention b, CrmDb db, TenantScope t, CurrentUser u) =>
+        {
+            u.RequireAdmin(); var chosen = b.Checked(); var tenant = await db.Tenants.SingleAsync(x => x.Id == t.Id);
+            tenant.Attention = chosen.Equals(Attention.Recommended) ? null : chosen.Write();
+            Audit(db, t, u, "attention.updated", t.Id); await db.SaveChangesAsync(); return Results.Ok(chosen);
+        });
         api.MapGet("/audit", async (CrmDb db, CurrentUser u) => { u.RequireAdmin(); return await db.Audits.OrderByDescending(x => x.CreatedAt).Take(200).ToListAsync(); });
         api.MapGet("/jobs", async (CrmDb db, CurrentUser u) => { u.RequireAdmin(); return await db.Jobs.OrderByDescending(x => x.CreatedAt).Take(100).ToListAsync(); });
     }

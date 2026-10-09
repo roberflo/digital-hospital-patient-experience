@@ -19,6 +19,9 @@ public sealed class Tenant
     public string? EmergencyPhone { get; set; }
     /// <summary>The hospital says that number answers WhatsApp: an emergency also gets a button to write to it.</summary>
     public bool EmergencyWhatsApp { get; set; }
+    /// <summary>How this hospital chose to attend, as <see cref="Recepcion.Attention"/> JSON. Null is the recommended reception.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? Attention { get; set; }
     public bool RemindersEnabled { get; set; }
     public Guid? ReminderChannelId { get; set; }
     public string ReminderDayTemplate { get; set; } = "recepcion_cita_dia_anterior_v1";

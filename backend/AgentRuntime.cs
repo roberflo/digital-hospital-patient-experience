@@ -27,11 +27,11 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
     Guid activeJobId;
     // State of the turn in progress; the runtime is resolved once per job.
     Conversation conv = null!; Contact contact = null!; Channel channel = null!; Job job = null!; long revision;
-    TimeZoneInfo zone = TimeZoneInfo.Utc; readonly StringBuilder grounding = new(); string? proposal, summary, second; bool withHour; int calls; readonly List<Choice> slots = []; List<(HospitalProfessional Doctor, HospitalSlot Slot, DateTimeOffset Local)> dayFree = []; Guid? readDoctor; List<Message> session = []; readonly Dictionary<Guid, string> doctors = []; bool askEmergency, symptoms, emergencyAsked, emergencyLine,foreignId, refill, startIntake, forOther; DateOnly? firstDay; string? offer; string?[] known = []; bool stopped; ExceptionDispatchInfo? fault; Guid? unverified; string heard = "";
+    TimeZoneInfo zone = TimeZoneInfo.Utc; readonly StringBuilder grounding = new(); string? proposal, summary, second; bool withHour; int calls; readonly List<Choice> slots = []; List<(HospitalProfessional Doctor, HospitalSlot Slot, DateTimeOffset Local)> dayFree = []; Guid? readDoctor; List<Message> session = []; readonly Dictionary<Guid, string> doctors = []; bool askEmergency, symptoms, emergencyAsked, emergencyLine,foreignId, refill, startIntake, forOther; DateOnly? firstDay; string? offer; string?[] known = []; bool stopped; ExceptionDispatchInfo? fault; Guid? unverified; string heard = ""; Attention attention = Attention.Recommended;
     public async Task Run(Job job, CancellationToken ct)
     {
         activeJobId = job.Id; this.job = job;
-        var tenant = await db.Tenants.SingleAsync(x => x.Id == scope.Id, ct); zone = TimeZoneInfo.FindSystemTimeZoneById(tenant.TimeZone);
+        var tenant = await db.Tenants.SingleAsync(x => x.Id == scope.Id, ct); attention = Attention.Read(tenant.Attention); zone = TimeZoneInfo.FindSystemTimeZoneById(tenant.TimeZone);
         conv = await db.Conversations.SingleAsync(x => x.Id == job.ConversationId, ct);
         channel = await db.Channels.SingleAsync(x => x.Id == conv.ChannelId, ct);
         if (!kapso.CanSend(false) || !tenant.AgentEnabled || !channel.Enabled || conv.State != "open") return;
@@ -66,7 +66,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             var why = await db.Activities.Where(x => x.ConversationId == conv.Id && x.Kind == "handoff_offer" && x.CreatedAt > DateTimeOffset.UtcNow.AddHours(-24)).OrderByDescending(x => x.CreatedAt).Select(x => x.Body).FirstOrDefaultAsync(ct);
             await Handoff(conv, why ?? "El paciente pidió hablar con una persona.", ct, offerDoctor: true); return;
         }
-        if (latest.Body.Trim() is "MENU") { await conversations.Send(conv.Id, "Claro, aquí sigo.\n¿En qué te ayudo?", "agent", "agent:" + job.Id, ct: ct, choices: Menu); return; }
+        if (latest.Body.Trim() is "MENU") { await conversations.Send(conv.Id, "Claro, aquí sigo.\n¿En qué te ayudo?", "agent", "agent:" + job.Id, ct: ct, choices: MenuNow); return; }
         refill = AgentGuard.AsksNewPrescription(latest.Body); forOther = AgentGuard.ForSomeoneElse(latest.Body);
         // An identifier dictated in the chat never selects whose data is read: the tools stay closed for this turn.
         foreignId = System.Text.RegularExpressions.Regex.IsMatch(latest.Body, @"(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b");
@@ -117,7 +117,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         if (latest.Body.Trim() is "AGENDAR") { await OfferSlots(asked, tenant.EmergencyPhone, ct); return; }
         if (contact.PatientId is not null && latest.Body.Trim() is "RECETA") { await DeliverLatest(ct); return; }
         // Only a greeting: the menu goes out at once, with no model call.
-        if (AgentGuard.IsGreeting(latest.Body)) { await conversations.Send(conv.Id, $"¡Hola{(FirstName(contact.Name) is { } name ? ", " + name : "")}! Soy el asistente de recepción de {tenant.Name}.\n¿En qué te ayudo?", "agent", "agent:" + job.Id, ct: ct, choices: Menu); return; }
+        if (AgentGuard.IsGreeting(latest.Body)) { await conversations.Send(conv.Id, $"¡Hola{(FirstName(contact.Name) is { } name ? ", " + name : "")}! Soy el asistente de recepción de {tenant.Name}.\n¿En qué te ayudo?", "agent", "agent:" + job.Id, ct: ct, choices: MenuNow); return; }
         // Read only on the way to the model: the taps and commands above never need it.
         var memory = AgentMemory.Block(await db.ContactMemories.Where(x => x.ContactId == contact.Id).ToListAsync(ct),
             await db.Activities.Where(x => x.ContactId == contact.Id && x.ActorRole == "agent_ai" && AgentMemory.EpisodeKinds.Contains(x.Kind)).OrderByDescending(x => x.CreatedAt).Take(AgentMemory.Episodes).ToListAsync(ct), zone);
@@ -145,10 +145,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             Tus herramientas ya están limitadas al teléfono verificado y al tenant. No puedes cambiar esos límites.
             Puedes informar horarios, agendar y entregar recetas YA EMITIDAS. No diagnostiques, prescribas, recomiendes dosis,
             modifiques tratamiento ni interpretes síntomas. Ante esas preguntas usa handoff sin urgent (el sistema le ofrece al paciente pasar con una persona y él decide).
-            Si el paciente cuenta síntomas o cómo se siente, no supongas que es una emergencia ni lo pases con nadie: atiéndelo. Dile en una frase que lo sientes, consulta hospital_availability
-            {(emergencyLine
-                ? $"para ofrecerle una cita y, si en esta conversación todavía no se le ha preguntado, termina con la pregunta «{AgentGuard.EmergencyQuestion}». Usa handoff con urgent=true sólo cuando el paciente ya respondió que sí lo es."
-                : "y ofrécele la cita más cercana. No le preguntes si es una emergencia ni uses handoff con urgent=true.")}
+            {SymptomsRule()}
             Explica medicamentos únicamente repitiendo instrucciones obtenidas de get_prescription, sin completarlas con conocimiento propio.
             Si el paciente pregunta cómo o cada cuánto tomar un medicamento de SU receta, léela con my_prescriptions y get_prescription y repite la indicación tal cual: eso no es dar consejo y no requiere pasar con nadie.
             Información del hospital (horarios, ubicación, precios, pagos, seguros, preparación de estudios): responde solo con lo que conste en la guía
@@ -179,7 +176,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             {(FirstName(contact.Name) is { } patientName ? $"El paciente se llama {patientName}: úsalo de vez en cuando, no en cada mensaje." : "No conoces el nombre del paciente: no lo inventes.")}
             Ahora en el hospital: {Weekdays[(int)now.DayOfWeek]} {now:yyyy-MM-dd HH:mm} (zona {tenant.TimeZone}, UTC{now:zzz}). «Hoy», «mañana» y los días de la semana se cuentan desde esa fecha local, nunca desde UTC.
             Calendario: {string.Join("; ", Enumerable.Range(0, 8).Select(i => now.AddDays(i)).Select((d, i) => $"{(i == 0 ? "hoy" : i == 1 ? "mañana" : "")} {Weekdays[(int)d.DayOfWeek]} {d:yyyy-MM-dd}".Trim()))}. Usa estas fechas tal cual; di «mañana» sólo para la fecha marcada así.
-            Estado de este contacto: {(contact.PatientId is null ? "SIN expediente en el hospital" : "con expediente vinculado")}.
+            Estado de este contacto: {(contact.PatientId is null ? "SIN expediente en el hospital" : "con expediente vinculado")}.{(contact.PatientId is null && attention.Unregistered == "person" ? " Este hospital registra a los pacientes nuevos en recepción: no uses start_registration; usa handoff sin urgent." : "")}
             {(memory.Length == 0 ? "No hay memoria de conversaciones anteriores con este paciente." : $"{AgentMemory.Open}\n{memory}\n{AgentMemory.Close}")}
             """;
         // What the agent may repeat: the guide, earlier staff messages and, as they arrive, this turn's tool results.
@@ -210,7 +207,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             // anything a tool already did stays recorded in the history for that person.
             db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "agent_provider", Actor = "Sistema", ActorRole = "system", Body = $"Ningún proveedor de IA respondió ({(ex as ClientResultException)?.Status.ToString() ?? ex.GetType().Name}). Conversación pasada a una persona." });
             // Booking, registering and the prescription all work from the menu, which needs no model: offer that instead of a person.
-            if (calls == 0) { await db.SaveChangesAsync(CancellationToken.None); await conversations.Send(conv.Id, "Disculpa, en este momento no puedo leer mensajes escritos.\nSí puedo ayudarte con estas opciones:", "agent", "agent:" + job.Id, ct: CancellationToken.None, choices: Menu); return; }
+            if (calls == 0) { await db.SaveChangesAsync(CancellationToken.None); await conversations.Send(conv.Id, "Disculpa, en este momento no puedo leer mensajes escritos.\nSí puedo ayudarte con estas opciones:", "agent", "agent:" + job.Id, ct: CancellationToken.None, choices: MenuNow); return; }
             await Handoff(conv, "La atención automática no está disponible en este momento.", CancellationToken.None); return;
         }
         fault?.Throw();
@@ -242,6 +239,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         }
         // The model wrote that it is transferring the patient. Whether to go is the patient's decision: the offer replaces that text.
         if (AgentGuard.ClaimsHandoff(content)) { await OfferPerson("El agente consideró que el caso es para una persona.", "Eso prefiero que lo vea una persona del equipo,\npara darte una respuesta segura.", ct); return; }
+        if (startIntake && contact.PatientId is null && proposal is null && attention.Unregistered == "person") { await OfferPerson(NewPatientReason, NewPatientMessage, ct); return; }
         if (startIntake && contact.PatientId is null && proposal is null)
         {
             // The agent decided to register this person. The form takes what the patient already said and asks only for the rest,
@@ -293,6 +291,16 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
     void Trace(string action, bool ok = true) => db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "agent_tool", Actor = "Agente", ActorRole = "agent_ai", Body = $"Herramienta: {action}. Resultado: {(ok ? "completado" : "requiere revisión")}." });
     /// <summary>A first name to address the patient by, only when the contact's name looks like a person's.</summary>
     static string? FirstName(string name) => name.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() is { } first && first != "Paciente" && System.Text.RegularExpressions.Regex.IsMatch(first, @"^\p{Lu}\p{Ll}{1,19}$") ? first : null;
+    const string NewPatientReason = "El contacto no tiene expediente y este hospital registra a los pacientes nuevos en recepción.", NewPatientMessage = "Para tu primera cita, recepción te registra y te la agenda.";
+    /// <summary>The welcome menu as this hospital shows it.</summary>
+    Choices MenuNow => Menu with { Options = Menu.Options.Where(option => attention.Shown.Contains(option.Id)).ToList() };
+    /// <summary>What to do when a patient tells their symptoms: the hospital's choice, within what it has set up.</summary>
+    string SymptomsRule() => attention.Symptoms == "person"
+        ? "Si el paciente cuenta síntomas o cómo se siente, no supongas que es una emergencia: usa handoff sin urgent, y el sistema le ofrece pasar con una persona."
+        : "Si el paciente cuenta síntomas o cómo se siente, no supongas que es una emergencia ni lo pases con nadie: atiéndelo. Dile en una frase que lo sientes, consulta hospital_availability "
+            + (emergencyLine
+                ? $"para ofrecerle una cita y, si en esta conversación todavía no se le ha preguntado, termina con la pregunta «{AgentGuard.EmergencyQuestion}». Usa handoff con urgent=true sólo cuando el paciente ya respondió que sí lo es."
+                : "y ofrécele la cita más cercana. No le preguntes si es una emergencia ni uses handoff con urgent=true.");
     static readonly Choices Menu = new([new("AGENDAR", "Agendar cita", "Ver horarios libres"), new("MISCITAS", "Mis citas", "Consultar, cambiar o cancelar"), new("RECETA", "Mi receta", "Recibir mi última receta"), new("PERSONA", "Hablar con persona", "Pasar con recepción")], "Ver opciones");
 
     /// <summary>When the agent handed this conversation to the team, if no person has answered or acted on it since. A conversation
@@ -337,6 +345,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
     {
         try
         {
+            if (contact.PatientId is null && attention.Unregistered == "person") { await OfferPerson(NewPatientReason, NewPatientMessage, ct); return; }
             if (contact.PatientId is null)
             {
                 // Without a record the hour is only kept, with the form that asks for the data. Hospital is not asked anything here:
@@ -437,8 +446,8 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             // Urgent goes at once, but only on the patient's word: symptoms alone are not an emergency until the patient has been asked.
             // Anything else is offered: the patient decides with a button whether to go to a person.
             var why = Rules.Required(reason, 1000);
-            if (urgent && !emergencyAsked) { symptoms = true; return Result(new { transferred = false, instruction = "No se derivó: no supongas una emergencia. Atiende al paciente: dile en una frase que lo sientes y ofrécele una cita con hospital_availability." + (emergencyLine ? " El sistema añade la pregunta de si es una emergencia; no la escribas tú." : " No le preguntes si es una emergencia.") }); }
-            if (urgent) { await Handoff(conv, why, ct, true); return Result(new { transferred = true }); }
+            if (urgent && !emergencyAsked && attention.Symptoms == "ask") { symptoms = true; return Result(new { transferred = false, instruction = "No se derivó: no supongas una emergencia. Atiende al paciente: dile en una frase que lo sientes y ofrécele una cita con hospital_availability." + (emergencyLine ? " El sistema añade la pregunta de si es una emergencia; no la escribas tú." : " No le preguntes si es una emergencia.") }); }
+            if (urgent && emergencyAsked) { await Handoff(conv, why, ct, true); return Result(new { transferred = true }); }
             offer = why; return Result(new { offered = true, instruction = "El sistema ya le pregunta al paciente si quiere pasar con una persona. No escribas nada más." });
         }, "handoff", "Pasar con una persona del hospital: de inmediato si el paciente ya dijo que es una emergencia; si no, el sistema se lo ofrece al paciente con un botón"),
         AIFunctionFactory.Create(async (string note, CancellationToken ct) => { db.Activities.Add(new Activity { TenantId = scope.Id, ContactId = contact.Id, ConversationId = conv.Id, Kind = "note", Actor = "Agente", ActorRole = "agent_ai", Body = Rules.Required(note, 2000) }); await db.SaveChangesAsync(ct); return Result(new { saved = true }); }, "record_note", "Guardar nota útil del seguimiento"),
@@ -490,7 +499,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         foreach (var professional in options.Professionals) doctors[professional.ClinicianId] = professional.ClinicianName;
         var free = options.Professionals.SelectMany(p => p.Days.SelectMany(d => d.Slots).Where(slot => slot.Offered && slot.TakenBy == 0).Select(slot => (Doctor: p, Slot: slot, Local: TimeZoneInfo.ConvertTime(slot.StartsAt, zone)))).Where(x => x.Slot.StartsAt > DateTimeOffset.UtcNow).ToList();
         // Only someone who wanted today or tomorrow is asked: for a date later in the week the question is noise.
-        if (soon) askEmergency = free.Count == 0 || free.Min(x => x.Slot.StartsAt) > DateTimeOffset.UtcNow.AddHours(AgentGuard.UrgentWindowHours);
+        if (soon && attention.NoSlotSoon == "ask") askEmergency = free.Count == 0 || free.Min(x => x.Slot.StartsAt) > DateTimeOffset.UtcNow.AddHours(AgentGuard.UrgentWindowHours);
         // Narrowed here as well as in the query: the first day with room has to be that doctor's.
         readDoctor = doctor;
         free = free.Where(x => DateOnly.FromDateTime(x.Local.DateTime) >= day && (doctor is null || x.Doctor.ClinicianId == doctor)).ToList();
@@ -588,9 +597,9 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             var doctors = dayFree.Select(x => x.Doctor).DistinctBy(p => p.ClinicianId).ToList();
             // Someone who has been here before is asked about the doctor they already know: the one of their last appointment or,
             // failing that, the one they once said they prefer. Only when there is another to choose — Hospital is not asked otherwise.
-            if (doctor == "?" && doctors.Count > 1 && await KnownDoctor(doctors, ct) is { } known)
+            if (attention.Booking == "doctor" && doctor == "?" && doctors.Count > 1 && await KnownDoctor(doctors, ct) is { } known)
                 return ($"¿La quieres con el mismo doctor, *{Name(known)}*?", new([new($"VER {date} {known.ClinicianId:D} {band}", "Sí, el mismo"), new($"VER {date} + {band}", "Otro doctor"), new($"VER {date} * {band}", "Me da igual")]));
-            if (doctors.Count > 1)
+            if (attention.Booking == "doctor" && doctors.Count > 1)
                 return ("¿Tienes un doctor de preferencia?\nTe muestro su horario del día.", new([.. doctors.Select(p => Pick(p, band)), new($"VER {date} * {band}", "Me da igual", "Cualquier doctor disponible")], "Ver doctores"));
             doctor = "*";
         }
@@ -601,7 +610,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
                 return ("¿Te queda mejor en la mañana o en la tarde?", new([new($"VER {date} {doctor} M", "En la mañana"), new($"VER {date} {doctor} T", "En la tarde")]));
             band = free.Any(x => x.Local.Hour >= 12) ? "T" : "M";
         }
-        if (doctor == "*" && Narrowed("*", band).Select(x => x.Doctor).DistinctBy(p => p.ClinicianId).ToList() is { Count: > 1 } available)
+        if (attention.Booking == "doctor" && doctor == "*" && Narrowed("*", band).Select(x => x.Doctor).DistinctBy(p => p.ClinicianId).ToList() is { Count: > 1 } available)
             return ($"Los doctores disponibles el {when} en la *{(band == "M" ? "mañana" : "tarde")}* son:", new(available.Select(p => Pick(p, band)).ToList(), "Ver doctores"));
         return null;
     }
@@ -706,7 +715,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         try
         {
             var upcoming = await Upcoming(ct);
-            if (!upcoming.Any(a => a.Id == choice.Appointment)) { await conversations.Send(conv.Id, "Disculpa, esa cita ya no aparece en tu agenda.\n¿En qué más te ayudo?", "agent", "agent:" + job.Id, ct: ct, choices: Menu); return; }
+            if (!upcoming.Any(a => a.Id == choice.Appointment)) { await conversations.Send(conv.Id, "Disculpa, esa cita ya no aparece en tu agenda.\n¿En qué más te ayudo?", "agent", "agent:" + job.Id, ct: ct, choices: MenuNow); return; }
             var appointment = upcoming.First(a => a.Id == choice.Appointment);
             if (choice.Verb == "VERCITA") { await ShowAppointment(appointment, ct); return; }
             if (choice.Verb == "MOVER" && choice.StartsAt is null)
@@ -721,7 +730,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             Trace("propose_action");
             await conversations.Send(conv.Id, summary!, "agent", "agent:" + job.Id, ct: ct, choices: Confirmation());
         }
-        catch (ArgumentException) { await conversations.Send(conv.Id, "Disculpa, ese horario ya no está disponible.\nToca *Mis citas* para intentarlo de nuevo.", "agent", "agent:" + job.Id, ct: ct, choices: Menu); }
+        catch (ArgumentException) { await conversations.Send(conv.Id, "Disculpa, ese horario ya no está disponible.\nToca *Mis citas* para intentarlo de nuevo.", "agent", "agent:" + job.Id, ct: ct, choices: MenuNow); }
         catch (Exception ex) when (ex is HttpRequestException or HospitalIntegrationException) { await OfferPerson("No se pudo gestionar la cita del paciente en Hospital.", "Disculpa, no pude consultar tu cita en este momento.", ct); }
     }
 
@@ -884,7 +893,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         // A message carries one link button. When the hospital says its emergency number answers WhatsApp, the chat is a second one.
         if (urgent && line.EmergencyWhatsApp && Choices.WhatsApp(call) is { } chat)
             await conversations.Send(conv.Id, "También puedes escribirle por WhatsApp a emergencias.", "agent", "handoff-wa:" + activeJobId, ct: ct, choices: chat);
-        if (urgent || !offerDoctor) return;
+        if (urgent || !offerDoctor || !attention.DoctorChat) return;
         var n = 0;
         foreach (var member in await ContactableDoctors(channel, ct))
             await conversations.Send(conv.Id, $"Si prefieres, puedes escribirle directo a *{member.Name}* por WhatsApp.", "agent", $"handoff-doctor:{activeJobId}:{n++}", ct: ct, choices: Choices.WhatsApp(member.WhatsAppPhone));
