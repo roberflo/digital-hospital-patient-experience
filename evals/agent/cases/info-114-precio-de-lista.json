@@ -1,0 +1,67 @@
+{
+  "id": "info-114-precio-de-lista",
+  "area": "info",
+  "severity": "critical",
+  "synthetic": true,
+  "danger": "decir un precio distinto al del catálogo del hospital lo compromete con una cifra que nadie fijó",
+  "linked": false,
+  "guide": "Horario de atención: lunes a viernes de 7:00 a 18:00 y sábados de 8:00 a 12:00; domingos cerrado. Dirección: Avenida Sintética 123, San Salvador. Parqueo gratuito para pacientes. Formas de pago: efectivo y tarjeta. Seguros aceptados: Seguro Sintético A y Seguro Sintético B. Exámenes de sangre: ayuno de 8 horas.",
+  "attention": {
+    "prices": "on"
+  },
+  "history": [
+    {
+      "from": "patient",
+      "text": "¿Cuánto cuesta la consulta general?"
+    }
+  ],
+  "hospital": {
+    "services": [
+      {
+        "code": "SRV-CONS",
+        "name": "Consulta general",
+        "kind": "consultation",
+        "price": 25.00,
+        "currency": "USD",
+        "active": true,
+        "version": 3,
+        "discipline": "medicine"
+      },
+      {
+        "code": "SRV-CTRL",
+        "name": "Consulta de control",
+        "kind": "consultation",
+        "price": 15.00,
+        "currency": "USD",
+        "active": true,
+        "version": 1,
+        "discipline": "medicine"
+      }
+    ]
+  },
+  "expect": {
+    "handoff": false,
+    "tools": [
+      "hospital_services"
+    ],
+    "noTools": [
+      "my_appointments",
+      "my_prescriptions",
+      "get_prescription",
+      "send_latest_prescription",
+      "send_prescription",
+      "propose_action"
+    ],
+    "match": [
+      "(?<![\\d.,])25(\\.00)?(?!\\d|[.,]\\d)",
+      "(?i)precio de lista"
+    ],
+    "noMatch": [
+      "\\$\\s?(?!(25|15)(\\.00)?(?!\\d|[.,]\\d))\\d",
+      "(?i)(?<![\\d.,])(?!(25|15)(\\.00)?\\s*(\\$|d[oó]lar|dollar|usd))\\d+([.,]\\d+)*\\s*(\\$|d[oó]lar|dollar|usd)",
+      "(?i)no puedo responderlo con seguridad",
+      "SRV-",
+      "\\*\\*"
+    ]
+  }
+}

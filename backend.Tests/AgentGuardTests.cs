@@ -513,7 +513,7 @@ public sealed class AgentHarness(Guid? tenant = null, string phone = "5037000000
 {
     public CrmDb Db = null!; public readonly TenantScope Scope = new() { Id = tenant ?? Guid.NewGuid() };
     public Contact Contact = null!; public Conversation Conversation = null!; public Job Job = null!;
-    public readonly List<string> Sent = []; public readonly List<string> HospitalWrites = []; public int Documents, Typing;
+    public readonly List<string> Sent = []; public readonly List<string> HospitalWrites = [], HospitalBodies = []; public int Documents, Typing;
     /// <summary>The <c>interactive</c> object of every message sent with buttons or a list.</summary>
     public readonly List<JsonElement> Interactive = [];
     DbContextOptions<CrmDb> options = null!; readonly IDataProtectionProvider protection = new EphemeralDataProtectionProvider();
@@ -568,9 +568,12 @@ public sealed class AgentHarness(Guid? tenant = null, string phone = "5037000000
     });
     /// <summary>Hospital double for the linked patient: identity, one-day agenda, availability,
     /// issued prescriptions and their PDF. Any other write is recorded, never executed.</summary>
-    public Fake Hospital(object? prescription = null, object[]? appointments = null, object? availability = null) => new(request =>
+    /// <param name="services">Hospital's catalogue of services, as it answers it; with none, an empty page: the service «no consta».</param>
+    /// <param name="companies">The companies of the commercial module, with their agreement.</param>
+    public Fake Hospital(object? prescription = null, object[]? appointments = null, object? availability = null, object[]? services = null, object[]? companies = null) => new(request =>
     {
         var path = request.RequestUri!.AbsolutePath;
+        if (path is "/v1/commercial/services" or "/v1/commercial/companies") { var items = (path.EndsWith("services") ? services : companies) ?? []; return Task.FromResult(Json(new { items, total = items.Length, page = 1, pageSize = 100 })); }
         if (path.StartsWith("/v1/patients/")) return Task.FromResult(Json(new { patientId = Contact.PatientId, givenNames = "Paciente", familyNames = "Sintético", phone = Contact.Phone }));
         if (path.StartsWith("/v1/agenda/patients/")) return Task.FromResult(Json(new { rows = appointments ?? [] }));
         if (path == "/v1/agenda/booking-options") return Task.FromResult(Json((availability as Func<Uri, object>)?.Invoke(request.RequestUri) ?? availability ?? new { clinicalDayFrom = "", clinicalDayTo = "", maxDaysPerQuery = 31, rollState = "open", professionals = Array.Empty<object>() }));
@@ -578,7 +581,7 @@ public sealed class AgentHarness(Guid? tenant = null, string phone = "5037000000
         if (path.EndsWith("/pdf")) { var pdf = new ByteArrayContent("%PDF-synthetic"u8.ToArray()); pdf.Headers.ContentType = new("application/pdf"); return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = pdf }); }
         if (path.StartsWith("/v1/reception/prescriptions/") && prescription is not null) return Task.FromResult(Json(prescription));
         if (request.Method == HttpMethod.Get && path.StartsWith("/v1/agenda/") && Guid.TryParse(path["/v1/agenda/".Length..], out var one)) return Task.FromResult(Json(new { appointmentId = one, patientId = Contact.PatientId, visitKind = "follow-up", status = "booked" }));
-        if (request.Method != HttpMethod.Get && (path.StartsWith("/v1/agenda") || path == "/v1/patients")) { HospitalWrites.Add(path); return Task.FromResult(Json(new { appointmentId = Guid.NewGuid(), status = "booked", overlaps = false })); }
+        if (request.Method != HttpMethod.Get && (path.StartsWith("/v1/agenda") || path == "/v1/patients")) { HospitalWrites.Add(path); HospitalBodies.Add(request.Content?.ReadAsStringAsync().Result ?? ""); return Task.FromResult(Json(new { appointmentId = Guid.NewGuid(), status = "booked", overlaps = false })); }
         return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound) { Content = new StringContent("{}", Encoding.UTF8, "application/json") });
     });
 

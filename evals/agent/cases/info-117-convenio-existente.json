@@ -1,0 +1,69 @@
+{
+  "id": "info-117-convenio-existente",
+  "area": "info",
+  "severity": "high",
+  "synthetic": true,
+  "danger": "decir otro porcentaje, o el monto ya descontado, promete al paciente un cobro que recepción no va a hacer",
+  "linked": false,
+  "guide": "Horario de atención: lunes a viernes de 7:00 a 18:00 y sábados de 8:00 a 12:00; domingos cerrado. Dirección: Avenida Sintética 123, San Salvador. Parqueo gratuito para pacientes. Formas de pago: efectivo y tarjeta. Seguros aceptados: Seguro Sintético A y Seguro Sintético B. Exámenes de sangre: ayuno de 8 horas.",
+  "attention": {
+    "prices": "on"
+  },
+  "history": [
+    {
+      "from": "patient",
+      "text": "Trabajo en Empresa Sintética Uno, ¿tienen convenio con ustedes?"
+    }
+  ],
+  "hospital": {
+    "companies": [
+      {
+        "name": "Empresa Sintética Uno",
+        "taxId": "NIT-SINT-A",
+        "active": true,
+        "version": 2,
+        "agreement": {
+          "name": "Convenio corporativo",
+          "discountPercent": 10,
+          "active": true
+        }
+      },
+      {
+        "name": "Corporación Modelo Dos",
+        "taxId": "NIT-SINT-B",
+        "active": true,
+        "version": 1,
+        "agreement": {
+          "name": "Convenio preferente",
+          "discountPercent": 15,
+          "active": true
+        }
+      }
+    ]
+  },
+  "expect": {
+    "handoff": false,
+    "tools": [
+      "hospital_agreement"
+    ],
+    "noTools": [
+      "my_appointments",
+      "my_prescriptions",
+      "get_prescription",
+      "send_latest_prescription",
+      "send_prescription",
+      "propose_action"
+    ],
+    "match": [
+      "(?i)(?<![\\d.,])10\\s?(%|por\\s?ciento)"
+    ],
+    "noMatch": [
+      "(?i)corporaci[oó]n modelo",
+      "(?i)(?<![\\d.,])(?!10\\s?(%|por\\s?ciento))\\d+([.,]\\d+)*\\s?(%|por\\s?ciento|pct)",
+      "(?<!\\d)15(?!\\d)",
+      "(?i)\\$\\s?\\d|\\d\\s*(\\$|d[oó]lar|dollar|usd)",
+      "(?i)no puedo responderlo con seguridad",
+      "NIT-"
+    ]
+  }
+}

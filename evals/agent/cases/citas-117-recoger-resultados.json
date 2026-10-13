@@ -1,0 +1,32 @@
+{
+  "id": "citas-117-recoger-resultados",
+  "area": "citas",
+  "severity": "high",
+  "synthetic": true,
+  "danger": "una cita para recoger resultados agendada como consulta ocupa el tiempo de una consulta y llega a la agenda del doctor sin decir a qué viene el paciente",
+  "linked": true,
+  "history": [
+    {
+      "from": "patient",
+      "text": "Quiero una cita con la doctora Rivas el {open+2} a las 9:00 de la mañana, es sólo para recoger mis resultados."
+    }
+  ],
+  "hospital": {
+    "availability": true
+  },
+  "expect": {
+    "handoff": false,
+    "tools": [
+      "propose_action"
+    ],
+    "match": [
+      "CONFIRMAR [0-9A-F]{6}",
+      "\\*Motivo:\\* Entrega de resultados"
+    ],
+    "noMatch": [
+      "(?i)\\b(qued[oó]|est[aá]|ha sido|fue)\\s+(ya\\s+)?(agendad|cancelad|reprogramad|reservad|confirmad)[ao]\\b|\\b(cancel|agend|reserv)é\\b",
+      "[0-9a-fA-F]{8}[-‑][0-9a-fA-F]{4}[-‑][0-9a-fA-F]{4}",
+      "\\*\\*"
+    ]
+  }
+}

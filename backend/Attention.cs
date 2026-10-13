@@ -9,7 +9,8 @@ namespace Recepcion;
 /// <param name="Booking">«doctor» asks for the doctor before the hours; «hours» lists the hours of every doctor.</param>
 /// <param name="Unregistered">Someone without a record: «register» by WhatsApp; «person» leaves it to reception.</param>
 /// <param name="Menu">The options of the welcome menu, out of <see cref="MenuOptions"/>. Null shows them all.</param>
-public sealed record Attention(string Symptoms = "ask", string NoSlotSoon = "ask", bool DoctorChat = true, string Booking = "doctor", string Unregistered = "register", string[]? Menu = null)
+/// <param name="Prices">A patient asks what a service costs: «off» leaves the price to reception; «on» says the list price of Hospital's catalogue and the discount of a company agreement.</param>
+public sealed record Attention(string Symptoms = "ask", string NoSlotSoon = "ask", bool DoctorChat = true, string Booking = "doctor", string Unregistered = "register", string[]? Menu = null, string Prices = "off")
 {
     public static readonly string[] MenuOptions = ["AGENDAR", "MISCITAS", "RECETA", "PERSONA"];
     public static readonly Attention Recommended = new();
@@ -29,11 +30,11 @@ public sealed record Attention(string Symptoms = "ask", string NoSlotSoon = "ask
 
     public Attention Checked()
     {
-        if (Symptoms is not ("ask" or "person") || NoSlotSoon is not ("ask" or "nearest") || Booking is not ("doctor" or "hours") || Unregistered is not ("register" or "person")) throw new ArgumentException("Opción de atención inválida");
+        if (Symptoms is not ("ask" or "person") || NoSlotSoon is not ("ask" or "nearest") || Booking is not ("doctor" or "hours") || Unregistered is not ("register" or "person") || Prices is not ("off" or "on")) throw new ArgumentException("Opción de atención inválida");
         if (Menu is not null && (Menu.Length == 0 || Menu.Any(option => !MenuOptions.Contains(option)))) throw new ArgumentException("El menú necesita al menos una opción válida");
         return this with { Menu = Menu is null || MenuOptions.All(Menu.Contains) ? null : MenuOptions.Where(Menu.Contains).ToArray() };
     }
     // The menu is a set: two records with the same options are the same reception.
-    public bool Equals(Attention? other) => other is not null && (Symptoms, NoSlotSoon, DoctorChat, Booking, Unregistered) == (other.Symptoms, other.NoSlotSoon, other.DoctorChat, other.Booking, other.Unregistered) && Shown.SequenceEqual(other.Shown);
-    public override int GetHashCode() => HashCode.Combine(Symptoms, NoSlotSoon, DoctorChat, Booking, Unregistered, Shown.Length);
+    public bool Equals(Attention? other) => other is not null && (Symptoms, NoSlotSoon, DoctorChat, Booking, Unregistered, Prices) == (other.Symptoms, other.NoSlotSoon, other.DoctorChat, other.Booking, other.Unregistered, other.Prices) && Shown.SequenceEqual(other.Shown);
+    public override int GetHashCode() => HashCode.Combine(Symptoms, NoSlotSoon, DoctorChat, Booking, Unregistered, Prices, Shown.Length);
 }

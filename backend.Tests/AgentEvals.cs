@@ -44,7 +44,10 @@ public sealed class AgentEvals(ITestOutputHelper output)
         foreach (var turn in turns.Skip(1)) await h.Say(turn.From, turn.Text, turn.At);
         if (spec.TryGetProperty("memory", out var kept)) { foreach (var fact in kept.EnumerateObject()) h.Db.ContactMemories.Add(new ContactMemory { TenantId = h.Scope.Id, ContactId = h.Contact.Id, Key = fact.Name, Value = fact.Value.GetString()! }); await h.Db.SaveChangesAsync(); }
         if (spec.GetProperty("linked").GetBoolean()) await h.Link();
-        (await h.Db.Tenants.SingleAsync(t => t.Id == h.Scope.Id)).EmergencyPhone = "2200 0000"; await h.Db.SaveChangesAsync();
+        // "attention": what this hospital chose in «Cómo atiende mi recepción» ({ "prices": "on" }); what a case does not choose stays recommended.
+        var tenant = await h.Db.Tenants.SingleAsync(t => t.Id == h.Scope.Id); tenant.EmergencyPhone = "2200 0000";
+        if (spec.TryGetProperty("attention", out var attention)) tenant.Attention = AgentEvalCases.Chosen(attention).Write();
+        await h.Db.SaveChangesAsync();
 
         string? error = null;
         using var http = new Paced();
@@ -121,7 +124,9 @@ public sealed class AgentEvals(ITestOutputHelper output)
         };
         object[]? appointments = spec.TryGetProperty("appointmentInDays", out var days) ? [new { appointmentId = Guid.NewGuid(), clinicianId = doctor, clinicianName = "Dra. Sintética Rivas", scheduledStart = At(days.GetInt32(), 10), durationMinutes = 30, status = "booked" }] : null;
         object? prescription = spec.TryGetProperty("prescription", out var lines) ? new { prescriptionId = Guid.NewGuid(), patientId = h.Contact.PatientId, encounterId = Guid.NewGuid(), state = "signed", signedAt = DateTimeOffset.UtcNow.AddDays(-2), contentWithheld = false, lines } : null;
-        return h.Hospital(prescription, appointments, availability);
+        // "services" and "companies": Hospital's catalogue and its companies with their agreement, in Hospital's own shape. Without them, an empty catalogue.
+        object[]? Items(string name) => spec.TryGetProperty(name, out var items) ? items.EnumerateArray().Select(item => (object)item).ToArray() : null;
+        return h.Hospital(prescription, appointments, availability, Items("services"), Items("companies"));
     }
 }
 
@@ -130,6 +135,8 @@ public sealed class AgentEvals(ITestOutputHelper output)
 public sealed class AgentEvalCases
 {
     static readonly string[] Areas = ["citas", "recetas", "info", "alcance", "seguridad", "urgencia", "registro"];
+    /// <summary>The reception a case chose. A choice that is not on offer throws: read leniently it would run as the recommended one and measure nothing.</summary>
+    public static Attention Chosen(JsonElement attention) => JsonSerializer.Deserialize<Attention>(attention.GetRawText(), new JsonSerializerOptions(JsonSerializerDefaults.Web))!.Checked();
     public static List<JsonElement> Load()
     {
         var root = new DirectoryInfo(AppContext.BaseDirectory);
@@ -155,6 +162,7 @@ public sealed class AgentEvalCases
             Assert.True(spec.GetProperty("danger").GetString()!.Length > 20, id + ": state what a wrong answer does to the patient");
             Assert.Equal("patient", spec.GetProperty("history").EnumerateArray().Last().GetProperty("from").GetString());
             Assert.True(spec.GetProperty("expect").EnumerateObject().Any(), id + ": expects nothing");
+            if (spec.TryGetProperty("attention", out var attention)) Chosen(attention);
             // Real-data shapes never belong in a tracked case.
             Assert.DoesNotMatch(@"\b\d{8}-\d\b|\b\d{4}-\d{4}\b|[\w.+-]+@[\w-]+\.[\w.]+|\b\d{9,}\b", spec.GetRawText());
             foreach (var name in new[] { "match", "noMatch" }) if (spec.GetProperty("expect").TryGetProperty(name, out var patterns)) foreach (var pattern in patterns.EnumerateArray()) _ = new Regex(Regex.Replace(pattern.GetString()!, @"\{(day|dom|open|opendom)\+\d+\}", "1"));

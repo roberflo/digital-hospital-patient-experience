@@ -35,6 +35,16 @@ public sealed class AttentionTests : IAsyncLifetime
         Assert.Throws<ArgumentException>(() => new Attention(symptoms, noSlotSoon, true, booking, unregistered, menu).Checked());
 
     [Fact]
+    public void PricesAreOffUntilTheHospitalTurnsThemOn()
+    {
+        Assert.Equal("off", Attention.Read(null).Prices);
+        Assert.Equal("off", Attention.Read("{\"symptoms\":\"person\"}").Prices); // stored before the choice existed
+        Assert.Equal("on", Attention.Read("{\"prices\":\"on\"}").Prices);
+        Assert.Equal("off", Attention.Read("{\"prices\":\"guess\"}").Prices);
+        Assert.Throws<ArgumentException>(() => new Attention(Prices: "guess").Checked());
+    }
+
+    [Fact]
     public void AMenuWithEveryOptionIsTheRecommendedOne() =>
         Assert.Equal(Attention.Recommended, new Attention(Menu: ["PERSONA", "RECETA", "MISCITAS", "AGENDAR"]).Checked());
 

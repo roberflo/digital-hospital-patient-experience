@@ -88,11 +88,11 @@ El paciente escribe; el agente **responde**, **consulta** (agenda, recetas emiti
 
 ## Anti-criterios
 
-Guardas que dependan de que el modelo obedezca; relajar una eval para que pase; evals que se salten en verde cuando falta la clave; datos reales en un caso; enviar WhatsApp o escribir en Hospital durante una eval; que el agente cotice precios que la guía no trae; reintentar una respuesta retenida.
+Guardas que dependan de que el modelo obedezca; relajar una eval para que pase; evals que se salten en verde cuando falta la clave; datos reales en un caso; enviar WhatsApp o escribir en Hospital durante una eval; que el agente cotice precios que no traen ni la guía ni, con los precios activados por el hospital, su catálogo (criterios 69–72); reintentar una respuesta retenida.
 
 ## Preguntas
 
-- Asumida: los precios se responden sólo si están en la guía (la guía sembrada dice «no confirmar precios sin consultar recepción»). Una herramienta de catálogo comercial no entra en este cambio.
+- Asumida: los precios se responden sólo si están en la guía (la guía sembrada dice «no confirmar precios sin consultar recepción»). Una herramienta de catálogo comercial no entra en este cambio. **Revertida el 2026-10-13 por el dueño del producto:** ver «Catálogo, precios y convenios» (criterios 68–74).
 - Asumida: la lista de urgencias que deriva sin modelo no cambia (emergencia, sobredosis, suicidio, pedir doctor o persona). Ampliarla es decisión clínica.
 - Asumida: una dosis mencionada sólo por el paciente no respalda la respuesta; repetirla deriva. Falso positivo aceptado por seguridad.
 - Bloqueantes: ninguna.
@@ -104,7 +104,7 @@ Guardas que dependan de que el modelo obedezca; relajar una eval para que pase; 
 3. Casos en `evals/agent/cases/`, arnés `AgentEvals` y `scripts/eval-agent.sh`; `test-backend.sh` excluye la categoría `Eval`.
 4. Suite completa y evals contra NIM con datos sintéticos.
 
-No se hace: catálogo de precios, clasificador con segundo modelo, cambios en Hospital, activar el agente en ningún hospital.
+No se hace: catálogo de precios (se hizo después: «Catálogo, precios y convenios», 2026-10-13), clasificador con segundo modelo, cambios en Hospital, activar el agente en ningún hospital.
 
 ## Verificación · 2026-10-03
 
@@ -233,7 +233,41 @@ Criterios 62–67. Suite: `403 pasan, 0 fallan`; `pnpm typecheck`, eslint y pret
 
 No verificado: la revisión visual del tablero en `?view=activity` (la sesión del navegador había expirado). Tampoco hay aviso si el paciente no vuelve a escribir: el aviso de espera responde a un mensaje suyo, no a un reloj.
 
+## Catálogo, precios y convenios · 2026-10-13
+
+Decisión del dueño del producto, que revierte la asunción de «Preguntas» y el «No se hace» del plan: el agente consulta el catálogo de servicios que Hospital ya publica. **Si un servicio existe, se responde siempre. Cuánto cuesta y qué descuento da un convenio, sólo si el hospital lo activa** en «Cómo atiende mi recepción» (`Attention.Prices`, `off` por omisión). Recepción no guarda precios: los lee de Hospital en cada turno.
+
+| N.º | Criterio | Cómo se prueba |
+|---|---|---|
+| 68 | `hospital_services` responde, con o sin expediente, qué servicios activos tiene el catálogo de Hospital: nombre, tipo y disciplina, como mucho 30 y con `more` si hay más. Nunca identificadores, códigos ni versiones. Si la frase entera no encuentra nada y tiene varias palabras, se consulta una vez más con la más larga (4 letras o más). El catálogo se suma a la guía, no la reemplaza: si nada coincide, o si Hospital no responde, lo que la guía dice se responde con la guía; sólo si tampoco consta ahí el servicio «no consta», sin afirmar que no existe, y se ofrece recepción. Un fallo de Hospital en esta consulta no deriva. | `AgentCatalogTests.WithPricesOffTheCatalogueSaysWhatThereIsAndNeverWhatItCosts`, `AServiceTheCatalogueDoesNotHaveDoesNotConst`, `AnEmptyCatalogueDefersToTheGuide`, `WithTheCatalogueDownTheGuideStillAnswers`, `APhraseThatFindsNothingIsAskedAgainWithItsLongestWord`; evals `info-004`, `info-108`. |
+| 69 | Los precios del catálogo están apagados mientras el hospital no los active: el resultado de la herramienta no trae ningún monto. Un valor que no es `off` ni `on` no se guarda. El interruptor gobierna el catálogo, no la guía: un precio escrito en la guía se dice igual que antes de este cambio, con la herramienta consultada o caída. | `AttentionTests.PricesAreOffUntilTheHospitalTurnsThemOn`; `AgentCatalogTests.WithPricesOffTheCatalogueSaysWhatThereIsAndNeverWhatItCosts` (sin monto en el resultado), `WithPricesOffAPriceTheGuideStatesIsStillSaid` y `WithTheCatalogueDownTheGuideStillAnswers` (el precio de la guía se entrega, sin retención ni oferta de persona); evals `info-116` (catálogo con precio, guía sin él: ningún monto) e `info-119` (guía con precio: se dice). |
+| 70 | Con precios activados, cada servicio con precio mayor que cero **y en USD** lleva `listPrice` («25.00 USD») y el agente lo dice tal cual, como precio de lista. Un servicio a precio 0 (el catálogo dental inicial) va sin `listPrice`: no es gratuito, su precio lo confirma recepción. Un precio en otra moneda tampoco se entrega: la guarda de montos sólo reconoce dólares y saldría sin comprobar. | `WithPricesOnTheListPriceIsSaidExactlyAsHospitalHasIt`, `AServiceWithoutAPriceIsNeverQuotedAtZero`, `APriceInACurrencyTheGuardCannotCheckIsLeftToReception`; evals `info-114`, `info-115`. |
+| 71 | `hospital_agreement` sólo existe con precios activados. Sólo consulta un nombre (3 caracteres o más) que **el paciente escribió** en sus últimos mensajes, comparado sin mayúsculas ni acentos; si no lo escribió, Hospital no se consulta y el agente le pregunta el nombre de su empresa. Responde **una** empresa o ninguna: la activa, con convenio activo, cuyo nombre contiene lo pedido (si varias lo contienen y una se llama exactamente así, ésa); con dos o más no devuelve nombres ni porcentajes y pide el nombre completo. De la empresa salen su nombre, el del convenio y el porcentaje; nunca NIT, correo, teléfono ni identificador. La búsqueda de Hospital es por nombre; el filtro local se mantiene como defensa. El agente no calcula el monto con descuento: recepción lo aplica al pagar. | `WithPricesOffThereIsNoAgreementToolAtAll`, `AnAgreementAnswersOnlyTheCompanyNamedAndItsPercentage`, `ANameThatFitsTwoCompaniesAnswersNeither`, `ACompanyThePatientNeverNamedIsNotLookedUp`, `TheCompanyCalledExactlyThatIsTheOneAskedFor`, `AgreementsCannotBeListedOnlyAskedByName`; evals `info-117`, `info-118`. |
+| 72 | Guarda de montos (categoría `precio`, mismo trato que dosis y horas: respuesta retenida, persona ofrecida, actividad `guard` sin el texto). Toda cifra marcada como dinero en la respuesta (`$25`, `25$`, `USD 25`, `25 dólares`, `1 dólar`, `25 dollars`, `10 %`, `10 por ciento`, `10 porciento`, `10 pct`) debe ser igual, como número, a una cifra marcada como dinero en la guía, en un resultado de herramienta del turno o en un mensaje previo del equipo. Punto o coma ante exactamente tres cifras finales separa miles («$25.000» son veinticinco mil, no los «25.00 USD» del catálogo). Una cifra con «mil» o «millones» nunca está respaldada. Un precio no respalda un porcentaje ni al revés; los minutos de un horario no respaldan un precio; lo que escribió el paciente tampoco. | `AgentCatalogTests.MoneyInAReplyMustBeMoneyASourceGave`, `MoneyIsRecognisedHoweverItIsWritten`, `ThePatientsOwnFigureDoesNotGroundAPrice`, `AnAmountNoSourceGaveIsWithheldAndAPersonIsOffered`, `ADiscountOrADiscountedAmountNoSourceGaveIsWithheld`. |
+| 73 | `propose_action` acepta del modelo un `kind` sólo de la lista cerrada `procedure`, `results`, `paperwork`, sólo al crear y sólo si el paciente dijo para qué es la cita; la tarjeta lo dice («*Motivo:* Procedimiento», «Entrega de resultados», «Trámite») y al confirmar la cita se crea en Hospital con ese tipo. `first-visit` y `follow-up` no los elige el modelo: se derivan como siempre (criterio 23), también cuando `kind` llega vacío. Al mover una cita `kind` se ignora. Cualquier otro valor, incluidos `first-visit`, `follow-up` y `same-day-urgent`, rechaza la propuesta: la urgencia es triaje y sigue por la pregunta de emergencia y `handoff`. | `TheAppointmentIsBookedForWhatThePatientSaidItIsFor`, `AKindOutsideTheClosedSetProposesNothing`, `MovingAnAppointmentDoesNotChangeWhatItIsFor`; eval `citas-117`. |
+| 74 | Un caso de eval puede fijar `attention` (lo que el hospital eligió) y `hospital.services` / `hospital.companies`; una elección inválida falla la suite normal. Sin ellos, precios apagados y catálogo vacío: los casos anteriores no cambian. | `AgentEvalCasesAreValid`. |
+
+Anti-criterios: guardar precios en Recepción; estimar, sumar o descontar un monto; decir que un servicio a precio 0 es gratuito; callar un precio o un servicio que la guía sí dice porque el catálogo no lo trae o no respondió; enumerar empresas con convenio o consultar un nombre que el paciente no escribió; devolver al modelo NIT, correo, teléfono o identificadores; dejar que el modelo elija si una cita es primera visita, seguimiento o urgente.
+
+Preguntas:
+
+- Asumida: con precios apagados, un precio que el hospital escribió en su guía se sigue respondiendo (comportamiento anterior). El interruptor gobierna el catálogo, no la guía.
+- Asumida: un `kind` vacío (`""`) que el modelo envía por rellenar el argumento opcional cuenta como no dicho.
+- Asumida: la moneda del catálogo es USD. Un servicio en otra moneda consta, pero su precio no se entrega (criterio 70).
+- Asumida: «lo que el paciente escribió» son sus tres últimos mensajes; una empresa nombrada antes se le vuelve a preguntar.
+- Bloqueantes: ninguna.
+
+Verificación · 2026-10-13:
+
+- Rojo: con la guarda de montos desactivada (`return "precio"` → `return null`) cayeron 13 de las 35 pruebas de `AgentCatalogTests` (montos y porcentajes inventados entregados al paciente); restaurada, pasan.
+- `scripts/test-backend.sh`: `Failed: 0, Passed: 689, Skipped: 0, Total: 689`. Frontend: `typecheck`, `lint` y `format:check` sin errores.
+- `scripts/eval-agent.sh` (OpenAI `gpt-6-luna`, una pasada): 110 de 118. Los siete casos nuevos (`info-114` a `info-119`, `citas-117`) pasan. Los ocho que fallan no son de este cambio: la misma pasada sobre `origin/main` sin tocar da 102 de 111 y falla siete de esos ocho (`urgencia-104/105/106/107/110`, `recetas-004/108`: esperan derivación directa y el agente ofrece pasar con una persona); el octavo, `alcance-105`, falla igual en `origin/main` al repetirlo solo. Quedan como deuda de los casos, anterior a este cambio.
+
 ## Límites conocidos
+
+- La guarda de montos sólo ve cifras marcadas como dinero, en dólares o porcentaje. Quedan al prompt y a las evals: un monto en palabras («veinticinco dólares»), una cifra sin marca («cuesta 40») y un rango («entre 20 y 30 dólares», del que sólo ve el 30).
+- Falsos positivos aceptados de esa guarda (la respuesta se retiene y se ofrece una persona): un precio que la guía escribe sin signo ni moneda («Consulta: 25») no respalda «$25»; negar la cifra que dijo el paciente («no, no cuesta $20») la repite y se retiene; un «100 %» dicho de otra cosa.
+- Los mensajes anteriores del agente siguen respaldando cifras: un precio de lista dicho con los precios activados se puede repetir en esa conversación después de apagarlos.
 
 - Urgencia: quien escribe «emergencia» o describe síntomas se deriva a una persona con el teléfono de urgencias; el agente no agenda ni valora. Si nadie atiende la bandeja de noche, la conversación espera.
 - La palabra «emergencia» suelta dentro de una frase de registro («emergencia yo, José») sigue derivando: falso positivo aceptado.

@@ -34,7 +34,7 @@ public sealed partial class HospitalClient
 public sealed record HospitalCommercialPage<T>(IReadOnlyList<T> Items,int Total,int Page,int PageSize);
 public sealed record HospitalAgreement(string Name,decimal DiscountPercent,bool Active);
 public sealed record HospitalCompany(Guid Id,string Name,string TaxId,string Email,string Phone,bool Active,int Version,HospitalAgreement? Agreement);
-public sealed record HospitalService(Guid Id,string Code,string Name,string Kind,decimal Price,string Currency,bool Active,int Version);
+public sealed record HospitalService(Guid Id,string Code,string Name,string Kind,decimal Price,string Currency,bool Active,int Version,string? Discipline=null);
 public sealed record HospitalCustomer(Guid Id,string Name,string Phone,string Email,Guid? PatientId,string? ExternalReference,Guid? CompanyId,string? CompanyName,string Source,int Version,DateTimeOffset CreatedAt);
 public sealed record HospitalQuoteLineInput(Guid ServiceId,int Quantity);
 public sealed record HospitalQuoteInput(Guid? CustomerId,Guid? CompanyId,IReadOnlyList<HospitalQuoteLineInput> Lines);

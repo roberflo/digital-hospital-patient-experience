@@ -30,6 +30,7 @@ type Attention = {
   doctorChat: boolean;
   booking: 'doctor' | 'hours';
   unregistered: 'register' | 'person';
+  prices: 'off' | 'on';
   menu: string[] | null;
 };
 type AttentionData = {
@@ -45,7 +46,7 @@ type AttentionData = {
 };
 type Option = { value: string; title: string; detail: string };
 type Decision = {
-  key: 'symptoms' | 'noSlotSoon' | 'doctorChat' | 'booking' | 'unregistered';
+  key: 'symptoms' | 'noSlotSoon' | 'doctorChat' | 'booking' | 'unregistered' | 'prices';
   question: string;
   options: Option[];
 };
@@ -128,6 +129,23 @@ const decisions: Decision[] = [
         value: 'person',
         title: 'Pasarlo a recepción',
         detail: 'Tu equipo lo registra y le agenda.',
+      },
+    ],
+  },
+  {
+    key: 'prices',
+    question: 'Cuando un paciente pregunta cuánto cuesta un servicio',
+    options: [
+      {
+        value: 'off',
+        title: 'Dejar el precio a recepción',
+        detail: 'El agente confirma si ofreces el servicio y ofrece pasar la consulta a tu equipo.',
+      },
+      {
+        value: 'on',
+        title: 'Decir el precio de lista',
+        detail:
+          'Usa los precios del catálogo de servicios de Hospital. Si el paciente nombra su empresa, también dice el descuento del convenio.',
       },
     ],
   },

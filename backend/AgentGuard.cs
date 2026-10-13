@@ -82,7 +82,25 @@ public static partial class AgentGuard
         // An hour the patient asked for may be echoed back («no hay a las 15:00»); a dose the patient mentioned may not.
         var hours = Time().Matches(grounding + "\n" + patient).Select(Clock).ToHashSet();
         if (Time().Matches(reply).Any(m => !hours.Contains(Clock(m)))) return "horario";
+        // Same rule for money: a price or a discount that the catalogue, the guide or the staff never gave commits the hospital to an invented figure.
+        // Only what a source wrote as money counts: the «30» of a slot's minutes does not make «$30» a price, and a list price of 25 does not
+        // make «25 %» a discount. What the patient wrote is not a source either: «sí, cuesta $20» echoed back would be the hospital confirming it.
+        // ponytail: figures marked as money only («$25», «25$», «USD 25», «25 dólares», «10 %», «10 pct»), and dollars only. An amount in words,
+        // a figure with no mark («cuesta 40») and a range («entre 20 y 30 dólares», where only the 30 is seen) are left to the prompt and the evals.
+        var figures = Money().Matches(grounding).Select(m => Figure(m.Value)).ToHashSet();
+        if (Money().Matches(reply).Any(m => Figure(m.Value) is not { } figure || !figures.Contains(figure))) return "precio";
         return proposed && Done().IsMatch(reply) ? "confirmación" : null;
+    }
+    /// <summary>A money figure as a number and whether it is a percentage, so «$1,200», «1200.00 USD» and «1.200 dólares» are the same amount.
+    /// A dot or a comma before exactly three final digits separates thousands, in either style; before any other count it is the decimal mark.
+    /// The catalogue always writes two decimals, so «$25.000» is twenty-five thousand and never the «25.00 USD» of the list.
+    /// Null when it is not a figure a source can back: forty digits, or one scaled in words («25 mil», «2 millones»). It then matches nothing.</summary>
+    static (bool Percent, decimal Amount)? Figure(string money)
+    {
+        var text = Number().Match(money).Value; var cut = text.LastIndexOfAny(['.', ',']); var whole = cut < 0 || text.Length - cut - 1 == 3;
+        var digits = (whole ? text : text[..cut]).Replace(".", "").Replace(",", "") + (whole ? "" : "." + text[(cut + 1)..]);
+        return !money.Contains("mil", StringComparison.OrdinalIgnoreCase) && decimal.TryParse(digits, System.Globalization.NumberStyles.AllowDecimalPoint, System.Globalization.CultureInfo.InvariantCulture, out var amount)
+            ? (money.Contains('%') || money.Contains("ciento", StringComparison.OrdinalIgnoreCase) || money.Contains("pct", StringComparison.OrdinalIgnoreCase), amount) : null;
     }
     /// <summary>A clock time on the 24-hour scale, so «6:00 PM» and the guide's «18:00» are the same hour.</summary>
     static string Clock(Match time)
@@ -115,6 +133,10 @@ public static partial class AgentGuard
     [GeneratedRegex(@"(?i)\b(?:registr|inscrib|ag[eé]nd|cita|apunt|anot)\w*\b.{0,40}?\b(?:a|para|de)\s+(?:mi|mis|nuestr[oa])\s+(?:pap[aá]|mam[aá]|padres?|madre|espos[oa]|marido|mujer|hij[oa]s?|herman[oa]|abuel[oa]|t[ií][oa]|novi[oa]|pareja|suegr[oa]|niet[oa]|sobrin[oa]|amig[oa]|vecin[oa]|jef[ea]|beb[eé]|ni[ñn][oa])\b")] private static partial Regex Other();
     [GeneratedRegex(@"[^\p{L}\p{M} .'-]")] private static partial Regex Unsafe();
     [GeneratedRegex(@"\s+")] private static partial Regex Spaces();
+    [GeneratedRegex(@"\d+(?:[.,]\d+)*")] private static partial Regex Number();
+    // Four shapes: the sign or «USD» in front; the currency word behind; the sign behind («40$», unless it opens the next figure); a percentage.
+    // «mil» and «millones» ride along so that Figure can refuse them.
+    [GeneratedRegex(@"(?i)(?:\$|\bUSD)\s?\d[\d.,]*(?:\s*(?:mil|mill[oó]n(?:es)?)\b)?|\b\d[\d.,]*\s*(?:(?:mil|mill[oó]n(?:es)?)\s+(?:de\s+)?)?(?:d[oó]lar(?:es)?|dollars?|usd)\b|\b\d+(?:[.,]\d+)*\s?\$(?!\s?\d)|\b\d[\d.,]*\s?(?:%|(?:por\s?ciento|pct)\b)")] private static partial Regex Money();
 }
 
 /// <summary>Repeats one failed model call on the next provider. Only the model request is

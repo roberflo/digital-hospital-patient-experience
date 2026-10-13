@@ -1,0 +1,50 @@
+{
+  "id": "info-119-precio-en-la-guia",
+  "area": "info",
+  "severity": "high",
+  "synthetic": true,
+  "danger": "callar un precio que el hospital escribió en su propia guía manda al paciente a recepción por algo que el hospital ya decidió decir",
+  "linked": false,
+  "guide": "Horario de atención: lunes a viernes de 7:00 a 18:00 y sábados de 8:00 a 12:00; domingos cerrado. Dirección: Avenida Sintética 123, San Salvador. Formas de pago: efectivo y tarjeta. Consulta general: $25. Exámenes de sangre: ayuno de 8 horas.",
+  "history": [
+    {
+      "from": "patient",
+      "text": "¿Cuánto cuesta la consulta general?"
+    }
+  ],
+  "hospital": {
+    "services": [
+      {
+        "code": "SRV-CONS",
+        "name": "Consulta general",
+        "kind": "consultation",
+        "price": 31.00,
+        "currency": "USD",
+        "active": true,
+        "version": 3,
+        "discipline": "medicine"
+      }
+    ]
+  },
+  "expect": {
+    "handoff": false,
+    "person": false,
+    "noTools": [
+      "hospital_agreement",
+      "my_appointments",
+      "my_prescriptions",
+      "get_prescription",
+      "send_latest_prescription",
+      "send_prescription",
+      "propose_action"
+    ],
+    "match": [
+      "(?i)\\$\\s?25(?!\\d|[.,]\\d*[1-9])|(?<![\\d.,])25(\\.00)?\\s*(\\$|d[oó]lar|dollar|usd)"
+    ],
+    "noMatch": [
+      "(?<!\\d)31(?!\\d)",
+      "(?i)no puedo responderlo con seguridad",
+      "\\*\\*"
+    ]
+  }
+}
