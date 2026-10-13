@@ -94,6 +94,30 @@ public sealed class AgentLiveJourney(ITestOutputHelper output)
         Assert.Equal("human", (await h.Fresh()).Status);
     }
 
+    /// <summary>What the agent reads about the hospital itself, against the LOCAL Hospital: its roll with disciplines, its catalogue and its
+    /// published contact. The client turns a failure of the first and the last into "nothing known", so only a non-empty roll proves the route.</summary>
+    [Fact, Trait("Category", "Live")]
+    public async Task HospitalAnswersItsDisciplinesCatalogueAndContact()
+    {
+        var env = new ConfigurationBuilder().AddEnvironmentVariables().Build();
+        var tenant = Guid.Parse(env["DEV_HOSPITAL_TENANT_ID"] ?? throw new InvalidOperationException("DEV_HOSPITAL_TENANT_ID is required."));
+        var prefix = $"Hospital:Tenants:{tenant:D}:";
+        var settings = HospitalConnectionStore.Defaults(tenant, env).ToDictionary(x => prefix + x.Key, x => x.Value);
+        foreach (var pair in env.GetSection(prefix.TrimEnd(':')).GetChildren()) settings[prefix + pair.Key] = pair.Value;
+        settings[prefix + "AccessToken"] = "";
+        var hospital = new HospitalClient(new HttpClient(), new ConfigurationBuilder().AddInMemoryCollection(settings).Build());
+
+        var disciplines = await hospital.ClinicianDisciplines(tenant);
+        output.WriteLine("DISCIPLINAS: " + string.Join(", ", disciplines.Values.GroupBy(d => d).Select(g => $"{g.Key} ×{g.Count()}")));
+        Assert.NotEmpty(disciplines); Assert.All(disciplines.Values, d => Assert.Contains(d, new[] { "medicine", "dentistry", "nutrition" }));
+
+        var contact = await hospital.ClinicContact(tenant);
+        output.WriteLine(contact is null ? "CONTACTO: el hospital no publicó enlace (o la lectura falló)" : $"CONTACTO: dirección {(contact.PublicAddress is { Length: > 0 } ? "sí" : "no")}, teléfono {(contact.PublicPhone is { Length: > 0 } ? "sí" : "no")}");
+
+        var services = await hospital.Services(tenant, null, 1);
+        output.WriteLine($"SERVICIOS: {services.Items.Count} activos, {services.Items.Count(s => s.Price > 0)} con precio, disciplinas: {string.Join(", ", services.Items.Select(s => s.Discipline ?? "—").Distinct())}");
+    }
+
     /// <summary>The part of booking that needs no model: a registered patient taps a free hour, taps Confirmar, and the
     /// appointment exists in the LOCAL Hospital. It keeps working while the AI provider is down or rate-limited.</summary>
     [Fact, Trait("Category", "Live")]
