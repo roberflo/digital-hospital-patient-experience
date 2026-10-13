@@ -118,6 +118,51 @@ public sealed class AgentLiveJourney(ITestOutputHelper output)
         output.WriteLine($"SERVICIOS: {services.Items.Count} activos, {services.Items.Count(s => s.Price > 0)} con precio, disciplinas: {string.Join(", ", services.Items.Select(s => s.Discipline ?? "—").Distinct())}");
     }
 
+    /// <summary>The real agent and model answering from the LOCAL Hospital's own configuration, with prices switched on: the list price of
+    /// a service in its catalogue, its published address, and whether it has a dentist. AGENT_EVAL_PROVIDER=openai keeps it off the NIM key.</summary>
+    [Fact, Trait("Category", "Live")]
+    public async Task AgentAnswersPriceAddressAndDisciplineFromHospital()
+    {
+        var env = new ConfigurationBuilder().AddEnvironmentVariables().Build();
+        var tenant = Guid.Parse(env["DEV_HOSPITAL_TENANT_ID"] ?? throw new InvalidOperationException("DEV_HOSPITAL_TENANT_ID is required."));
+        var prefix = $"Hospital:Tenants:{tenant:D}:";
+        var settings = HospitalConnectionStore.Defaults(tenant, env).ToDictionary(x => prefix + x.Key, x => x.Value);
+        foreach (var pair in env.GetSection(prefix.TrimEnd(':')).GetChildren()) settings[prefix + pair.Key] = pair.Value;
+        settings[prefix + "AccessToken"] = "";
+        var openAi = env["AGENT_EVAL_PROVIDER"] == "openai";
+        settings["NVIDIA_API_KEY"] = env[openAi ? "OPENAI_API_KEY" : "NVIDIA_API_KEY"]; settings["AI_BASE_URL"] = openAi ? "https://api.openai.com/v1" : env["AI_BASE_URL"];
+        settings["AI_MODEL"] = env["AGENT_EVAL_MODEL"] is { Length: > 0 } chosen ? chosen : env[openAi ? "OPENAI_MODEL" : "AI_MODEL"] ?? AgentRuntime.DefaultModel;
+        settings["OPENAI_REASONING_EFFORT"] = env["AGENT_EVAL_REASONING"] ?? env["OPENAI_REASONING_EFFORT"];
+        var config = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
+
+        using var modelHttp = new SocketsHttpHandler(); using var hospitalHttp = new SocketsHttpHandler();
+        var hospital = new HospitalClient(new HttpClient(hospitalHttp), config);
+        var service = (await hospital.Services(tenant, null, 1)).Items.First(s => s.Price > 0 && s.Currency == "USD");
+        var contact = Assert.IsType<HospitalClinicContact>(await hospital.ClinicContact(tenant));
+        Assert.Contains("dentistry", (await hospital.ClinicianDisciplines(tenant)).Values);
+
+        await using var h = new AgentHarness(tenant, "50300" + Random.Shared.Next(100000, 999999));
+        await h.Start(AgentEvals.Guide, $"Hola, ¿cuánto cuesta {service.Name}?");
+        (await h.Db.Tenants.SingleAsync(t => t.Id == tenant)).Attention = new Attention { Prices = "on" }.Checked().Write(); await h.Db.SaveChangesAsync();
+        async Task<string> Turn(string? message)
+        {
+            if (message is not null) await h.Say("patient", message);
+            var before = h.Sent.Count;
+            await h.Runtime(modelHttp, h.Sender(), hospitalHttp, settings).Run(h.Job, new CancellationTokenSource(TimeSpan.FromMinutes(3)).Token);
+            var reply = string.Join("\n", h.Sent.Skip(before));
+            output.WriteLine($"PACIENTE: {message ?? "(primer mensaje)"}\nAGENTE: {reply}\n");
+            Assert.NotEqual("human", (await h.Fresh()).Status);
+            return reply;
+        }
+
+        Assert.Contains(((int)service.Price).ToString(), await Turn(null));
+        Assert.Contains(contact.PublicAddress!.Split(' ').MaxBy(word => word.Length)!.Trim(',', '.'), await Turn("¿Y cuál es la dirección del hospital?"), StringComparison.OrdinalIgnoreCase);
+        Assert.Matches("(?i)odont|dentista", await Turn("¿Tienen dentista?"));
+        var tools = (await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id && a.Kind == "agent_tool").Select(a => a.Body).ToListAsync()).Select(body => Regex.Match(body, @"Herramienta: (\w+)\.").Groups[1].Value).ToList();
+        output.WriteLine("HERRAMIENTAS: " + string.Join(", ", tools));
+        Assert.Contains("hospital_services", tools); Assert.Contains("hospital_contact", tools);
+    }
+
     /// <summary>The part of booking that needs no model: a registered patient taps a free hour, taps Confirmar, and the
     /// appointment exists in the LOCAL Hospital. It keeps working while the AI provider is down or rate-limited.</summary>
     [Fact, Trait("Category", "Live")]
