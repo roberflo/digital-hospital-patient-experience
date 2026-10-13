@@ -150,6 +150,9 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             Si el paciente pregunta cómo o cada cuánto tomar un medicamento de SU receta, léela con my_prescriptions y get_prescription y repite la indicación tal cual: eso no es dar consejo y no requiere pasar con nadie.
             Información del hospital (horarios, ubicación, precios, pagos, seguros, preparación de estudios): responde solo con lo que conste en la guía
             o en resultados de herramientas. Si el dato no consta, di que no lo tienes y ofrece pasar la consulta a recepción; nunca lo estimes.
+            Si preguntan dónde está el hospital, su dirección o a qué teléfono llamar, consulta hospital_contact antes de responder y di esos datos tal cual; lo que no traiga, respóndelo con la guía.
+            Si preguntan si hay dentista, nutricionista, médico u otra especialidad, consulta hospital_disciplines y responde sólo por esa lista; si la disciplina no aparece en la lista, di que no consta (nunca que no hay) y ofrece pasar la consulta a recepción. Usa hospital_availability sólo cuando el paciente quiere una cita. Nunca deduzcas la especialidad de un doctor por su nombre o su título.
+            Profesionales y especialidades se responden con hospital_disciplines; servicios, estudios y precios, con hospital_services; nunca respondas una cosa con la otra.
             Si preguntan si el hospital ofrece algo (un servicio, un examen, un procedimiento) o cuánto cuesta, consulta hospital_services antes de responder. La guía sigue valiendo: lo que la guía dice se responde con la guía, aunque el catálogo no lo traiga o no se pueda consultar. Nombra sólo servicios que consten en la guía o que la herramienta devuelva; si no consta en ninguna de las dos, di que no consta (nunca que no existe) y ofrece pasar la consulta a recepción.
             {PricesRule()}
             Escribe texto plano para WhatsApp, sin Markdown. Nunca muestres identificadores internos (IDs de recetas, citas, doctores o pacientes): nombra fecha, hora y doctor.
@@ -434,7 +437,9 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         if (++calls > AgentGuard.ToolBudget || !await Active(conv.Id, revision, ct)) { stopped = calls <= AgentGuard.ToolBudget; context.Terminate = true; return Result(new { error = "Atención automática pausada" }); }
         if (refill && context.Function.Name is "send_latest_prescription" or "send_prescription") return Result(new { error = "Piden una receta nueva o un resurtido: no entregues la anterior. Explica que una receta nueva la decide el doctor y usa handoff." });
         if (forOther && context.Function.Name is "start_registration" or "propose_registration" or "propose_action") return Result(new { error = "La petición es para otra persona. Desde este número sólo se registra y se agenda a quien escribe: explícalo y di que esa persona escriba desde su propio WhatsApp o pase por recepción." });
-        if (foreignId && context.Function.Name is not ("handoff" or "record_note" or "hospital_availability")) return Result(new { error = "El mensaje trae un identificador ajeno. No consultes datos: explica que sólo atiendes al titular de esta conversación." });
+        // hospital_contact and hospital_disciplines stay open with a foreign identifier, like the agenda: they take no argument and return what
+        // the hospital says of itself to anyone, so there is nobody's data to select with them.
+        if (foreignId && context.Function.Name is not ("handoff" or "record_note" or "hospital_availability" or "hospital_contact" or "hospital_disciplines")) return Result(new { error = "El mensaje trae un identificador ajeno. No consultes datos: explica que sólo atiendes al titular de esta conversación." });
         object? result;
         try { result = await next(context, ct); }
         catch (Exception ex) when (ex is HttpRequestException or ArgumentException or JsonException or KeyNotFoundException or FormatException or HospitalIntegrationException) { result = Result(new { error = "No se pudo completar la operación. Deriva a recepción para verificar." }); }
@@ -476,7 +481,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             var older = await db.Messages.Where(m => m.CreatedAt < since && db.Conversations.Any(c => c.Id == m.ConversationId && c.ContactId == contact.Id)).OrderByDescending(m => m.CreatedAt).Take(AgentMemory.RecallScan).ToListAsync(ct);
             return Result(new { found = AgentMemory.Search(older, words, zone) });
         }, "recall", "Buscar en mensajes de días pasados de este paciente algo que no está en la conversación en curso"),
-        AIFunctionFactory.Create(([Description("YYYY-MM-DD")] string date, string? doctorId = null, CancellationToken ct = default) => Availability(date, doctorId, ct), "hospital_availability", "Consultar horarios libres desde una fecha: devuelve los de esa fecha o, si no tiene, los del primer día siguiente con agenda"),
+        AIFunctionFactory.Create(([Description("YYYY-MM-DD")] string date, string? doctorId = null, CancellationToken ct = default) => Availability(date, doctorId, ct, labelled: true), "hospital_availability", "Consultar horarios libres desde una fecha: devuelve los de esa fecha o, si no tiene, los del primer día siguiente con agenda"),
         AIFunctionFactory.Create(async ([Description("YYYY-MM-DD")] string date, CancellationToken ct) => 
         {
             RequirePatient(contact); var rows = await hospital.GetPatientAppointmentsAsync(scope.Id, contact.PatientId!.Value, contact.Phone, DateOnly.Parse(date), ct);
@@ -524,6 +529,23 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             if (!priced) result["instruction"] = "Este hospital no da por WhatsApp los precios de su catálogo. Si la guía dice el precio, dilo tal como está en la guía; si no, el precio lo confirma recepción.";
             return Result(result);
         }, "hospital_services", "Consultar qué servicios ofrece el hospital según su catálogo. Usar antes de responder si el hospital ofrece algo o cuánto cuesta"),
+        AIFunctionFactory.Create(async (CancellationToken ct) =>
+        {
+            // What the hospital itself published with its public booking link: public by its own decision, so it may be said to whoever asks.
+            // A Hospital without the route, or without a published link, answers nothing and the guide is the source, as it always was.
+            var published = await hospital.ClinicContact(scope.Id, ct); var address = published?.PublicAddress?.Trim(); var phone = published?.PublicPhone?.Trim();
+            if (string.IsNullOrEmpty(address) && string.IsNullOrEmpty(phone)) return Result(new { found = false, instruction = "El hospital no tiene publicados aquí su dirección ni su teléfono. Si la guía los dice, responde con la guía; si tampoco constan ahí, di que no constan y ofrece pasar la consulta a recepción." });
+            return Result(new { address = string.IsNullOrEmpty(address) ? null : address, phone = string.IsNullOrEmpty(phone) ? null : phone, instruction = "Di estos datos tal cual, sin completarlos. Lo que venga vacío, búscalo en la guía; si tampoco consta ahí, di que no consta." });
+        }, "hospital_contact", "Consultar la dirección y el teléfono que el hospital publicó. Usar antes de responder dónde está el hospital o a qué número llamar"),
+        AIFunctionFactory.Create(async (CancellationToken ct) =>
+        {
+            // «¿Tienen dentista?» is a question, not a booking. It is answered from Hospital's roll alone: the agenda is not read, so no list of hours,
+            // no «hay espacio» and no emergency question ride on the answer, and a dentist with no free hour today is still a dentist the hospital has.
+            var labels = (await hospital.ClinicianDisciplines(scope.Id, ct)).Values.Select(DisciplineLabel).OfType<string>().Distinct().Order().ToList();
+            return labels.Count == 0
+                ? Result(new { found = false, instruction = "Hospital no informa aquí las disciplinas de sus profesionales. Si la guía lo dice, responde con la guía; si tampoco consta ahí, di que no consta, sin afirmar que no hay, y ofrece pasar la consulta a recepción." })
+                : Result(new { disciplines = labels, instruction = "Responde sólo por esta lista. Una disciplina que no aparece aquí ni en la guía no consta: dilo así, nunca que no hay, y ofrece pasar la consulta a recepción." });
+        }, "hospital_disciplines", "Consultar qué disciplinas tienen los profesionales del hospital (medicina, odontología, nutrición). Usar para responder si hay dentista, nutricionista o médico; no consulta horarios"),
         // Registered only for a hospital that says its prices: with them off the model cannot even ask.
         .. attention.Prices == "on" ? new AITool[] { AIFunctionFactory.Create(async ([Description("Nombre de la empresa, como lo dijo el paciente")] string company, CancellationToken ct) =>
         {
@@ -544,7 +566,10 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         }, "hospital_agreement", "Consultar si la empresa del paciente tiene convenio con el hospital y su porcentaje de descuento. Sólo con el nombre que el paciente escribió") } : []
     ];
     /// <summary>The free hours of the asked day or, when it has none, of the first later day that does. Fills the tappable list.</summary>
-    async Task<JsonElement> Availability(string date, string? doctorId, CancellationToken ct)
+    /// <summary>A discipline as Hospital names it, in the words the patient hears. One this agent has no word for is not passed on raw.</summary>
+    static string? DisciplineLabel(string discipline) => discipline switch { "medicine" => "medicina", "dentistry" => "odontología", "nutrition" => "nutrición", _ => null };
+    /// <param name="labelled">For the model: each doctor also carries the discipline Hospital knows them by. The taps and the menu never need it and never ask for it.</param>
+    async Task<JsonElement> Availability(string date, string? doctorId, CancellationToken ct, bool labelled = false)
     {
         Guid? doctor = Guid.TryParse(channel.DoctorId, out var fixedDoctor) ? fixedDoctor : Guid.TryParse(doctorId, out var id) ? id : null;
         // One call answers «the soonest»: the requested day or, if it has no free slot, the first later day that does.
@@ -570,12 +595,19 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         // The model is told when the list was withheld: its instructions say a list always goes with the hours.
         var note = (first == day ? "" : "La fecha pedida no tiene horarios libres; estos son los del primer día siguiente con agenda. Dilo así al paciente. ")
             + (contact.PatientId is null && forOther ? "No se adjunta lista: desde este número sólo se agenda a quien escribe. Explícalo; no pidas tocar un horario." : "");
-        return Result(new
+        var found = Result(new
         {
             requestedDate = date, date = first.ToString("yyyy-MM-dd"), weekday = Weekdays[(int)first.DayOfWeek], isRequestedDate = first == day,
             note = note.Length > 0 ? note.Trim() : null,
             doctors = free.Where(x => DateOnly.FromDateTime(x.Local.DateTime) == first).GroupBy(x => x.Doctor).Select(g => new { doctorId = g.Key.ClinicianId, doctor = g.Key.ClinicianName, place = g.Key.PlaceName, slots = g.OrderBy(x => x.Slot.StartsAt).Select(x => new { startsAt = x.Local.ToString("yyyy-MM-ddTHH:mm:sszzz"), time = x.Local.ToString("HH:mm"), until = x.Local.AddMinutes(x.Slot.DurationMinutes).ToString("HH:mm"), durationMinutes = x.Slot.DurationMinutes }) })
         });
+        // «¿Tienen dentista?» is answered from what Hospital says each listed doctor is, never from a name or a title. A doctor Hospital does not
+        // know the discipline of, or a Hospital that does not answer this yet, leaves the result exactly as it was.
+        if (!labelled || await hospital.ClinicianDisciplines(scope.Id, ct) is not { Count: > 0 } disciplines) return found;
+        var labels = JsonSerializer.SerializeToNode(found)!;
+        foreach (var listed in labels["doctors"]!.AsArray())
+            if (Guid.TryParse(listed!["doctorId"]!.ToString(), out var who) && disciplines.TryGetValue(who, out var discipline) && DisciplineLabel(discipline) is { } label) listed["discipline"] = label;
+        return Result(labels);
     }
 
     /// <summary>«Agendar cita» from the menu: the first free hours, as a list to tap.</summary>

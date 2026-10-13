@@ -513,7 +513,7 @@ public sealed class AgentHarness(Guid? tenant = null, string phone = "5037000000
 {
     public CrmDb Db = null!; public readonly TenantScope Scope = new() { Id = tenant ?? Guid.NewGuid() };
     public Contact Contact = null!; public Conversation Conversation = null!; public Job Job = null!;
-    public readonly List<string> Sent = []; public readonly List<string> HospitalWrites = [], HospitalBodies = []; public int Documents, Typing;
+    public readonly List<string> Sent = []; public readonly List<string> HospitalWrites = [], HospitalBodies = []; public int Documents, Typing, DisciplineReads;
     /// <summary>The <c>interactive</c> object of every message sent with buttons or a list.</summary>
     public readonly List<JsonElement> Interactive = [];
     DbContextOptions<CrmDb> options = null!; readonly IDataProtectionProvider protection = new EphemeralDataProtectionProvider();
@@ -570,9 +570,13 @@ public sealed class AgentHarness(Guid? tenant = null, string phone = "5037000000
     /// issued prescriptions and their PDF. Any other write is recorded, never executed.</summary>
     /// <param name="services">Hospital's catalogue of services, as it answers it; with none, an empty page: the service «no consta».</param>
     /// <param name="companies">The companies of the commercial module, with their agreement.</param>
-    public Fake Hospital(object? prescription = null, object[]? appointments = null, object? availability = null, object[]? services = null, object[]? companies = null) => new(request =>
+    /// <param name="contact">The address and phone the hospital published; with none, 404, as a Hospital without the route or without a public link answers.</param>
+    /// <param name="disciplines">Hospital's roll of professionals with their discipline; with none, 404. Every read of it is counted in <see cref="DisciplineReads"/>.</param>
+    public Fake Hospital(object? prescription = null, object[]? appointments = null, object? availability = null, object[]? services = null, object[]? companies = null, object? contact = null, object[]? disciplines = null) => new(request =>
     {
         var path = request.RequestUri!.AbsolutePath;
+        if (path == "/v1/agenda/clinic-contact" && contact is not null) return Task.FromResult(Json(contact));
+        if (path == "/v1/clinic/clinician-disciplines") { DisciplineReads++; if (disciplines is not null) return Task.FromResult(Json(new { clinicians = disciplines })); }
         if (path is "/v1/commercial/services" or "/v1/commercial/companies") { var items = (path.EndsWith("services") ? services : companies) ?? []; return Task.FromResult(Json(new { items, total = items.Length, page = 1, pageSize = 100 })); }
         if (path.StartsWith("/v1/patients/")) return Task.FromResult(Json(new { patientId = Contact.PatientId, givenNames = "Paciente", familyNames = "Sintético", phone = Contact.Phone }));
         if (path.StartsWith("/v1/agenda/patients/")) return Task.FromResult(Json(new { rows = appointments ?? [] }));

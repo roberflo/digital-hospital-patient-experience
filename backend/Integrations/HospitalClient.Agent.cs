@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 
 namespace Recepcion.Integrations;
@@ -30,7 +31,50 @@ public sealed partial class HospitalClient
         var options = await GetAvailabilityAsync(tenantId, day, day, doctor, ct);
         return options.Professionals.Where(p => p.ClinicianId == doctor).SelectMany(p => p.Days).SelectMany(d => d.Slots).Where(slot => slot.StartsAt == start).Select(slot => (int?)slot.TakenBy).FirstOrDefault();
     }
+
+    /// <summary>The address and phone the hospital published with its public booking link. Null when it published none (404), when this
+    /// Hospital does not have the route yet, or when it cannot be reached or read: the agent then answers from the guide, as before.</summary>
+    public async Task<HospitalClinicContact?> ClinicContact(Guid tenantId, CancellationToken ct = default)
+    {
+        try { return await ReadAsync<HospitalClinicContact>(tenantId, "v1/agenda/clinic-contact", ct); }
+        // Everything but the caller giving up, as below: an answer that cannot be read (a proxy's page) is not worth the turn either.
+        catch (Exception ex) when (!ct.IsCancellationRequested) { Degraded("clinic-contact", tenantId, ex); return null; }
+    }
+    /// <summary>These two reads fail in silence for the patient, so a failure that stays would be seen by nobody: it is logged. A 404 is an
+    /// answer (nothing published, or a Hospital without the route), not a failure. Only the error's type or code: never a body, a URL or a token.</summary>
+    void Degraded(string read, Guid tenantId, Exception ex)
+    {
+        if (ex is not HospitalIntegrationException { Code: "hospital.http_404" }) log?.LogWarning("Hospital read unavailable {Read} {TenantId} {ErrorType}", read, tenantId, (ex as HospitalIntegrationException)?.Code ?? ex.GetType().Name);
+    }
+
+    // ponytail: one dictionary in this process, never trimmed (one small entry per hospital) and with no lock: two turns arriving together on a
+    // cold entry both ask, and each replica keeps its own copy. A shared cache if replicas or hospitals multiply.
+    static readonly ConcurrentDictionary<Guid, (DateTimeOffset Until, IReadOnlyDictionary<Guid, string> Known)> Disciplines = new();
+    static readonly IReadOnlyDictionary<Guid, string> NoDisciplines = new Dictionary<Guid, string>();
+    /// <summary>The discipline of each professional on the active roll that Hospital knows it for (medicine, dentistry, nutrition).
+    /// The read costs Hospital one identity-provider call per staff account, so the answer is kept an hour per hospital. A failure of any
+    /// kind (the route not deployed yet, its identity provider down, an answer that cannot be read) is an empty answer kept five minutes:
+    /// the agenda never fails for it, a struggling Hospital is not asked on every turn, and a later deploy starts working without a restart.</summary>
+    public async Task<IReadOnlyDictionary<Guid, string>> ClinicianDisciplines(Guid tenantId, CancellationToken ct = default)
+    {
+        if (Disciplines.TryGetValue(tenantId, out var kept) && kept.Until > DateTimeOffset.UtcNow) return kept.Known;
+        var known = NoDisciplines; var keep = TimeSpan.FromMinutes(5);
+        try
+        {
+            var roll = await ReadAsync<HospitalClinicianDisciplines>(tenantId, "v1/clinic/clinician-disciplines", ct);
+            known = (roll.Clinicians ?? []).Where(c => c.Discipline is { Length: > 0 }).GroupBy(c => c.ClinicianId).ToDictionary(g => g.Key, g => g.First().Discipline!);
+            keep = TimeSpan.FromHours(1);
+        }
+        // Everything but the caller giving up: this only adds a label to hours the agent already has.
+        catch (Exception ex) when (!ct.IsCancellationRequested) { Degraded("clinician-disciplines", tenantId, ex); }
+        Disciplines[tenantId] = (DateTimeOffset.UtcNow + keep, known);
+        return known;
+    }
 }
+/// <summary>Hospital also answers how long it takes to confirm an online request; that is about its web form, not something the WhatsApp agent says, so it is not read.</summary>
+public sealed record HospitalClinicContact(string? PublicAddress, string? PublicPhone);
+public sealed record HospitalClinicianDiscipline(Guid ClinicianId, string? Discipline);
+public sealed record HospitalClinicianDisciplines(IReadOnlyList<HospitalClinicianDiscipline>? Clinicians);
 public sealed record HospitalPatientRegistration(string GivenNames, string FamilyNames, DateOnly BirthDate, string Sex, string Phone,
     string EmergencyName, string EmergencyRelationship, string EmergencyPhone)
 {

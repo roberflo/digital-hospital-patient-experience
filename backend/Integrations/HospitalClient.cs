@@ -8,7 +8,7 @@ namespace Recepcion.Integrations;
 
 /// <summary>Calls the hospital's existing v1 contracts. Configuration is keyed by the
 /// authenticated CRM tenant, never by a URL or bearer token submitted by a patient.</summary>
-public sealed partial class HospitalClient(HttpClient http, IConfiguration configuration, HospitalConnectionStore? connections = null)
+public sealed partial class HospitalClient(HttpClient http, IConfiguration configuration, HospitalConnectionStore? connections = null, ILogger<HospitalClient>? log = null)
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 

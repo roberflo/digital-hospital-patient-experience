@@ -126,7 +126,11 @@ public sealed class AgentEvals(ITestOutputHelper output)
         object? prescription = spec.TryGetProperty("prescription", out var lines) ? new { prescriptionId = Guid.NewGuid(), patientId = h.Contact.PatientId, encounterId = Guid.NewGuid(), state = "signed", signedAt = DateTimeOffset.UtcNow.AddDays(-2), contentWithheld = false, lines } : null;
         // "services" and "companies": Hospital's catalogue and its companies with their agreement, in Hospital's own shape. Without them, an empty catalogue.
         object[]? Items(string name) => spec.TryGetProperty(name, out var items) ? items.EnumerateArray().Select(item => (object)item).ToArray() : null;
-        return h.Hospital(prescription, appointments, availability, Items("services"), Items("companies"));
+        // "contact": the address and phone the hospital published, in Hospital's own shape. "discipline": what Hospital knows the case's one
+        // doctor by (medicine, dentistry, nutrition). Without them Hospital answers 404 to both, as one that does not have those reads yet.
+        object? contact = spec.TryGetProperty("contact", out var published) ? published : null;
+        object[]? disciplines = spec.TryGetProperty("discipline", out var discipline) ? [new { clinicianId = doctor, discipline = discipline.GetString() }] : null;
+        return h.Hospital(prescription, appointments, availability, Items("services"), Items("companies"), contact, disciplines);
     }
 }
 
