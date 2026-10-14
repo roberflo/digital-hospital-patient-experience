@@ -119,9 +119,43 @@ public sealed class AgentLiveJourney(ITestOutputHelper output)
     }
 
     /// <summary>The real agent and model answering from the LOCAL Hospital's own configuration, with prices switched on: the list price of
-    /// a service in its catalogue, its published address, and whether it has a dentist. AGENT_EVAL_PROVIDER=openai keeps it off the NIM key.</summary>
+    /// a service in its catalogue, its published address, whether it has a dentist and the discount of a company the patient names.
+    /// AGENT_EVAL_PROVIDER=openai keeps it off the NIM key. Needs one active company with an active agreement in that Hospital.</summary>
     [Fact, Trait("Category", "Live")]
-    public async Task AgentAnswersPriceAddressAndDisciplineFromHospital()
+    public async Task AgentAnswersPriceAddressDisciplineAndAgreementFromHospital()
+    {
+        var (tenant, settings, hospital) = ModelSettings();
+        var service = (await hospital.Services(tenant, null, 1)).Items.First(s => s.Price > 0 && s.Currency == "USD");
+        var contact = Assert.IsType<HospitalClinicContact>(await hospital.ClinicContact(tenant));
+        Assert.Contains("dentistry", (await hospital.ClinicianDisciplines(tenant)).Values);
+        var company = (await hospital.Companies(tenant, null, 1)).Items.FirstOrDefault(c => c.Active && c.Agreement is { Active: true, DiscountPercent: > 0 })
+            ?? throw new InvalidOperationException("The local Hospital has no active company with an active agreement: create one in Empresas y servicios.");
+
+        var (h, turn, tools) = await Conversation(tenant, settings, "on", $"Hola, ¿cuánto cuesta {service.Name}?");
+        await using var _ = h;
+        Assert.Contains(((int)service.Price).ToString(), await turn(null));
+        Assert.Contains(contact.PublicAddress!.Split(' ').MaxBy(word => word.Length)!.Trim(',', '.'), await turn("¿Y cuál es la dirección del hospital?"), StringComparison.OrdinalIgnoreCase);
+        Assert.Matches("(?i)odont|dentista", await turn("¿Tienen dentista?"));
+        Assert.Contains(((int)company.Agreement!.DiscountPercent).ToString(), await turn($"Trabajo en {company.Name}, ¿tengo algún descuento?"));
+        var used = await tools();
+        Assert.Contains("hospital_services", used); Assert.Contains("hospital_contact", used); Assert.Contains("hospital_agreement", used);
+    }
+
+    /// <summary>The same hospital with prices left off (the default): the agent confirms the service exists and never says its price.</summary>
+    [Fact, Trait("Category", "Live")]
+    public async Task AgentKeepsThePriceToReceptionWhenPricesAreOff()
+    {
+        var (tenant, settings, hospital) = ModelSettings();
+        var service = (await hospital.Services(tenant, null, 1)).Items.First(s => s.Price > 0 && s.Currency == "USD");
+        var (h, turn, tools) = await Conversation(tenant, settings, "off", $"Hola, ¿cuánto cuesta {service.Name}?");
+        await using var _ = h;
+        var reply = await turn(null);
+        Assert.DoesNotContain(((int)service.Price).ToString(), reply);
+        Assert.Contains(service.Name, reply, StringComparison.OrdinalIgnoreCase); // «confirma si ofreces el servicio», as the setting promises
+        Assert.Contains("hospital_services", await tools());
+    }
+
+    static (Guid Tenant, Dictionary<string, string?> Settings, HospitalClient Hospital) ModelSettings()
     {
         var env = new ConfigurationBuilder().AddEnvironmentVariables().Build();
         var tenant = Guid.Parse(env["DEV_HOSPITAL_TENANT_ID"] ?? throw new InvalidOperationException("DEV_HOSPITAL_TENANT_ID is required."));
@@ -133,34 +167,34 @@ public sealed class AgentLiveJourney(ITestOutputHelper output)
         settings["NVIDIA_API_KEY"] = env[openAi ? "OPENAI_API_KEY" : "NVIDIA_API_KEY"]; settings["AI_BASE_URL"] = openAi ? "https://api.openai.com/v1" : env["AI_BASE_URL"];
         settings["AI_MODEL"] = env["AGENT_EVAL_MODEL"] is { Length: > 0 } chosen ? chosen : env[openAi ? "OPENAI_MODEL" : "AI_MODEL"] ?? AgentRuntime.DefaultModel;
         settings["OPENAI_REASONING_EFFORT"] = env["AGENT_EVAL_REASONING"] ?? env["OPENAI_REASONING_EFFORT"];
-        var config = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
+        return (tenant, settings, new HospitalClient(new HttpClient(), new ConfigurationBuilder().AddInMemoryCollection(settings).Build()));
+    }
 
-        using var modelHttp = new SocketsHttpHandler(); using var hospitalHttp = new SocketsHttpHandler();
-        var hospital = new HospitalClient(new HttpClient(hospitalHttp), config);
-        var service = (await hospital.Services(tenant, null, 1)).Items.First(s => s.Price > 0 && s.Currency == "USD");
-        var contact = Assert.IsType<HospitalClinicContact>(await hospital.ClinicContact(tenant));
-        Assert.Contains("dentistry", (await hospital.ClinicianDisciplines(tenant)).Values);
-
-        await using var h = new AgentHarness(tenant, "50300" + Random.Shared.Next(100000, 999999));
-        await h.Start(AgentEvals.Guide, $"Hola, ¿cuánto cuesta {service.Name}?");
-        (await h.Db.Tenants.SingleAsync(t => t.Id == tenant)).Attention = new Attention { Prices = "on" }.Checked().Write(); await h.Db.SaveChangesAsync();
+    /// <summary>A new conversation with the hospital's prices choice; each turn runs the real agent and must not hand the patient over.</summary>
+    async Task<(AgentHarness, Func<string?, Task<string>>, Func<Task<List<string>>>)> Conversation(Guid tenant, Dictionary<string, string?> settings, string prices, string first)
+    {
+        var h = new AgentHarness(tenant, "50300" + Random.Shared.Next(100000, 999999));
+        await h.Start(AgentEvals.Guide, first);
+        (await h.Db.Tenants.SingleAsync(t => t.Id == tenant)).Attention = new Attention { Prices = prices }.Checked().Write(); await h.Db.SaveChangesAsync();
+        var modelHttp = new SocketsHttpHandler(); var hospitalHttp = new SocketsHttpHandler();
         async Task<string> Turn(string? message)
         {
             if (message is not null) await h.Say("patient", message);
             var before = h.Sent.Count;
             await h.Runtime(modelHttp, h.Sender(), hospitalHttp, settings).Run(h.Job, new CancellationTokenSource(TimeSpan.FromMinutes(3)).Token);
             var reply = string.Join("\n", h.Sent.Skip(before));
-            output.WriteLine($"PACIENTE: {message ?? "(primer mensaje)"}\nAGENTE: {reply}\n");
+            output.WriteLine($"PACIENTE: {message ?? first}\nAGENTE: {reply}\n");
+            foreach (var held in await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id && a.Kind == "guard").Select(a => a.Body).ToListAsync()) output.WriteLine("GUARDA: " + held);
             Assert.NotEqual("human", (await h.Fresh()).Status);
             return reply;
         }
-
-        Assert.Contains(((int)service.Price).ToString(), await Turn(null));
-        Assert.Contains(contact.PublicAddress!.Split(' ').MaxBy(word => word.Length)!.Trim(',', '.'), await Turn("¿Y cuál es la dirección del hospital?"), StringComparison.OrdinalIgnoreCase);
-        Assert.Matches("(?i)odont|dentista", await Turn("¿Tienen dentista?"));
-        var tools = (await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id && a.Kind == "agent_tool").Select(a => a.Body).ToListAsync()).Select(body => Regex.Match(body, @"Herramienta: (\w+)\.").Groups[1].Value).ToList();
-        output.WriteLine("HERRAMIENTAS: " + string.Join(", ", tools));
-        Assert.Contains("hospital_services", tools); Assert.Contains("hospital_contact", tools);
+        async Task<List<string>> Tools()
+        {
+            var used = (await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id && a.Kind == "agent_tool").Select(a => a.Body).ToListAsync()).Select(body => Regex.Match(body, @"Herramienta: (\w+)\.").Groups[1].Value).ToList();
+            output.WriteLine("HERRAMIENTAS: " + string.Join(", ", used));
+            return used;
+        }
+        return (h, Turn, Tools);
     }
 
     /// <summary>The part of booking that needs no model: a registered patient taps a free hour, taps Confirmar, and the
