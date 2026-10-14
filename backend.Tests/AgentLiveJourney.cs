@@ -155,6 +155,37 @@ public sealed class AgentLiveJourney(ITestOutputHelper output)
         Assert.Contains("hospital_services", await tools());
     }
 
+    /// <summary>A registered patient says the appointment is to collect results, taps a free hour from the list and confirms: Hospital books it
+    /// as «results», not as an ordinary follow-up. The appointment is cancelled at the end.</summary>
+    [Fact, Trait("Category", "Live")]
+    public async Task TappedHourKeepsWhatThePatientSaidTheAppointmentIsFor()
+    {
+        var (tenant, settings, hospital) = ModelSettings();
+        var suffix = new string(Enumerable.Range(0, 6).Select(_ => (char)('a' + Random.Shared.Next(26))).ToArray());
+        var (h, turn, _) = await Conversation(tenant, settings, "off", "Hola, necesito una cita para que me entreguen mis resultados de laboratorio. ¿Qué horarios tienen?");
+        await using var __ = h;
+        var registered = await hospital.RegisterPatientAsync(tenant, new("Ana Sintética", "Resultados " + char.ToUpperInvariant(suffix[0]) + suffix[1..], new DateOnly(1990, 3, 12), "female", h.Contact.Phone, "Carlos Sintético", "hermano", "70000001"));
+        var patient = Assert.NotNull(registered.PatientId); h.Contact.PatientId = patient; await h.Db.SaveChangesAsync();
+
+        // What tapping does: the first option of whatever the agent sent (doctor, morning or afternoon, an hour, Confirmar), as the webhook stores it.
+        string TapFirst()
+        {
+            var action = h.Interactive[^1].GetProperty("action");
+            var (kind, option) = action.TryGetProperty("buttons", out var buttons) ? ("button_reply", buttons[0].GetProperty("reply")) : ("list_reply", action.GetProperty("sections")[0].GetProperty("rows")[0]);
+            return WhatsAppContent.Inbound(System.Text.Json.JsonSerializer.SerializeToElement(new { type = "interactive", interactive = new Dictionary<string, object> { ["type"] = kind, [kind] = new { id = option.GetProperty("id").GetString(), title = option.GetProperty("title").GetString() } } }), default);
+        }
+        var reply = await turn(null); var card = "";
+        for (var taps = 0; !reply.Contains("quedó agendada") && taps < 6; taps++) { if (reply.StartsWith("*Cita:*")) card = reply; reply = await turn(TapFirst()); }
+        Assert.Contains("quedó agendada", reply);
+
+        var today = HospitalClient.ClinicalDay(DateTimeOffset.UtcNow, "America/El_Salvador");
+        var booked = Assert.Single((await hospital.GetPatientAppointmentRangeAsync(tenant, patient, h.Contact.Phone, today, today.AddDays(20))).GetProperty("rows").EnumerateArray());
+        // Hospital's patient read does not return the visit kind; the card is built from the same proposal Hospital is booked from.
+        output.WriteLine("HOSPITAL: cita " + booked.GetProperty("appointmentId").GetGuid());
+        try { Assert.Contains("*Motivo:* Entrega de resultados", card); }
+        finally { await hospital.CancelAppointmentAsync(tenant, patient, h.Contact.Phone, booked.GetProperty("appointmentId").GetGuid()); }
+    }
+
     static (Guid Tenant, Dictionary<string, string?> Settings, HospitalClient Hospital) ModelSettings()
     {
         var env = new ConfigurationBuilder().AddEnvironmentVariables().Build();

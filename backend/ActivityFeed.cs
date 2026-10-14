@@ -45,7 +45,7 @@ public static class ActivityFeed
         if (q?.Length > 150 || page is < 1 or > 10000 || (!string.IsNullOrEmpty(care) && !careTypes.Contains(care))
             || (!string.IsNullOrEmpty(category) && !categories.Contains(category)) || (from is {} start && to is {} end && start > end))
             throw new ArgumentException("Revisa los filtros del historial.");
-        var query = db.Activities.AsNoTracking().Where(a => a.Kind != "intake" && (contactId == null || a.ContactId == contactId) && (conversationId == null || a.ConversationId == conversationId));
+        var query = db.Activities.AsNoTracking().Where(a => a.Kind != "intake" && a.Kind != "visit_kind" &&(contactId == null || a.ContactId == contactId) && (conversationId == null || a.ConversationId == conversationId));
         var zone = TimeZoneInfo.FindSystemTimeZoneById(await db.Tenants.Where(t => t.Id == scope.Id).Select(t => t.TimeZone).SingleAsync(ct));
         if (from is {} first) { var instant = new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(first.ToDateTime(TimeOnly.MinValue), zone)); query = query.Where(a => a.CreatedAt >= instant); }
         if (to is {} last) { if(last == DateOnly.MaxValue)throw new ArgumentException("Fecha fuera de rango"); var instant = new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(last.AddDays(1).ToDateTime(TimeOnly.MinValue), zone)); query = query.Where(a => a.CreatedAt < instant); }

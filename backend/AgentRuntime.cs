@@ -379,7 +379,9 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
                 db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "intake", Actor = "Agente", ActorRole = "agent_ai", Body = JsonSerializer.Serialize(state, Json) }); await db.SaveChangesAsync(ct);
                 await conversations.Send(conv.Id, prompt, "agent", "agent:" + job.Id, ct: ct); return;
             }
-            await Propose("create", slot.Doctor.ToString(), null, slot.StartsAt, slot.Minutes, ct, slot.Name); Trace("propose_action");
+            // What the patient said this appointment is for when the agent looked up these hours, if anything (the hours a proposal keeps: 15 minutes).
+            var said = await db.Activities.Where(x => x.ConversationId == conv.Id && x.Kind == "visit_kind" && x.CreatedAt > DateTimeOffset.UtcNow.AddMinutes(-15)).OrderByDescending(x => x.CreatedAt).Select(x => x.Body).FirstOrDefaultAsync(ct);
+            await Propose("create", slot.Doctor.ToString(), null, slot.StartsAt, slot.Minutes, ct, slot.Name, said); Trace("propose_action");
         }
         catch (ArgumentException) { await conversations.Send(conv.Id, "Disculpa, ese horario ya no está disponible.\nDime qué día prefieres y vuelvo a consultar la agenda.", "agent", "agent:" + job.Id, ct: ct); return; }
         await conversations.Send(conv.Id, summary!, "agent", "agent:" + job.Id, ct: ct, choices: Confirmation());
@@ -483,7 +485,12 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             var older = await db.Messages.Where(m => m.CreatedAt < since && db.Conversations.Any(c => c.Id == m.ConversationId && c.ContactId == contact.Id)).OrderByDescending(m => m.CreatedAt).Take(AgentMemory.RecallScan).ToListAsync(ct);
             return Result(new { found = AgentMemory.Search(older, words, zone) });
         }, "recall", "Buscar en mensajes de días pasados de este paciente algo que no está en la conversación en curso"),
-        AIFunctionFactory.Create(([Description("YYYY-MM-DD")] string date, string? doctorId = null, CancellationToken ct = default) => Availability(date, doctorId, ct, labelled: true), "hospital_availability", "Consultar horarios libres desde una fecha: devuelve los de esa fecha o, si no tiene, los del primer día siguiente con agenda"),
+        AIFunctionFactory.Create(async ([Description("YYYY-MM-DD")] string date, string? doctorId = null, [Description("Sólo si el paciente dijo que la cita es para esto: procedure, results o paperwork, como en propose_action. Para una consulta no lo pongas")] string? kind = null, CancellationToken ct = default) =>
+        {
+            // The patient usually taps one of these hours, and a tapped hour is proposed without the model: what the appointment is for is kept here for it.
+            if (kind is "procedure" or "results" or "paperwork") { db.Activities.Add(new Activity { TenantId = scope.Id, ContactId = contact.Id, ConversationId = conv.Id, Kind = "visit_kind", Actor = "Agente", ActorRole = "agent_ai", Body = kind }); await db.SaveChangesAsync(ct); }
+            return await Availability(date, doctorId, ct, labelled: true);
+        }, "hospital_availability", "Consultar horarios libres desde una fecha: devuelve los de esa fecha o, si no tiene, los del primer día siguiente con agenda"),
         AIFunctionFactory.Create(async ([Description("YYYY-MM-DD")] string date, CancellationToken ct) => 
         {
             RequirePatient(contact); var rows = await hospital.GetPatientAppointmentsAsync(scope.Id, contact.PatientId!.Value, contact.Phone, DateOnly.Parse(date), ct);

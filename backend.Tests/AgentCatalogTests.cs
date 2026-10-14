@@ -234,6 +234,28 @@ public sealed class AgentCatalogTests : IAsyncLifetime
         Assert.Equal(booked, body.RootElement.GetProperty("visitKind").GetString());
     }
 
+    /// <summary>The usual path: the agent shows the free hours and the patient taps one, which is proposed without the model. What the patient
+    /// said the appointment is for, given when the agent looked up the hours, still reaches Hospital (found live: it was booked as a follow-up).</summary>
+    [Theory]
+    [InlineData("results", "results", "*Motivo:* Entrega de resultados")]
+    [InlineData(null, "follow-up", null)]
+    public async Task ATappedHourIsBookedForWhatThePatientSaidItIsFor(string? kind, string booked, string? line)
+    {
+        await h.Link();
+        var doctor = Guid.NewGuid(); var start = new DateTimeOffset(DateTime.UtcNow.Date.AddDays(3).AddHours(15), TimeSpan.Zero);
+        var hospital = h.Hospital(availability: new { clinicalDayFrom = "", clinicalDayTo = "", maxDaysPerQuery = 31, rollState = "open", professionals = new[] { new { clinicianId = doctor, clinicianName = "Dra. Sintética", placeName = "", defaultDurationMinutes = 30, days = new[] { new { clinicalDay = "", state = "open", takenSlotCount = 0, utcOffset = "-06:00", slots = new[] { new { slotId = "a", startsAt = start, durationMinutes = 30, takenBy = 0, offered = true } } } } } } });
+
+        await h.Runtime(Model(AgentHarness.ToolCall("hospital_availability", new { date = start.ToString("yyyy-MM-dd"), kind }), AgentHarness.Reply("Estos son los horarios.")), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
+        await h.Say("patient", $"CITA {start.ToOffset(TimeSpan.FromHours(-6)):yyyy-MM-ddTHH:mm:sszzz} {doctor:D} 30 Dra. Sintética");
+        await h.Runtime(NoModel, h.Sender(), hospital).Run(h.Job, CancellationToken.None);
+
+        if (line is null) Assert.DoesNotContain("Motivo", h.Sent[^1]); else Assert.Contains(line, h.Sent[^1]);
+        await h.Say("patient", "CONFIRMAR " + (await h.Db.Activities.SingleAsync(a => a.Kind.StartsWith("proposal:"))).Kind[9..]);
+        await h.Runtime(NoModel, h.Sender(), hospital).Run(h.Job, CancellationToken.None);
+        using var body = JsonDocument.Parse(Assert.Single(h.HospitalBodies));
+        Assert.Equal(booked, body.RootElement.GetProperty("visitKind").GetString());
+    }
+
     [Theory]
     [InlineData("same-day-urgent")] // urgency is triage: it goes through the emergency question and handoff, never through a kind the model picks
     [InlineData("first-visit-vip")]
