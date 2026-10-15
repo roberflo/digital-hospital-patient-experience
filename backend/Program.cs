@@ -58,6 +58,7 @@ using (var scope = app.Services.CreateScope())
         if(Guid.TryParse(config["DEV_HOSPITAL_TENANT_ID"],out var hospitalTenant)&&hospitalTenant!=Guid.Empty&&!await db.Tenants.AnyAsync(x=>x.Id==hospitalTenant)){
             db.Tenants.Add(new Tenant{Id=hospitalTenant,Name="Hospital local · clínica sintética",AgentEnabled=false});await db.SaveChangesAsync();
         }
+        await DemoSeed.Specialties(db, scope.ServiceProvider.GetRequiredService<TenantScope>(), hospitalTenant == Guid.Empty ? null : hospitalTenant);
     }
     else if (Guid.TryParse(config["BOOTSTRAP_TENANT_ID"], out var tid) && !await db.Tenants.AnyAsync(x => x.Id == tid)) { db.Tenants.Add(new Tenant { Id = tid, Name = config["BOOTSTRAP_TENANT_NAME"] ?? "Hospital" }); await db.SaveChangesAsync(); }
 }

@@ -48,7 +48,7 @@ public static class PlatformOwner
     {
         if (!u.Platform) throw new AccessDeniedException();
         var rows = await db.Tenants.AsNoTracking().OrderBy(x => x.Name).ThenBy(x => x.Id).Select(x => new { x.Id, x.Name }).ToListAsync();
-        var connected = (await db.Channels.IgnoreQueryFilters().Where(x => x.PhoneNumberId != "demo").Select(x => x.TenantId).Distinct().ToListAsync()).ToHashSet();
+        var connected = (await db.Channels.IgnoreQueryFilters().Where(x => !x.PhoneNumberId.StartsWith("demo")).Select(x => x.TenantId).Distinct().ToListAsync()).ToHashSet();
         // ponytail: IsConfigured reads one row per reception; fold into the query above if receptions reach the hundreds.
         return new(rows.Select(x => new PlatformTenant(x.Id, x.Name, h.IsConfigured(x.Id), connected.Contains(x.Id))).ToList());
     }

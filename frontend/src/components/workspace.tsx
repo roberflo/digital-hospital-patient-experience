@@ -44,11 +44,13 @@ import {
   AlertCircle,
   ExternalLink,
   Stethoscope,
+  ListFilter,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Alert, AlertDescription } from './ui/alert';
 import { Avatar, AvatarFallback } from './ui/avatar';
 import { Badge } from './ui/badge';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible';
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -747,6 +749,7 @@ function InboxView({
   const [channelId, setChannelId] = useState('');
   const [priority, setPriority] = useState('');
   const [label, setLabel] = useState('');
+  const [moreFilters, setMoreFilters] = useState(false);
   const [page, setPage] = useState(1);
   const { data: channels } = useSWR<Channel[]>('/channels', fetcher);
   useEffect(() => setPage(1), [state, assignment, channelId, priority, label]);
@@ -796,6 +799,7 @@ function InboxView({
       refreshTeam('/members/workload');
     }
   }
+  const hiddenFilters = [channelId, priority, label].filter(Boolean).length;
   return (
     <>
       <ErrorBox error={error} />
@@ -865,56 +869,76 @@ function InboxView({
                   </NativeSelectOption>
                 ))}
               </NativeSelect>
-              <NativeSelect
-                aria-label="Filtrar por canal"
-                value={channelId}
-                onChange={(e) => setChannelId(e.target.value)}
-              >
-                <NativeSelectOption value="">Todos los canales</NativeSelectOption>
-                {channels?.map((c) => (
-                  <NativeSelectOption key={c.id} value={c.id}>
-                    {c.name}
-                  </NativeSelectOption>
-                ))}
-              </NativeSelect>
-              <NativeSelect
-                aria-label="Filtrar por prioridad"
-                value={priority}
-                onChange={(e) => setPriority(e.target.value)}
-              >
-                <NativeSelectOption value="">Todas las prioridades</NativeSelectOption>
-                {priorities.map(([v, l]) => (
-                  <NativeSelectOption key={v} value={v}>
-                    {l}
-                  </NativeSelectOption>
-                ))}
-              </NativeSelect>
-              <Input
-                className="col-span-2"
-                aria-label="Filtrar por etiqueta"
-                placeholder="Etiqueta de conversación"
-                value={label}
-                onChange={(e) => setLabel(e.target.value)}
-                maxLength={40}
-              />
             </div>
-            <ButtonGroup className="w-full *:flex-1">
-              {[
-                ['all', 'Todas'],
-                ['human', 'Personas'],
-                ['agent', 'Agente'],
-              ].map(([id, name]) => (
-                <Button
-                  variant={filter === id ? 'secondary' : 'outline'}
-                  size="sm"
-                  aria-pressed={filter === id}
-                  key={id}
-                  onClick={() => setFilter(id)}
+            <Collapsible
+              open={moreFilters}
+              onOpenChange={setMoreFilters}
+              className="flex flex-col gap-2"
+            >
+              <div className="flex items-center gap-2">
+                <ButtonGroup className="min-w-0 flex-1 *:flex-1">
+                  {[
+                    ['all', 'Todas'],
+                    ['human', 'Personas'],
+                    ['agent', 'Agente'],
+                  ].map(([id, name]) => (
+                    <Button
+                      variant={filter === id ? 'secondary' : 'outline'}
+                      size="sm"
+                      aria-pressed={filter === id}
+                      key={id}
+                      onClick={() => setFilter(id)}
+                    >
+                      {name}
+                    </Button>
+                  ))}
+                </ButtonGroup>
+                <CollapsibleTrigger asChild>
+                  <Button
+                    variant={moreFilters ? 'secondary' : 'outline'}
+                    size="sm"
+                    aria-label="Más filtros"
+                  >
+                    <ListFilter />
+                    {!!hiddenFilters && <Badge variant="secondary">{hiddenFilters}</Badge>}
+                  </Button>
+                </CollapsibleTrigger>
+              </div>
+              <CollapsibleContent className="grid grid-cols-2 gap-2 *:w-full *:min-w-0">
+                <NativeSelect
+                  aria-label="Filtrar por canal"
+                  value={channelId}
+                  onChange={(e) => setChannelId(e.target.value)}
                 >
-                  {name}
-                </Button>
-              ))}
-            </ButtonGroup>
+                  <NativeSelectOption value="">Todos los canales</NativeSelectOption>
+                  {channels?.map((c) => (
+                    <NativeSelectOption key={c.id} value={c.id}>
+                      {c.name}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
+                <NativeSelect
+                  aria-label="Filtrar por prioridad"
+                  value={priority}
+                  onChange={(e) => setPriority(e.target.value)}
+                >
+                  <NativeSelectOption value="">Todas las prioridades</NativeSelectOption>
+                  {priorities.map(([v, l]) => (
+                    <NativeSelectOption key={v} value={v}>
+                      {l}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
+                <Input
+                  className="col-span-2"
+                  aria-label="Filtrar por etiqueta"
+                  placeholder="Etiqueta de conversación"
+                  value={label}
+                  onChange={(e) => setLabel(e.target.value)}
+                  maxLength={40}
+                />
+              </CollapsibleContent>
+            </Collapsible>
             {(linkedPhone || linkedConversation) && (
               <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground">
                 {linkedConversation
@@ -986,12 +1010,13 @@ function InboxView({
                 <div
                   key={c.id}
                   className={cn(
-                    'flex items-center border-b last:border-b-0',
-                    managesTeam(me) && 'pl-3',
+                    'relative flex items-start gap-3 border-b px-3 py-3 last:border-b-0',
+                    active?.conversation.id === c.id ? 'bg-accent' : 'hover:bg-accent/50',
                   )}
                 >
                   {managesTeam(me) && (
                     <Checkbox
+                      className="relative z-10 mt-2"
                       aria-label={'Seleccionar conversación de ' + contact.name}
                       checked={c.id in checked}
                       onCheckedChange={(value) =>
@@ -1007,10 +1032,12 @@ function InboxView({
                   <Item
                     asChild
                     size="sm"
-                    variant={active?.conversation.id === c.id ? 'muted' : 'default'}
-                    className="conversation-card min-w-0 flex-1 flex-nowrap text-left hover:bg-accent/50"
+                    className="conversation-card min-w-0 flex-1 flex-nowrap items-start p-0 text-left after:absolute after:inset-0"
                   >
-                    <button onClick={() => setSelected(c.id)}>
+                    <button
+                      aria-current={active?.conversation.id === c.id ? 'true' : undefined}
+                      onClick={() => setSelected(c.id)}
+                    >
                       <ItemMedia>
                         <PersonAvatar name={contact.name} />
                       </ItemMedia>
@@ -1023,6 +1050,13 @@ function InboxView({
                                 {unreadCount}
                               </Badge>
                             )}
+                            {c.priority !== 'normal' && (
+                              <Badge
+                                variant={c.priority === 'urgent' ? 'destructive' : 'secondary'}
+                              >
+                                {priorities.find(([v]) => v === c.priority)?.[1]}
+                              </Badge>
+                            )}
                           </strong>
                           <time className="shrink-0 text-xs font-normal text-muted-foreground">
                             {time(c.updatedAt, me.tenant.timeZone)}
@@ -1031,21 +1065,19 @@ function InboxView({
                         <ItemDescription className="line-clamp-1">
                           {c.lastMessage || c.summary || 'Nueva conversación de WhatsApp'}
                         </ItemDescription>
-                        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                        <div className="flex flex-wrap items-center gap-1.5">
                           <Badge variant="outline">
                             {conversationStates.find(([v]) => v === c.state)?.[1]}
                           </Badge>
                           <StatusBadge value={c.status} />
-                          {c.priority !== 'normal' && (
-                            <Badge variant={c.priority === 'urgent' ? 'destructive' : 'secondary'}>
-                              {priorities.find(([v]) => v === c.priority)?.[1]}
-                            </Badge>
-                          )}
-                          <small className="text-xs">{channel.name}</small>
-                          <span className="flex items-center gap-1">
-                            <UserRound className="size-3" />
+                        </div>
+                        <div className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+                          <UserRound className="size-3 shrink-0" />
+                          <span className="truncate">
                             {workload?.members.find((m) => m.subject === c.assignedTo)?.name ??
                               (c.assignedTo ? 'Responsable asignado' : 'Sin asignar')}
+                            {' · '}
+                            <small className="text-xs">{channel.name}</small>
                           </span>
                         </div>
                       </ItemContent>

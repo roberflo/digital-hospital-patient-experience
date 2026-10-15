@@ -113,4 +113,44 @@ public static class DemoSeed
             await db.SaveChangesAsync();
         }
     }
+    public const string DentalName = "Clínica Dental Bonilla · datos sintéticos";
+    /// <summary>
+    /// Local demo only: the second synthetic tenant is a dental clinic and Hospital's local clinic an
+    /// endocrinology one. A space without contacts gets its demo data, so an existing local database is filled too.
+    /// </summary>
+    public static async Task Specialties(CrmDb db, TenantScope scope, Guid? hospitalTenant)
+    {
+        var dental = new (string, string, string, string, string)[] {
+            ("Sofía Ramírez", "50371000001", "Ortodoncia", "Hola, quisiera cotizar brackets para mi hija de 13 años.", "Ortodoncia · Sofía Ramírez"),
+            ("Diego Flores", "50371000002", "Limpieza", "Buenos días, ¿tienen cita para limpieza dental esta semana?", "Limpieza dental · Diego Flores"),
+            ("Valeria Campos", "50371000003", "Urgencia", "Se me quebró una muela y tengo mucho dolor, ¿me pueden atender hoy?", "Extracción de muela · Valeria Campos"),
+            ("Ricardo Molina", "50371000004", "Blanqueamiento", "¿Qué precio tiene el blanqueamiento dental y cuántas sesiones son?", "Blanqueamiento · Ricardo Molina") };
+        var endocrine = new (string, string, string, string, string)[] {
+            ("Gloria Menjívar", "50372000001", "Diabetes", "Hola, necesito mi control de diabetes; ya tengo el resultado de la hemoglobina glicosilada.", "Control de diabetes · Gloria Menjívar"),
+            ("Óscar Portillo", "50372000002", "Tiroides", "Buenas tardes, me indicaron exámenes de tiroides, ¿puedo llevarlos a la consulta?", "Seguimiento de tiroides · Óscar Portillo"),
+            ("Patricia Guzmán", "50372000003", "Nuevo paciente", "Quisiera una primera consulta con el endocrinólogo, ¿qué horarios tienen?", "Primera consulta · Patricia Guzmán"),
+            ("Mauricio Escobar", "50372000004", "Receta", "Se me está terminando la insulina, ¿me pueden renovar la receta?", "Renovación de receta · Mauricio Escobar") };
+        var spaces = new List<(Guid, string, string, (string, string, string, string, string)[])> {
+            (SecondTenantId, "Recepción dental · demostración", "Seguro dental de demostración", dental) };
+        if (hospitalTenant is { } local && local != TenantId && local != SecondTenantId)
+            spaces.Add((local, "Recepción endocrinología · demostración", "Laboratorio clínico de demostración", endocrine));
+        foreach (var (id, channelName, companyName, people) in spaces)
+        {
+            scope.Id = id;
+            var tenant = await db.Tenants.FirstOrDefaultAsync(t => t.Id == id);
+            if (tenant is null || await db.Contacts.AnyAsync()) continue;
+            if (id == SecondTenantId && tenant.Name == "Clínica de prueba B") tenant.Name = DentalName;
+            var channel = new Channel { TenantId = id, Name = channelName, PhoneNumberId = "demo-" + id.ToString("N")[..8], Enabled = false }; db.Add(channel);
+            foreach (var (name, phone, tag, message, title) in people)
+            {
+                var c = new Contact { TenantId = id, Name = name, Phone = phone, PhoneHash = "demo-" + phone, Tags = tag }; db.Add(c);
+                var conversation = new Conversation { TenantId = id, ContactId = c.Id, ChannelId = channel.Id, Status = "human", LastInboundAt = DateTimeOffset.UtcNow, Summary = "Datos sintéticos para explorar el flujo de atención." }; db.Add(conversation);
+                db.Add(new Message { TenantId = id, ConversationId = conversation.Id, Body = message, Sender = "patient" });
+                db.Add(new Activity { TenantId = id, ContactId = c.Id, ConversationId = conversation.Id, Body = "Conversación de demostración. Vincula un paciente real antes de consultar información clínica.", Actor = "Sistema", ActorRole = "system" });
+                db.Add(new Opportunity { TenantId = id, ContactId = c.Id, Title = title, Stage = tag is "Limpieza" or "Diabetes" ? "scheduled" : "new" });
+            }
+            db.Add(new Company { TenantId = id, Name = companyName, Industry = "Salud", Email = "convenio@example.invalid" });
+            await db.SaveChangesAsync();
+        }
+    }
 }

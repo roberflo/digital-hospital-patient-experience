@@ -12,7 +12,7 @@ public static class ChannelDiagnostics
     public static async Task<IResult> Run(Guid id,CrmDb db,CurrentUser user,KapsoClient kapso,IConfiguration config)
     {
             user.RequireAdminOrPlatform();var row=await db.Channels.SingleOrDefaultAsync(x=>x.Id==id);if(row is null)return Results.NotFound();
-            if(row.PhoneNumberId=="demo")return Results.BadRequest(new{title="Canal sintético: registra un número Kapso para comprobar su conexión"});
+            if(row.PhoneNumberId.StartsWith("demo"))return Results.BadRequest(new{title="Canal sintético: registra un número Kapso para comprobar su conexión"});
             // On behalf, reading the provider is an act: traced before the reads, so a provider failure does not erase it.
             if(user.Platform){db.Audits.Add(new Audit{TenantId=row.TenantId,Actor=user.Subject,Action="channel.diagnosed",Resource=id.ToString()});await db.SaveChangesAsync();}
             var path="whatsapp/phone_numbers/"+Uri.EscapeDataString(row.PhoneNumberId);
