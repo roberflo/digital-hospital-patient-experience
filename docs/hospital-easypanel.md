@@ -17,7 +17,7 @@ KC_RECEPCION_SERVICE_CLIENT_SECRET=<secreto B>
 
 El job crea el cliente `recepcion-web` y, por cada hospital que tenga usuarios en el realm, su cuenta `recepcion-service-<UUID>` con exactamente los roles **Recepción** y `reception-agent`. Nadie copia UUIDs: Keycloak ya sabe qué hospitales existen. Un hospital nuevo recibe su cuenta en el siguiente despliegue de Hospital.
 
-En la **API de Recepción** (con volumen persistente `/keys`, `ASPNETCORE_ENVIRONMENT=Production`):
+En la **API de Recepción** (con volumen persistente `/keys`, `ASPNETCORE_ENVIRONMENT=Production` y el certificado del llavero montado fuera de `/keys`, ver [deployment.md](deployment.md) «Llavero protegido»; sin él la API no arranca):
 
 ```text
 Auth__Authority=https://identidad.tudominio.com/realms/hospital
@@ -26,6 +26,8 @@ HOSPITAL_API_URL=http://proyecto_hospital-api:8080
 HOSPITAL_SERVICE_CLIENT_SECRET=<secreto B>
 HOSPITAL_ALLOWED_API_ORIGINS=http://proyecto_hospital-api:8080
 HOSPITAL_PUBLIC_URL=https://hospital.tudominio.com
+DATAPROTECTION_CERT_PATH=/run/secrets/dataprotection.p12
+DATAPROTECTION_CERT_PASSWORD=<contraseña del .p12>
 ```
 
 En la **web de Recepción**:

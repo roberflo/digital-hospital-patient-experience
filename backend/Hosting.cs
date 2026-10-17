@@ -1,6 +1,9 @@
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.DataProtection.KeyManagement;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Recepcion.Integrations;
@@ -14,7 +17,8 @@ public static class Hosting
     {
         services.AddScoped<TenantScope>(); services.AddScoped<CurrentUser>();
         services.AddDbContext<CrmDb>(o => o.UseNpgsql(config.GetConnectionString("Database")));
-        services.AddDataProtection().SetApplicationName("Recepcion").PersistKeysToFileSystem(new DirectoryInfo(config["KEY_DIRECTORY"] ?? "/keys"));
+        var keyring = services.AddDataProtection().SetApplicationName("Recepcion").PersistKeysToFileSystem(new DirectoryInfo(KeyDirectory(config)));
+        if (KeyringCertificate(config) is { } cert) keyring.ProtectKeysWithCertificate(cert);
         services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(o => HospitalIdentity.Configure(o, config, dev));
         services.AddAuthorization();
         services.AddRateLimiter(o =>
@@ -39,6 +43,33 @@ public static class Hosting
         services.AddHostedService<CalendarWorker>();
         services.AddProblemDetails();
     }
+    // MR-37: the keyring certificate lives outside /keys and outside every backup (docs/deployment.md).
+    public static X509Certificate2? KeyringCertificate(IConfiguration config)
+    {
+        var path = config["DATAPROTECTION_CERT_PATH"];
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        if (!File.Exists(path)) throw new InvalidOperationException("DATAPROTECTION_CERT_PATH does not point to a readable PKCS#12 file");
+        X509Certificate2 cert;
+        try { cert = X509CertificateLoader.LoadPkcs12FromFile(path, config["DATAPROTECTION_CERT_PASSWORD"]); }
+        catch (CryptographicException) { throw new InvalidOperationException("DATAPROTECTION_CERT_PATH could not be opened: wrong DATAPROTECTION_CERT_PASSWORD or not a PKCS#12 file"); }
+        return cert.HasPrivateKey ? cert : throw new InvalidOperationException("DATAPROTECTION_CERT_PATH has no private key: the keyring could not be read back");
+    }
+    public static void RequireKeyringCertificate(IConfiguration config, IHostEnvironment env)
+    {
+        if (env.IsProduction() && string.IsNullOrWhiteSpace(config["DATAPROTECTION_CERT_PATH"]))
+            throw new InvalidOperationException("DATAPROTECTION_CERT_PATH is required in Production: mount the keyring certificate outside /keys (docs/deployment.md)");
+    }
+    /// <summary>Once at startup: with a certificate and no encrypted key yet, a new key becomes the default so new data stops depending on plaintext keys. Old keys stay readable.</summary>
+    public static void ProtectKeyring(IServiceProvider services, IConfiguration config)
+    {
+        if (string.IsNullOrWhiteSpace(config["DATAPROTECTION_CERT_PATH"])) return;
+        var dir = new DirectoryInfo(KeyDirectory(config));
+        // ponytail: scans the key files; the keyring is a handful of small XML files.
+        if (dir.Exists && dir.EnumerateFiles("*.xml").Any(f => File.ReadAllText(f.FullName).Contains("<encryptedSecret", StringComparison.Ordinal))) return;
+        var now = DateTimeOffset.UtcNow;
+        services.GetRequiredService<IKeyManager>().CreateNewKey(now, now.AddDays(90));
+    }
+    static string KeyDirectory(IConfiguration config) => config["KEY_DIRECTORY"] ?? "/keys";
     /// <summary>The outermost middleware Program.cs installs: security headers and the one place an exception becomes a response.</summary>
     public static async Task Errors(HttpContext ctx, RequestDelegate next)
     {

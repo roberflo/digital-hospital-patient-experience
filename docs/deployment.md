@@ -23,6 +23,7 @@ API:
 - `ASPNETCORE_ENVIRONMENT=Production`, `SEND_ENABLED=false` inicialmente.
 - `ConnectionStrings__Database=Host=<servicio-db>;Database=recepcion;Username=recepcion;Password=<secreto>`.
 - `KEY_DIRECTORY=/keys`, `PHONE_HASH_KEY`, `Auth__Authority`, `Auth__Audience=hospital-api`.
+- `DATAPROTECTION_CERT_PATH` y `DATAPROTECTION_CERT_PASSWORD` (MR-37): certificado PKCS#12 que cifra el llavero de `/keys`. **Production no arranca sin `DATAPROTECTION_CERT_PATH`** (`DATAPROTECTION_CERT_PATH is required in Production`); una contraseña equivocada o un fichero ausente también detienen el arranque nombrando la variable. El certificado se monta fuera de `/keys` y nunca entra en un respaldo. Ver «Llavero protegido».
 - `BOOTSTRAP_TENANT_ID`: UUID real de Hospital; `BOOTSTRAP_TENANT_NAME`: nombre del negocio inicial.
 - `KAPSO_API_KEY`, `KAPSO_WEBHOOK_SECRET`, opcional `KAPSO_PHONE_NUMBER_ID` para asociar el primer número al tenant bootstrap.
 - `NVIDIA_API_KEY`, `AI_BASE_URL=https://integrate.api.nvidia.com/v1`, `AI_MODEL=nvidia/nemotron-3-super-120b-a12b`.
@@ -90,8 +91,37 @@ El agente de WhatsApp envía al proveedor la guía de atención, hasta 24 mensaj
 
 - Comprobar `/health/live`, `/health/ready` y el inicio de sesión después de cada despliegue.
 - Revisar `/api/jobs` y `/api/audit` como Administrador; `failed` o `uncertain` requieren seguimiento humano. Una entrega incierta conserva el intento y no se reenvía automáticamente: consultar WhatsApp/agenda antes de repetir.
-- Usar `scripts/backup.sh` con Compose o el equivalente en Easypanel. Guarda un dump de PostgreSQL y el keyring `/keys`. Mantener copias cifradas fuera del host y probar restauración en un entorno separado.
-- Restauración: detener API, restaurar el dump con `pg_restore` en una base vacía, restaurar `/keys` con dueño UID 1654, conservar el mismo `PHONE_HASH_KEY`, y reiniciar la API de una versión compatible. Nunca restaurar sobre datos activos sin respaldo y ventana de mantenimiento.
+- Usar `scripts/backup.sh` con Compose o el equivalente en Easypanel. Exige `BACKUP_DB_DIR` y `BACKUP_KEYRING_DIR` distintos (ninguno dentro del otro) y `KEYRING_BACKUP_PASSPHRASE`. El dump de PostgreSQL va a `BACKUP_DB_DIR`; `/keys` va a `BACKUP_KEYRING_DIR` como `keyring-<fecha>.tar.gz.enc`, cifrado con `openssl enc -aes-256-cbc -pbkdf2 -iter 600000`, y el script lo descifra y lista antes de darlo por bueno. Llevar cada destino a un almacén fuera del host distinto; la frase de paso se guarda aparte de ambos, nunca junto al dump.
+- Restauración: detener API, restaurar el dump con `pg_restore` en una base vacía, descifrar y restaurar `/keys` (abajo) con dueño UID 1654, montar el **mismo** certificado del llavero, conservar el mismo `PHONE_HASH_KEY`, y reiniciar la API de una versión compatible. Nunca restaurar sobre datos activos sin respaldo y ventana de mantenimiento.
+
+### Llavero protegido (MR-37)
+
+Con `DATAPROTECTION_CERT_PATH` cada clave nueva de DataProtection se escribe en `/keys` cifrada con el certificado (`<encryptedSecret>` con `EncryptedKey`). Al arrancar, si ninguna clave de `/keys` está cifrada, la API crea una clave nueva cifrada (vigencia 90 días) que pasa a ser la de uso; las claves viejas sin cifrar **siguen leyéndose**. Límite: lo cifrado con una clave vieja sigue legible con solo `/keys` mientras exista; deja de depender de ella cuando ese dato se reescribe. Development sin certificado funciona como antes.
+
+**Paso de despliegue, antes de desplegar la versión con MR-37:**
+
+1. Generar el certificado fuera del repositorio (RSA 3072, PKCS#12 con contraseña). En local: `DATAPROTECTION_CERT_PASSWORD=… scripts/dev-keyring-cert.sh` lo escribe en `${HOME}/.config/recepcion/dataprotection.p12` y se niega a sobrescribirlo. `*.p12` y `*.pfx` están en `.gitignore`.
+2. En Easypanel, en la API de Recepción: montar el `.p12` como fichero (Mounts → File) en `/run/secrets/dataprotection.p12`, legible por UID 1654, **fuera** del volumen `/keys`; definir `DATAPROTECTION_CERT_PATH=/run/secrets/dataprotection.p12` y `DATAPROTECTION_CERT_PASSWORD`. Guardar una copia del `.p12` y su contraseña en el gestor de secretos, separada de los respaldos.
+3. Desplegar. Si falta el certificado, la API no arranca y el log dice qué variable falta: es el comportamiento buscado, no un fallo a reintentar.
+4. Comprobar `/health/ready` y que en `/keys` apareció un `key-*.xml` que contiene `encryptedSecret`.
+
+En Compose local: `DATAPROTECTION_CERT_FILE=<ruta del .p12 en el host>` y `DATAPROTECTION_CERT_PASSWORD` en el entorno, y `docker compose -f docker-compose.yml -f docker-compose.keyring.yml up -d`. No poner `DATAPROTECTION_CERT_PATH` en `.env`: la API lo recibiría sin el fichero montado.
+
+**Ensayo de restauración** (en un entorno separado, nunca sobre la base compartida):
+
+```sh
+mkdir restored-keys
+openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -pass env:KEYRING_BACKUP_PASSPHRASE \
+  -in keyring-<fecha>.tar.gz.enc | tar -xzf - -C restored-keys
+grep -l encryptedSecret restored-keys/*.xml   # claves protegidas por el certificado
+```
+
+1. Con certificado: restaurar dump y `restored-keys` en el entorno de ensayo, montar el certificado y arrancar; abrir una conversación con mensajes y un contacto: se leen.
+2. Sin certificado (caso que debe fallar): el mismo arranque en Production se detiene con `DATAPROTECTION_CERT_PATH is required in Production`. Con Development, las claves cifradas no se pueden descifrar y los datos protegidos con ellas no se leen; los protegidos con claves viejas sin cifrar sí. Esto demuestra que `/keys` solo ya no basta.
+3. Con una frase de paso equivocada `openssl` responde `bad decrypt` y no extrae nada.
+
+Ensayado el 2026-10-17 en local con un `docker` simulado y datos sintéticos (`scripts/backup.sh`): destinos separados, llavero cifrado (`openssl enc'd data with salted password`), restauración idéntica (`diff -r`), y rechazo de destinos iguales o anidados, de la frase ausente, de la frase equivocada y de un llavero vacío. El certificado de `dev-keyring-cert.sh` carga con `X509CertificateLoader` de .NET 10. Pendiente: el ensayo completo con la API (pasos 1–2) en un entorno de ensayo.
+
 - Perder `/keys` impide descifrar contactos/mensajes/notas/tokens. Cambiar `PHONE_HASH_KEY` exige recalcular los índices de teléfonos; no cambiarlo como si fuera una contraseña ordinaria.
 - Logs operativos omiten cuerpos de mensajes y errores detallados de proveedores. Proteger también los volúmenes, copias de seguridad, acceso al host y retención de datos.
 
