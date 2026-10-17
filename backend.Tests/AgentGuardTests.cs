@@ -259,6 +259,121 @@ public sealed class AgentGuardTests : IAsyncLifetime
     [InlineData("Mi contacto es Elena. Pero esto es una emergencia, me siento muy mal", true, true)]
     public void EmergencyWordIsReadInContext(string message, bool registering, bool urgent) => Assert.Equal(urgent, AgentGuard.Inbound(message, "text", registering) is not null);
 
+    // MR-35 (lista aprobada por el dueño el 2026-10-17): these alarm signs reach the emergency number and a person before the model.
+    // Only an explicit negation of the sign itself, within the same clause, keeps it from firing. Anything in doubt fires:
+    // a sign that already passed («ayer me desmayé pero ya estoy bien», «ya no me duele el pecho») still goes to a person.
+    [Theory]
+    // Dolor u opresión en el pecho
+    [InlineData("Me duele el pecho", true)]
+    [InlineData("tengo un dolor bien feo en el pecho", true)]
+    [InlineData("SIENTO OPRESION EN EL PECHO", true)]
+    [InlineData("siento como presión en el pecho desde hace rato", true)]
+    [InlineData("siento el pecho apretado", true)]
+    [InlineData("Tengo dolor de pecho", true)]
+    [InlineData("A mi mamá le duele el pecho", true)]                      // someone else, now: fires
+    [InlineData("No me duele el pecho, solo quiero una cita", false)]      // negated
+    [InlineData("no tengo dolor de pecho", false)]
+    [InlineData("no tengo fiebre me duele el pecho", true)]                // the «no» belongs to the fever, not to the chest
+    [InlineData("Ya no me duele el pecho", true)]                          // resolved: in doubt, fires
+    [InlineData("Quiero cita para control de la presión", false)]
+    // No puede respirar / se ahoga
+    [InlineData("No puedo respirar", true)]
+    [InlineData("no puede respirar bien mi papá", true)]
+    [InlineData("me estoy ahogando", true)]
+    [InlineData("Siento que me ahogo", true)]
+    [InlineData("me falta el aire", true)]
+    [InlineData("llevo rato sin poder respirar", true)]
+    [InlineData("me cuesta respirar", true)]
+    [InlineData("No sé si me estoy ahogando", true)]                       // doubt, not a negation
+    [InlineData("No me ahogo, es solo tos", false)]
+    [InlineData("no tengo problemas para respirar", false)]
+    // Desmayo o pérdida de conciencia
+    [InlineData("Me desmayé", true)]
+    [InlineData("mi esposa se desmayo", true)]
+    [InlineData("perdió el conocimiento", true)]
+    [InlineData("se privó mi abuelo y no reacciona", true)]
+    [InlineData("Ayer me desmayé pero ya estoy bien", true)]               // past and resolved: in doubt, fires
+    [InlineData("siento que me voy a desmayar", true)]
+    [InlineData("no me he desmayado, solo me mareo", false)]
+    // Convulsión
+    [InlineData("Mi hijo está convulsionando", true)]
+    [InlineData("le dio una convulsión", true)]
+    [InlineData("tuvo un ataque epiléptico", true)]
+    [InlineData("no tiene convulsiones", false)]
+    [InlineData("no ha vuelto a tener convulsiones", true)]                // resolved, like «ya no»: in doubt, fires
+    [InlineData("me pica la garganta y la tengo inflamada", false)]        // an itch, not an allergic reaction
+    // Sangrado abundante que no para
+    [InlineData("Me corté y estoy sangrando muchísimo, no para.", true)]
+    [InlineData("no me para de sangrar la herida", true)]
+    [InlineData("me sale mucha sangre", true)]
+    [InlineData("tiene una hemorragia", true)]
+    [InlineData("estoy sangrando bastante por la nariz", true)]
+    [InlineData("me sangran un poco las encías", false)]                   // not heavy, not unstoppable
+    [InlineData("no estoy sangrando mucho", false)]
+    // Debilidad o adormecimiento de un lado, cara caída, no puede hablar
+    [InlineData("se me durmió todo el lado izquierdo", true)]
+    [InlineData("siento débil el brazo derecho", true)]
+    [InlineData("tengo adormecido un lado del cuerpo", true)]
+    [InlineData("se le cayó la cara de un lado", true)]
+    [InlineData("tiene la boca chueca", true)]
+    [InlineData("mi papá no puede hablar", true)]
+    [InlineData("está hablando enredado", true)]
+    [InlineData("no puedo hablar ahorita, estoy en el trabajo", false)]   // a busy patient on a chat, not a stroke
+    [InlineData("no puedo hablar por teléfono, mejor por aquí", false)]
+    // Ideación suicida o autolesión
+    [InlineData("me quiero morir", true)]
+    [InlineData("Me quiero quitar la vida", true)]
+    [InlineData("quiero quitarme la vida", true)]
+    [InlineData("Ya no quiero vivir", true)]
+    [InlineData("pienso en matarme", true)]
+    [InlineData("quiero hacerme daño", true)]
+    [InlineData("no me quiero morir", true)]                               // never read as a negation: fires
+    // Intoxicación o sobredosis
+    [InlineData("Creo que tomé una sobredosis", true)]
+    [InlineData("estoy intoxicado", true)]
+    [InlineData("mi hijo se tomó un montón de pastillas", true)]
+    [InlineData("se tomó el veneno de las ratas", true)]
+    [InlineData("tome demasiadas pastillas", true)]
+    [InlineData("ya me tomé las pastillas de la presión", false)]          // a dose taken as prescribed
+    [InlineData("no está intoxicado", false)]
+    // Reacción alérgica grave con hinchazón de cara o garganta
+    [InlineData("me dio alergia y se me hinchó la cara", true)]
+    [InlineData("tengo una reacción y se me está hinchando la garganta", true)]
+    [InlineData("se me está cerrando la garganta", true)]
+    [InlineData("le picó una abeja y tiene la cara hinchada", true)]
+    [InlineData("Desde que tomo la amoxicilina me salieron ronchas en todo el cuerpo", false)] // allergy without swelling of face or throat
+    [InlineData("tengo la garganta inflamada y fiebre", false)]           // a sore throat, not an allergy
+    [InlineData("se me hinchó la cara por la muela", false)]               // a tooth, not an allergy
+    [InlineData("tengo alergia pero no se me hinchó la cara", false)]
+    // Not on the list: the model and the existing paths decide
+    [InlineData("Me duele muchísimo el estómago", false)]
+    [InlineData("Tengo dolor de garganta y fiebre desde ayer", false)]
+    public void AlarmSignsAreReadBeforeTheModel(string message, bool urgent) => Assert.Equal(urgent, AgentGuard.NamesEmergency(message));
+
+    [Theory]
+    [InlineData("me duele el pecho")]
+    [InlineData("no puedo respirar")]
+    [InlineData("se desmayó y no reacciona")]
+    [InlineData("está convulsionando")]
+    [InlineData("estoy sangrando mucho y no para")]
+    [InlineData("se le cayó la cara de un lado y no puede hablar")]
+    [InlineData("me quiero morir")]
+    [InlineData("me tomé un frasco de pastillas")]
+    [InlineData("tengo alergia y se me hinchó la garganta")]
+    public async Task AnAlarmSignGetsTheEmergencyNumberAndAPersonWithoutTheModel(string message)
+    {
+        var tenant = await h.Db.Tenants.SingleAsync(t => t.Id == h.Scope.Id); tenant.EmergencyPhone = "2200 0000"; await h.Db.SaveChangesAsync();
+        await h.Say("patient", message);
+        var model = h.Model(AgentHarness.Reply("No debe consultarse el modelo"));
+
+        await h.Runtime(model, h.Sender()).Run(h.Job, CancellationToken.None);
+
+        Assert.Equal(0, model.Calls);
+        Assert.Equal("human", (await h.Fresh()).Status);
+        Assert.StartsWith("Si es una emergencia, llama ya al *2200 0000*", Assert.Single(h.Sent));
+        Assert.Contains(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => a.Kind == "handoff");
+    }
+
     [Fact]
     public async Task EmergencyQuestionIsAskedOnce()
     {
