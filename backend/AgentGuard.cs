@@ -28,9 +28,10 @@ public static partial class AgentGuard
 
     /// <summary>MR-35, the list the owner approved on 2026-10-17: chest pain or tightness; cannot breathe or is choking; fainting or loss
     /// of consciousness; a seizure; heavy bleeding that does not stop; weakness or numbness of one side, a drooping face or not able to speak;
-    /// suicidal thoughts or self-harm; poisoning or an overdose; a severe allergic reaction with swelling of the face or throat.
-    /// Read without accents or case. Only a negation of the sign itself («no me duele el pecho»), in its own clause and within three words,
-    /// keeps a sign from firing; a sign that already passed still fires, and suicidal words fire even negated («no me quiero morir»).</summary>
+    /// suicidal thoughts or self-harm; poisoning or an overdose; a severe allergic reaction with swelling of the face or throat; and, added the
+    /// same day, «infarto», «derrame», «embolia», «ataque al corazón». Read without accents or case. The owner's three rules (docs/reception-agent.md):
+    /// a negation of the sign itself («no me duele el pecho»: «no» in its clause, within three words) does not fire; a sign that already passed or
+    /// resolved («ayer me desmayé pero ya estoy bien») does not fire unless the message says it is still going; suicidal words fire always.</summary>
     static bool AlarmSign(string body)
     {
         var text = Plain(body);
@@ -39,7 +40,12 @@ public static partial class AgentGuard
         {
             var before = text[..m.Index]; var clause = Clause().Split(before)[^1];
             var words = clause.Split(' ', StringSplitOptions.RemoveEmptyEntries).TakeLast(3);
-            return !Negator().IsMatch(DoubtNotNegation().Replace(string.Join(' ', words), " "));
+            if (Negator().IsMatch(Doubt().Replace(string.Join(' ', words), " "))) return false;
+            // Past or resolved: a time gone by in the sign's own clause («la semana pasada»), «no ha vuelto» before it, or «ya estoy bien» after it.
+            // Anything that says it is still going («desde ayer», «todavía», «ahora») keeps it current.
+            var after = text[(m.Index + m.Length)..]; var start = before.LastIndexOfAny(['.', '!', '?', '\n']) + 1; var stop = text.IndexOfAny(['.', '!', '?', '\n'], m.Index + m.Length);
+            var past = Past().IsMatch(clause + m.Value + Clause().Split(after)[0]) || Recovered().IsMatch(clause) || Recovered().IsMatch(after);
+            return !past || Ongoing().IsMatch(text[start..(stop < 0 ? text.Length : stop)]);
         }
         return Alarm().Matches(text).Any(Stated) || (Allergy().IsMatch(text) && Swelling().Matches(text).Any(Stated));
     }
@@ -143,6 +149,7 @@ public static partial class AgentGuard
         + @"|\bcara\s+(?:\w+\s+)?(?:caid|torcid|chuec|ladead|desviad)\w*|\b(?:cayo|torcio|ladeo)\s+(?:la\s+|media\s+)?(?:cara|boca)\b|\bboca\s+(?:\w+\s+)?(?:torcid|chuec|caid|ladead)\w*"
         + @"|\bno\s+(?:\w+\s+)?(?:puedo|puede|podia|pudo|logra|logro)\s+hablar\b(?!\W+(?:\w+\W+){0,3}?(?:ahorita|ahora|telefono|llamada|llamar|momento|trabajo|reunion|clase|ocupad\w*))|\bhabla\w*\s+(?:\w+\s+)?(?:enredad\w*|trabad\w*|arrastrad\w*)|\blengua\s+trabada"
         + @"|\bsobredosis\b|\bintoxic\w*|\benvenen\w*|\b(?:tom|trag|beb|ingir|ingier)\w*\s+(?:\w+\s+){0,4}?(?:veneno|cloro|lejia|insecticida|pesticida|plaguicida|raticida|herbicida|gramoxone|paraquat|creolina|matarratas|gasolina|kerosene|querosene)\b|\b(?:un\s+monton|muchas|todas\s+las|un\s+frasco|una\s+caja|un\s+puno|demasiadas)\s+(?:de\s+)?(?:pastillas|pildoras|tabletas|medicinas|medicamentos|capsulas)\b"
+        + @"|\binfart\w*|\bataques?\s+(?:al|del)\s+corazon\b|\bataques?\s+cardiac\w*|\bembolia\w*|\bderrames?\b(?!\s+(?:en|de)\s+(?:(?:el|la|los|las|un|una)\s+)?(?:ojos?|rodillas?|liquido|petroleo|aceite))"
         + @"|\banafila\w*|\bcerrando\s+la\s+garganta|\bgarganta\s+(?:se\s+(?:me\s+|le\s+)?)?(?:cerrada|cierra|cerrando)")] private static partial Regex Alarm();
     [GeneratedRegex(@"\bsuicid\w*|\bquiero\s+morir\w*|\bquit\w*\s+la\s+vida\b|\bquitarme\s+la\s+vida|\bmatarme\b|\bme\s+quiero\s+matar|\bno\s+quiero\s+(?:seguir\s+)?vivir|\bacabar\s+con\s+mi\s+vida|\bhacerme\s+dano|\blastimarme\b|\bautolesi\w*|\bcortarme\s+(?:las\s+venas|los\s+brazos|las\s+munecas)")] private static partial Regex Suicide();
     // A severe allergy is the reaction plus swelling of the face or throat: «garganta inflamada» alone is a sore throat, a swollen face alone a tooth.
@@ -151,7 +158,10 @@ public static partial class AgentGuard
     [GeneratedRegex(@"[.,;:!?\n]|\b(?:y|e|pero|aunque|sino)\b")] private static partial Regex Clause();
     [GeneratedRegex(@"\b(?:no|sin|ni|tampoco)\b")] private static partial Regex Negator();
     // «No sé si…» is doubt and «ya no…» a sign that was there: neither negates the sign that follows.
-    [GeneratedRegex(@"\bno\s+se\s+si\b|\bya\s+no\b")] private static partial Regex DoubtNotNegation();
+    [GeneratedRegex(@"\bno\s+se\s+si\b")] private static partial Regex Doubt();
+    [GeneratedRegex(@"\b(?:ayer|anoche|antier|anteayer)\b|\bhace\s+(?:un|una|unos|unas|dos|tres|cuatro|cinco|seis|varios|varias|muchos|muchas|\d+)\s+(?:dias?|semanas?|mes|meses|anos?)\b|\b(?:la\s+semana|el\s+mes|el\s+ano)\s+pasad[oa]\b|\bde\s+(?:nin[oa]|chiquit[oa]|pequen[oa]|joven)\b|\bhace\s+tiempo\b")] private static partial Regex Past();
+    [GeneratedRegex(@"\bya\s+(?:estoy|esta|estamos|me\s+siento|se\s+siente)\s+bien\b|\bya\s+(?:se\s+(?:me|le)\s+)?paso\b|\bya\s+se\s+recupero\b|\bya\s+me\s+recupere\b|\bno\s+(?:me\s+|le\s+|nos\s+)?ha\s+vuelto\b|\bno\s+(?:me\s+|le\s+)?volvio\b")] private static partial Regex Recovered();
+    [GeneratedRegex(@"\b(?:desde|todavia|aun|sigue|sigo|siguen|continua|ahora|ahorita|otra\s+vez|de\s+nuevo)\b")] private static partial Regex Ongoing();
     [GeneratedRegex(@"(?i)\b(?:otra|nueva)\s+receta\b|\bresurt\w*|\bse\s+me\s+(?:acab[oó]|termin[oó])\b|\brec[eé]t[ae]me\b|\brenovar\s+(?:la|mi)\s+receta\b")] private static partial Regex Refill();
     [GeneratedRegex(@"(?i)contactos?\s+de\s+emergencias?")] private static partial Regex EmergencyContact();
     [GeneratedRegex(@"(?i)\bemergencias?\s*:")] private static partial Regex EmergencyLabel();

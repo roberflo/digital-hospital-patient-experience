@@ -259,9 +259,9 @@ public sealed class AgentGuardTests : IAsyncLifetime
     [InlineData("Mi contacto es Elena. Pero esto es una emergencia, me siento muy mal", true, true)]
     public void EmergencyWordIsReadInContext(string message, bool registering, bool urgent) => Assert.Equal(urgent, AgentGuard.Inbound(message, "text", registering) is not null);
 
-    // MR-35 (lista aprobada por el dueño el 2026-10-17): these alarm signs reach the emergency number and a person before the model.
-    // Only an explicit negation of the sign itself, within the same clause, keeps it from firing. Anything in doubt fires:
-    // a sign that already passed («ayer me desmayé pero ya estoy bien», «ya no me duele el pecho») still goes to a person.
+    // MR-35 (lista y reglas aprobadas por el dueño el 2026-10-17, docs/reception-agent.md): these alarm signs reach the emergency
+    // number and a person before the model. A negation of the sign itself, or a sign that already passed or resolved, does not fire:
+    // the model answers it. Anything current or ambiguous in the present fires. Suicidal words and self-harm fire always.
     [Theory]
     // Dolor u opresión en el pecho
     [InlineData("Me duele el pecho", true)]
@@ -274,7 +274,11 @@ public sealed class AgentGuardTests : IAsyncLifetime
     [InlineData("No me duele el pecho, solo quiero una cita", false)]      // negated
     [InlineData("no tengo dolor de pecho", false)]
     [InlineData("no tengo fiebre me duele el pecho", true)]                // the «no» belongs to the fever, not to the chest
-    [InlineData("Ya no me duele el pecho", true)]                          // resolved: in doubt, fires
+    [InlineData("Ya no me duele el pecho", false)]                         // resolved
+    [InlineData("ya no puedo respirar", true)]                             // «ya no» here is the sign getting worse
+    [InlineData("desde ayer me duele el pecho", true)]                     // started in the past, still going
+    [InlineData("ayer me empezó un dolor en el pecho y sigue", true)]
+    [InlineData("ya estoy bien pero me duele el pecho", true)]             // the «bien» comes before the sign it would resolve
     [InlineData("Quiero cita para control de la presión", false)]
     // No puede respirar / se ahoga
     [InlineData("No puedo respirar", true)]
@@ -292,7 +296,12 @@ public sealed class AgentGuardTests : IAsyncLifetime
     [InlineData("mi esposa se desmayo", true)]
     [InlineData("perdió el conocimiento", true)]
     [InlineData("se privó mi abuelo y no reacciona", true)]
-    [InlineData("Ayer me desmayé pero ya estoy bien", true)]               // past and resolved: in doubt, fires
+    [InlineData("Ayer me desmayé pero ya estoy bien", false)]              // past and resolved
+    [InlineData("me desmayé la semana pasada", false)]                     // past
+    [InlineData("Me desmayé. Ya estoy bien.", false)]                      // resolved in the next sentence
+    [InlineData("hace un rato me desmayé", true)]                          // minutes ago is now
+    [InlineData("ayer me desmayé y ahora me duele el pecho", true)]        // the chest is now
+    [InlineData("ayer me desmayé y todavía me siento mal", true)]          // still going
     [InlineData("siento que me voy a desmayar", true)]
     [InlineData("no me he desmayado, solo me mareo", false)]
     // Convulsión
@@ -300,7 +309,8 @@ public sealed class AgentGuardTests : IAsyncLifetime
     [InlineData("le dio una convulsión", true)]
     [InlineData("tuvo un ataque epiléptico", true)]
     [InlineData("no tiene convulsiones", false)]
-    [InlineData("no ha vuelto a tener convulsiones", true)]                // resolved, like «ya no»: in doubt, fires
+    [InlineData("no ha vuelto a tener convulsiones", false)]               // resolved
+    [InlineData("de niño tuve convulsiones", false)]                       // past
     [InlineData("me pica la garganta y la tengo inflamada", false)]        // an itch, not an allergic reaction
     // Sangrado abundante que no para
     [InlineData("Me corté y estoy sangrando muchísimo, no para.", true)]
@@ -328,6 +338,8 @@ public sealed class AgentGuardTests : IAsyncLifetime
     [InlineData("pienso en matarme", true)]
     [InlineData("quiero hacerme daño", true)]
     [InlineData("no me quiero morir", true)]                               // never read as a negation: fires
+    [InlineData("me quiero morir de la vergüenza", true)]                  // fires even when colloquial
+    [InlineData("hace un año quise quitarme la vida", true)]               // never read as past: fires
     // Intoxicación o sobredosis
     [InlineData("Creo que tomé una sobredosis", true)]
     [InlineData("estoy intoxicado", true)]
@@ -345,6 +357,17 @@ public sealed class AgentGuardTests : IAsyncLifetime
     [InlineData("tengo la garganta inflamada y fiebre", false)]           // a sore throat, not an allergy
     [InlineData("se me hinchó la cara por la muela", false)]               // a tooth, not an allergy
     [InlineData("tengo alergia pero no se me hinchó la cara", false)]
+    // Infarto, derrame, embolia, ataque al corazón (added by the owner on 2026-10-17, same negation and past rules)
+    [InlineData("creo que me está dando un infarto", true)]
+    [InlineData("A mi papá le está dando un ataque al corazón", true)]
+    [InlineData("le dio un derrame cerebral", true)]
+    [InlineData("creo que le dio un derrame", true)]
+    [InlineData("puede ser una embolia?", true)]
+    [InlineData("No sé si es un infarto", true)]                           // doubt, not a negation
+    [InlineData("no es un infarto, ya me revisaron", false)]               // negated
+    [InlineData("mi papá tuvo un infarto hace dos años", false)]           // past
+    [InlineData("le dio una embolia el año pasado y quiere control", false)]
+    [InlineData("tengo un derrame en el ojo", false)]                      // an eye, not a stroke
     // Not on the list: the model and the existing paths decide
     [InlineData("Me duele muchísimo el estómago", false)]
     [InlineData("Tengo dolor de garganta y fiebre desde ayer", false)]
@@ -360,6 +383,7 @@ public sealed class AgentGuardTests : IAsyncLifetime
     [InlineData("me quiero morir")]
     [InlineData("me tomé un frasco de pastillas")]
     [InlineData("tengo alergia y se me hinchó la garganta")]
+    [InlineData("creo que me está dando un infarto")]
     public async Task AnAlarmSignGetsTheEmergencyNumberAndAPersonWithoutTheModel(string message)
     {
         var tenant = await h.Db.Tenants.SingleAsync(t => t.Id == h.Scope.Id); tenant.EmergencyPhone = "2200 0000"; await h.Db.SaveChangesAsync();

@@ -93,7 +93,7 @@ Guardas que dependan de que el modelo obedezca; relajar una eval para que pase; 
 ## Preguntas
 
 - Asumida: los precios se responden sólo si están en la guía (la guía sembrada dice «no confirmar precios sin consultar recepción»). Una herramienta de catálogo comercial no entra en este cambio. **Revertida el 2026-10-13 por el dueño del producto:** ver «Catálogo, precios y convenios» (criterios 68–74).
-- Asumida: la lista de urgencias que deriva sin modelo no cambia (emergencia, sobredosis, suicidio, pedir doctor o persona). Ampliarla es decisión clínica.
+- Asumida: la lista de urgencias que deriva sin modelo no cambia (emergencia, sobredosis, suicidio, pedir doctor o persona). Ampliarla es decisión clínica. **Ampliada el 2026-10-17 por el dueño:** ver «Señales de alarma» (MR-35).
 - Asumida: una dosis mencionada sólo por el paciente no respalda la respuesta; repetirla deriva. Falso positivo aceptado por seguridad.
 - Bloqueantes: ninguna.
 
@@ -292,6 +292,40 @@ Verificación · 2026-10-13 (segunda entrega):
 - Con `hospital_disciplines` (`info-121` e `info-122` cambiaron con él): `scripts/test-backend.sh` `Failed: 0, Passed: 707, Skipped: 0, Total: 707`; `scripts/eval-agent.sh` sobre el área `info` (OpenAI `gpt-6-luna`): 27 de 28, con `info-120`, `info-121` e `info-122` en verde; `info-109` falló una vez y pasó al repetirlo solo.
 - Las lecturas de Hospital aún no están desplegadas: lo verificado es contra dobles; contra Hospital real queda pendiente.
 - No probado: que el fallo se reintente a los 5 minutos y el acierto a la hora (el reloj del cliente no es inyectable; se probó que dentro del plazo hay una sola lectura).
+
+## Señales de alarma (MR-35) · 2026-10-17
+
+Lista y reglas aprobadas por el dueño el 2026-10-17. Antes del modelo, `AgentGuard.NamesEmergency` lleva estas señales al número de emergencia y a una persona: es el mismo camino que «emergencia», «sobredosis» y «suicidio» (handoff urgente; el modelo no se llama).
+
+1. Dolor u opresión en el pecho.
+2. No puede respirar o se ahoga.
+3. Desmayo o pérdida de conciencia.
+4. Convulsión.
+5. Sangrado abundante que no para.
+6. Debilidad o adormecimiento de un lado, cara caída o no puede hablar.
+7. Ideación suicida o autolesión («me quiero morir», «quitarme la vida»).
+8. Intoxicación o sobredosis.
+9. Reacción alérgica grave con hinchazón de cara o garganta.
+10. Infarto, derrame (cerebral), embolia, ataque al corazón.
+
+Reglas, con el texto leído sin tildes ni mayúsculas:
+
+- **Negada no dispara.** Un «no», «sin», «ni» o «tampoco» en la misma cláusula, a tres palabras o menos de la señal, la niega («no me duele el pecho»). «No sé si…» es duda, no negación.
+- **Pasada o resuelta no dispara; la atiende el modelo.** Hay tres formas de marcarlo:
+  - un tiempo ya ido en la cláusula de la señal («ayer», «anoche», «hace dos años», «la semana pasada», «de niño»);
+  - «no ha vuelto» antes de la señal;
+  - «ya estoy bien» o «ya pasó» después de ella.
+  
+  Lo que diga que sigue («desde ayer», «todavía», «sigue», «ahora») la mantiene actual. Ante una frase ambigua en presente, dispara.
+- **Sinónimos y excepción.** Los sinónimos coloquiales se quedan: «me cuesta respirar», «me falta el aire», «se privó», «no reacciona». Las frases suicidas o de autolesión disparan siempre, aunque estén negadas, en pasado o sean coloquiales («me quiero morir de la vergüenza»).
+
+| Cómo se prueba | |
+|---|---|
+| Tabla de frases que disparan y que no | `AgentGuardTests.AlarmSignsAreReadBeforeTheModel` |
+| Extremo a extremo por `Run` (número de emergencia, `human`, modelo sin llamar) | `AgentGuardTests.AnAlarmSignGetsTheEmergencyNumberAndAPersonWithoutTheModel` |
+| Evals | `urgencia-111` a `urgencia-116` y `urgencia-118` derivan; `urgencia-117` (negada) y `urgencia-119` (pasada y resuelta) agendan |
+
+Límites: la lista de frases es cerrada; lo que no reconoce queda para el prompt y las evals, como antes. «No puedo hablar» seguido de «ahorita», «por teléfono» o «estoy en el trabajo» no dispara. Un «derrame en el ojo» tampoco.
 
 ## Límites conocidos
 
