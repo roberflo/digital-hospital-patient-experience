@@ -91,9 +91,33 @@ public sealed partial class AgentIntegrationTests {
         Assert.Equal(1,k.Calls);Assert.Single(await fresh.Messages.Where(x=>x.Sender=="agent").ToListAsync());
     }
     [Fact]public async Task AFailedTurnOutsideTheWhatsAppWindowSendsNothing(){
-        conversation.LastInboundAt=DateTimeOffset.UtcNow.AddDays(-2);await db.SaveChangesAsync();
-        var k=Sending();await AgentWorker.RunTenant(Tenant(new Fake(_=>throw new InvalidOperationException("Synthetic model failure")),k),scope.Id,NullLogger.Instance,CancellationToken.None);
+        // Send itself refuses a closed window and the refusal would be swallowed: what proves the check is that nothing was even attempted.
+        conversation.LastInboundAt=DateTimeOffset.UtcNow.AddDays(-2);await db.SaveChangesAsync();var log=new Notes();
+        var k=Sending();await AgentWorker.RunTenant(Tenant(new Fake(_=>throw new InvalidOperationException("Synthetic model failure")),k),scope.Id,log,CancellationToken.None);
         await using var fresh=Other();Assert.Equal("failed",(await fresh.Jobs.SingleAsync(x=>x.Id==job.Id)).Status);Assert.Equal(0,k.Calls);
+        Assert.Empty(await fresh.Messages.Where(x=>x.Sender=="agent").ToListAsync());Assert.DoesNotContain(log.Lines,l=>l.StartsWith("Agent failure notice not sent"));
+    }
+    [Fact]public async Task AFailedTurnWithoutAnEmergencyNumberSaysOnlyThatTheTeamWasTold(){
+        var k=Sending();await AgentWorker.RunTenant(Tenant(new Fake(_=>throw new InvalidOperationException("Synthetic model failure")),k),scope.Id,NullLogger.Instance,CancellationToken.None);
+        await using var fresh=Other();
+        Assert.Equal("No pude completar tu solicitud. Ya avisé al equipo del hospital para que te responda por aquí.",Assert.Single(await fresh.Messages.Where(x=>x.Sender=="agent").ToListAsync()).Body);Assert.Equal(1,k.Calls);
+    }
+    [Fact]public async Task AFailedTurnTakenByAPersonMeanwhileSendsNothing(){
+        // INV-5: once a person has the conversation, only that person writes to the patient.
+        var ai=new Fake(async _=>{await using var other=Other();await other.Conversations.Where(x=>x.Id==conversation.Id).ExecuteUpdateAsync(x=>x.SetProperty(c=>c.Status,"human").SetProperty(c=>c.AssignedTo,"staff-synthetic"));throw new InvalidOperationException("Synthetic model failure");});
+        var k=Sending();await AgentWorker.RunTenant(Tenant(ai,k),scope.Id,NullLogger.Instance,CancellationToken.None);
+        await using var fresh=Other();Assert.Equal("failed",(await fresh.Jobs.SingleAsync(x=>x.Id==job.Id)).Status);Assert.Equal(0,k.Calls);Assert.Empty(await fresh.Messages.Where(x=>x.Sender=="agent").ToListAsync());
+    }
+    [Fact]public async Task AFailedTurnAfterTheAgentWasTurnedOffSendsNothing(){
+        var ai=new Fake(async _=>{await using var other=Other();await other.Tenants.Where(x=>x.Id==scope.Id).ExecuteUpdateAsync(x=>x.SetProperty(t=>t.AgentEnabled,false));throw new InvalidOperationException("Synthetic model failure");});
+        var k=Sending();await AgentWorker.RunTenant(Tenant(ai,k),scope.Id,NullLogger.Instance,CancellationToken.None);
+        await using var fresh=Other();Assert.Equal("failed",(await fresh.Jobs.SingleAsync(x=>x.Id==job.Id)).Status);Assert.Equal(0,k.Calls);Assert.Empty(await fresh.Messages.Where(x=>x.Sender=="agent").ToListAsync());
+    }
+    sealed class Notes:Microsoft.Extensions.Logging.ILogger{
+        public readonly List<string> Lines=[];
+        public IDisposable? BeginScope<TState>(TState state) where TState:notnull=>null;
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel level)=>true;
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel level,Microsoft.Extensions.Logging.EventId id,TState state,Exception? ex,Func<TState,Exception?,string> format)=>Lines.Add(format(state,ex));
     }
     [Fact]public async Task AHungTenantDoesNotHoldBackAnother(){
         // MR-4: tenant A's model never answers; tenant B's turn, queued once A is stuck, is still served by the same running worker.

@@ -155,6 +155,40 @@ public sealed class AgentAppointmentsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task AProposalThatCannotBeReadBeforeWritingIsNotCalledAReconciliation()
+    {
+        // Nothing reached Hospital: the team is told so, not asked to reconcile an operation that never happened.
+        await h.Link(); var hospital = h.Hospital(availability: Agenda());
+        await h.Runtime(h.Model(AgentHarness.ToolCall("propose_action", new { action = "create", doctorId = doctor, startsAt = In(5, 15), durationMinutes = 30 }), AgentHarness.Reply("Listo.")), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
+        var card = await h.Db.Activities.SingleAsync(a => a.Kind.StartsWith("proposal:")); card.Body = """{"action":"create"}"""; await h.Db.SaveChangesAsync();
+        await h.Db.Jobs.ExecuteUpdateAsync(s => s.SetProperty(j => j.Status, "done"));
+        await h.Say("patient", "CONFIRMAR " + card.Kind[9..]); var sender = h.Sender();
+
+        await AgentWorker.RunTenant(h.Worker(h.Runtime(NoModel, sender, hospital), sender), h.Scope.Id, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, CancellationToken.None);
+
+        Assert.Empty(h.HospitalWrites);
+        Assert.Equal("done", await h.Db.Jobs.AsNoTracking().Where(j => j.Id == h.Job.Id).Select(j => j.Status).SingleAsync());
+        Assert.Equal("No se pudo preparar la operación de agenda; no se envió nada a Hospital.", (await h.Db.Activities.AsNoTracking().SingleAsync(a => a.ConversationId == h.Conversation.Id && a.Kind == "handoff")).Body);
+    }
+
+    [Fact]
+    public async Task AWriteWithNoAnswerNamesTheAppointmentToReconcile()
+    {
+        await h.Link(); var appointment = Guid.NewGuid(); var inner = new HttpMessageInvoker(h.Hospital(appointments: [Booked(appointment, 3)])); var posts = 0;
+        var hospital = new AgentHarness.Fake(request =>
+        {
+            if (request.Method != HttpMethod.Post) return inner.SendAsync(request, CancellationToken.None);
+            posts++; throw new HttpRequestException("Synthetic timeout");
+        });
+        await Say($"CANCELAR {appointment}", hospital);
+
+        await Say(Options()[0].Id, hospital);
+
+        Assert.Equal(1, posts);
+        Assert.Equal($"La operación de agenda necesita conciliación. Comprueba el hospital antes de repetirla. Referencia Hospital: {appointment}.", (await h.Db.Activities.AsNoTracking().SingleAsync(a => a.ConversationId == h.Conversation.Id && a.Kind == "handoff")).Body);
+    }
+
+    [Fact]
     public async Task WithoutARecordThereIsNothingToLookUp()
     {
         var reply = await Say("MISCITAS", new AgentHarness.Fake(_ => throw new InvalidOperationException("Hospital must not be consulted")));

@@ -538,6 +538,17 @@ public sealed class AgentGuardTests : IAsyncLifetime
     }
 
     [Fact]
+    public void TheModelsTimeoutsStayInsideTheTurnAndTheRequest()
+    {
+        // A budget past the worker's deadline would let RunTenant cut the turn instead of the menu; an attempt past the HttpClient's timeout would never be reached.
+        static IConfiguration Config(string? budget, string? attempt) => new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["AI_TURN_BUDGET_SECONDS"] = budget, ["AI_ATTEMPT_TIMEOUT_SECONDS"] = attempt }).Build();
+        Assert.Equal(TimeSpan.FromSeconds(90), AgentRuntime.Budget(Config(null, null)));
+        Assert.Equal(TimeSpan.FromSeconds(30), AgentRuntime.Attempt(Config(null, null), TimeSpan.FromSeconds(90)));
+        Assert.Equal(AgentWorker.TurnDeadline - TimeSpan.FromSeconds(20), AgentRuntime.Budget(Config("600", null)));
+        Assert.Equal(TimeSpan.FromSeconds(90), AgentRuntime.Attempt(Config(null, "600"), TimeSpan.FromSeconds(90)));
+    }
+
+    [Fact]
     public async Task AHungPrimaryLeavesTimeForTheFallback()
     {
         // MR-2: each attempt has its own timeout, so a primary that never answers still leaves the budget to the fallback.
