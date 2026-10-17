@@ -404,6 +404,9 @@ test('MR-18 the attention mode travels as status=; an empty filtered list offers
     page,
     Array.from({ length: 100 }, (_, i) => chat('Paciente ' + i)),
   );
+  // The full page has to be on screen before searching it, not the previous empty poll.
+  await page.getByRole('button', { name: 'Actualizar conversaciones' }).click();
+  await expect(page.getByRole('heading', { name: 'Conversaciones 100' })).toBeVisible();
   await page.getByLabel('Buscar', { exact: true }).fill('Paciente 7');
   await expect(
     page.getByText('La búsqueda por nombre solo revisa las 100 conversaciones de esta página.'),
