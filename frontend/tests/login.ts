@@ -55,5 +55,5 @@ export async function login(page: Page, user: User = 'admin', returnTo = '/') {
   );
   await enter(page, user);
   if (returnTo === '/')
-    await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Inicio', exact: true })).toBeVisible();
 }

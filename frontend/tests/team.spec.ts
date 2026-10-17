@@ -85,9 +85,10 @@ test('team assigns multiple conversations, filters workload and transfers one wi
   for (const name of ['Ana Martínez', 'Carlos Rivera']) {
     await page.getByLabel('Seleccionar conversación de ' + name, { exact: true }).check();
   }
-  await page.getByLabel('Responsable de la selección').selectOption('');
+  await page.getByLabel('Responsable de la selección').selectOption('none');
   await page.getByRole('button', { name: 'Asignar selección', exact: true }).click();
-  await expect(page.getByText('Conversaciones asignadas', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Quitar responsable', exact: true }).click();
+  await expect(page.getByText('Responsable quitado', { exact: true })).toBeVisible();
 });
 test('attendant sees team but cannot bulk assign, disable coworkers or edit another owner', async ({
   page,
@@ -121,4 +122,42 @@ test('attendant sees team but cannot bulk assign, disable coworkers or edit anot
   await expect(
     page.getByText('El responsable o un administrador puede transferirla.'),
   ).toBeVisible();
+});
+test('MR-20 disabling a teammate asks first: cancel sends nothing, confirm sends one', async ({
+  page,
+}) => {
+  await page.route('**/api/crm/members/workload', (route) =>
+    route.fulfill({
+      json: {
+        unassigned: 0,
+        members: [
+          {
+            subject: 'm-sintetico',
+            name: 'Rosa Sintética',
+            role: 'agent',
+            disabled: false,
+            open: 0,
+            pending: 0,
+            snoozed: 0,
+          },
+        ],
+      },
+    }),
+  );
+  const patches: unknown[] = [];
+  await page.route('**/api/crm/members/m-sintetico', (route) => {
+    if (route.request().method() !== 'PATCH') return route.fallback();
+    patches.push(route.request().postDataJSON());
+    return route.fulfill({ json: {} });
+  });
+  await login(page);
+  await nav(page, 'Equipo');
+  const disable = page.getByRole('button', { name: 'Desactivar acceso', exact: true });
+  await disable.click();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Cancelar' }).click();
+  expect(patches).toHaveLength(0);
+  await disable.click();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Desactivar acceso' }).click();
+  await expect.poll(() => patches.length).toBe(1);
+  expect(patches[0]).toEqual({ disabled: true });
 });

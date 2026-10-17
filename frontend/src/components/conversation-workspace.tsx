@@ -25,6 +25,11 @@ import { Item, ItemActions, ItemContent, ItemGroup, ItemTitle } from './ui/item'
 import { NativeSelect, NativeSelectOption } from './ui/native-select';
 import { Textarea } from './ui/textarea';
 import { api, fetcher, type Chat, type Me, type Opportunity, type Contact } from '@/lib/api';
+import { inZone } from '@/lib/format';
+import { useHospitalZone } from '@/hooks/use-hospital-zone';
+import { ConfirmAction } from './confirm-action';
+
+const dateTime = { dateStyle: 'medium', timeStyle: 'short' } as const;
 
 export const conversationStates = [
   ['open', 'Abierta'],
@@ -51,6 +56,7 @@ export function WorkflowControls({ chat, onChange }: { chat: Chat; onChange: () 
   const [busy, setBusy] = useState(false);
   const [delay, setDelay] = useState('60');
   const id = useId();
+  const zone = useHospitalZone();
   async function update(values: Record<string, unknown>) {
     setBusy(true);
     try {
@@ -110,7 +116,7 @@ export function WorkflowControls({ chat, onChange }: { chat: Chat; onChange: () 
           </NativeSelect>
           {c.snoozedUntil && (
             <FieldDescription>
-              Reapertura: {new Date(c.snoozedUntil).toLocaleString('es-SV')}
+              Reapertura: {inZone(c.snoozedUntil, zone, dateTime)}
             </FieldDescription>
           )}
         </Field>
@@ -487,11 +493,12 @@ export function SavedReplies({ me, onInsert }: { me: Me; onInsert: (text: string
                     <ItemTitle>{r.title}</ItemTitle>
                   </ItemContent>
                   <ItemActions>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={async () => {
+                    <ConfirmAction
+                      title={`¿Eliminar «${r.title}»?`}
+                      description="La respuesta deja de estar disponible para todo tu equipo."
+                      action="Eliminar respuesta"
+                      destructive
+                      onConfirm={async () => {
                         try {
                           await api('/saved-replies/' + r.id, 'DELETE');
                           mutate();
@@ -500,8 +507,15 @@ export function SavedReplies({ me, onInsert }: { me: Me; onInsert: (text: string
                         }
                       }}
                     >
-                      Eliminar
-                    </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        aria-label={'Eliminar respuesta ' + r.title}
+                      >
+                        Eliminar
+                      </Button>
+                    </ConfirmAction>
                   </ItemActions>
                 </Item>
               ))}
@@ -565,6 +579,7 @@ export function ChannelConnection({ id }: { id: string }) {
   const [data, setData] = useState<Diagnostics>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const zone = useHospitalZone();
   return (
     <div className="flex max-w-60 min-w-48 flex-col items-start gap-2 whitespace-normal">
       <Button
@@ -611,7 +626,7 @@ export function ChannelConnection({ id }: { id: string }) {
             <br />
             Última actualización recibida:{' '}
             {data.lastWebhookAt
-              ? new Date(data.lastWebhookAt).toLocaleString('es-SV')
+              ? inZone(data.lastWebhookAt, zone, dateTime)
               : 'aún no hay mensajes'}
           </p>
           {!data.ready && (

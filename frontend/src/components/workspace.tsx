@@ -1,6 +1,7 @@
 'use client';
 import { GoogleCalendarConnection } from './google-calendar-connection';
 import {
+  useDeferredValue,
   useEffect,
   useState,
   useRef,
@@ -15,6 +16,7 @@ import {
   LayoutDashboard,
   Inbox,
   Users,
+  BookUser,
   Building2,
   Columns3,
   CalendarDays,
@@ -135,6 +137,9 @@ import {
   type Opportunity,
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { inZone } from '@/lib/format';
+import { defaultInboxFilters, filtersActive, inboxQuery } from '@/lib/inbox-filters';
+import { ConfirmAction } from './confirm-action';
 import { AppointmentReminders, ReminderConsent } from './appointment-reminders';
 import { AttentionSettings } from './attention-settings';
 import {
@@ -166,10 +171,10 @@ import {
   priorities,
 } from './conversation-workspace';
 const nav = [
-  ['dashboard', 'Dashboard', LayoutDashboard],
+  ['dashboard', 'Inicio', LayoutDashboard],
   ['inbox', 'Bandeja de entrada', Inbox],
   ['team', 'Equipo', Users],
-  ['contacts', 'Contactos', Users],
+  ['contacts', 'Contactos', BookUser],
   ['companies', 'Empresas', Building2],
   ['opportunities', 'Oportunidades', Columns3],
   ['calendar', 'Agenda', CalendarDays],
@@ -177,6 +182,19 @@ const nav = [
   ['activity', 'Actividad', ActivityIcon],
   ['agent', 'Agente de atención', Sparkles],
 ] as const;
+const views = new Set<string>(['settings', ...nav.map(([id]) => id)]);
+/** The view a `/?view=` URL names, or null when it is not one of ours. */
+function viewOf(href: string) {
+  const url = new URL(href, location.href);
+  const v = url.searchParams.get('view');
+  return url.origin === location.origin &&
+    url.pathname === '/' &&
+    [...url.searchParams.keys()].join() === 'view' &&
+    v &&
+    views.has(v)
+    ? v
+    : null;
+}
 const stages = [
   ['new', 'Nuevo'],
   ['contacted', 'En seguimiento'],
@@ -210,16 +228,9 @@ function initials(name: string) {
     .join('')
     .toUpperCase();
 }
-function time(value: string, tz = 'America/El_Salvador') {
-  return new Date(value).toLocaleTimeString('es-SV', {
-    hour: '2-digit',
-    minute: '2-digit',
-    timeZone: tz,
-  });
-}
-function date(value: string) {
-  return new Date(value).toLocaleDateString('es-SV', { day: 'numeric', month: 'short' });
-}
+const time = (value: string, tz: string) =>
+  inZone(value, tz, { hour: '2-digit', minute: '2-digit' });
+const date = (value: string, tz: string) => inZone(value, tz, { day: 'numeric', month: 'short' });
 function PersonAvatar({ name, large = false }: { name: string; large?: boolean }) {
   return (
     <Avatar className={cn(large && 'size-16')}>
@@ -339,7 +350,14 @@ function FormDialog({
             {fields.map((f) => (
               <UiField key={f.name}>
                 <FieldLabel htmlFor={'field-' + f.name}>{f.label}</FieldLabel>
-                {f.options ? (
+                {f.type === 'contact' ? (
+                  <ContactPicker
+                    id={'field-' + f.name}
+                    name={f.name}
+                    label={f.label}
+                    required={f.required}
+                  />
+                ) : f.options ? (
                   <NativeSelect
                     id={'field-' + f.name}
                     className="w-full"
@@ -388,6 +406,95 @@ function FormDialog({
     </Dialog>
   );
 }
+/** Finds a contact on the server, not in the first page of 100 (MR-17). With `patientId` it
+ * resolves the one contact linked to that Hospital patient. */
+function ContactPicker({
+  id,
+  name = 'contactId',
+  label,
+  patientId,
+  linkedOnly = false,
+  empty = 'Selecciona un contacto',
+  required = false,
+  onChange,
+}: {
+  id: string;
+  name?: string;
+  label: string;
+  patientId?: string;
+  linkedOnly?: boolean;
+  empty?: string;
+  required?: boolean;
+  onChange?: (contactId: string) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const term = useDeferredValue(query.trim());
+  const [picked, setPicked] = useState<Contact>();
+  const { data, error } = useSWR<Contact[]>(
+    patientId
+      ? '/contacts?patientId=' + encodeURIComponent(patientId)
+      : '/contacts?q=' + encodeURIComponent(term),
+    fetcher,
+  );
+  const found = (data ?? []).filter((c) => !linkedOnly || c.patientId);
+  // The chosen contact stays choosable while the search moves on.
+  const options = picked && !found.some((c) => c.id === picked.id) ? [picked, ...found] : found;
+  const value = picked?.id ?? (patientId ? (found[0]?.id ?? '') : '');
+  return (
+    <div className="flex flex-col gap-2">
+      {!patientId && (
+        <InputGroup>
+          <InputGroupInput
+            type="search"
+            aria-label={'Buscar ' + label.toLocaleLowerCase('es')}
+            placeholder="Busca por nombre o teléfono…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            maxLength={100}
+          />
+          <InputGroupAddon>
+            <Search />
+          </InputGroupAddon>
+        </InputGroup>
+      )}
+      <NativeSelect
+        id={id}
+        name={name}
+        className="w-full"
+        required={required}
+        value={value}
+        onChange={(e) => {
+          setPicked(options.find((c) => c.id === e.target.value));
+          onChange?.(e.target.value);
+        }}
+      >
+        <NativeSelectOption value="">{data ? empty : 'Buscando…'}</NativeSelectOption>
+        {options.map((c) => (
+          <NativeSelectOption value={c.id} key={c.id}>
+            {c.name}
+          </NativeSelectOption>
+        ))}
+      </NativeSelect>
+      <ErrorBox error={error} />
+      {data?.length === 100 && (
+        <FieldDescription>
+          Hay más resultados: escribe más del nombre o del teléfono.
+        </FieldDescription>
+      )}
+      {data && !found.length && (
+        <FieldDescription>
+          {patientId
+            ? 'Este paciente no tiene un contacto vinculado en Recepción.'
+            : term
+              ? `Nadie coincide con «${term}».`
+              : linkedOnly
+                ? 'Ningún paciente vinculado entre los contactos recientes: búscalo por nombre.'
+                : 'Aún no hay contactos.'}
+        </FieldDescription>
+      )}
+    </div>
+  );
+}
 const descriptions: Record<string, string> = {
   dashboard: 'El resumen de la atención de tu hospital.',
   team: 'Organiza responsables y reparte la atención de tu hospital.',
@@ -422,7 +529,14 @@ function AppSidebar({
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" asChild>
-              <a href="/" aria-label="Recepción inicio">
+              <a
+                href="/"
+                aria-label="Recepción inicio"
+                onClick={(e) => {
+                  e.preventDefault();
+                  go('dashboard');
+                }}
+              >
                 <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
                   <HeartPulse className="size-4" />
                 </div>
@@ -437,6 +551,7 @@ function AppSidebar({
             <SidebarMenuButton
               size="lg"
               isActive={view === 'hospital'}
+              aria-current={view === 'hospital' ? 'page' : undefined}
               onClick={() => go('hospital')}
               aria-label="Ver conexión con mi hospital"
             >
@@ -462,6 +577,7 @@ function AppSidebar({
                   <SidebarMenuButton
                     aria-label={label}
                     isActive={view === id}
+                    aria-current={view === id ? 'page' : undefined}
                     onClick={() => go(id)}
                   >
                     <Icon />
@@ -512,7 +628,11 @@ function AppSidebar({
           </SidebarMenuItem>
           {me?.role === 'admin' && (
             <SidebarMenuItem>
-              <SidebarMenuButton isActive={view === 'settings'} onClick={() => go('settings')}>
+              <SidebarMenuButton
+                isActive={view === 'settings'}
+                aria-current={view === 'settings' ? 'page' : undefined}
+                onClick={() => go('settings')}
+              >
                 <Settings />
                 <span>Configuración</span>
               </SidebarMenuButton>
@@ -562,15 +682,38 @@ export default function Workspace() {
         }),
       );
   }, [me?.tenant.timeZone]);
-  useEffect(() => {
-    const v = new URLSearchParams(location.search).get('view');
-    if (v && (v === 'settings' || nav.some(([id]) => id === v))) setView(v);
-  }, []);
+  // Each view is a history entry: «Atrás» returns to the previous one (MR-24).
   const navigate = (v: string) => {
     setView(v);
     setSearch('');
-    history.replaceState(null, '', '/?view=' + v);
+    if (new URLSearchParams(location.search).get('view') !== v)
+      history.pushState(null, '', '/?view=' + v);
   };
+  useEffect(() => {
+    const fromUrl = () => {
+      const v = new URLSearchParams(location.search).get('view');
+      setView(v && views.has(v) ? v : 'dashboard');
+      setSearch('');
+    };
+    fromUrl();
+    // An internal `/?view=` link changes the view without reloading the page.
+    const onClick = (e: MouseEvent) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)
+        return;
+      const link = (e.target as Element | null)?.closest?.('a[href]');
+      if (!(link instanceof HTMLAnchorElement) || link.target) return;
+      const v = viewOf(link.href);
+      if (!v) return;
+      e.preventDefault();
+      navigate(v);
+    };
+    window.addEventListener('popstate', fromUrl);
+    document.addEventListener('click', onClick);
+    return () => {
+      window.removeEventListener('popstate', fromUrl);
+      document.removeEventListener('click', onClick);
+    };
+  }, []);
   const title =
     view === 'settings' ? 'Configuración' : (nav.find((n) => n[0] === view)?.[1] ?? 'Recepción');
   const searchable = !['hospital', 'settings', 'agent', 'dashboard', 'activity'].includes(view);
@@ -639,7 +782,12 @@ export default function Workspace() {
                     <DashboardView stats={stats} onNavigate={navigate} />
                   </>
                 ) : view === 'inbox' ? (
-                  <InboxView me={me} search={search} initialAssignment={teamAssignment} />
+                  <InboxView
+                    me={me}
+                    search={search}
+                    onSearch={setSearch}
+                    initialAssignment={teamAssignment}
+                  />
                 ) : view === 'team' ? (
                   <TeamWorkspace
                     me={me}
@@ -686,7 +834,15 @@ function useMediaQuery(query: string) {
     () => false,
   );
 }
-function ActivityTimeline({ items, proposal }: { items?: Activity[]; proposal: string }) {
+function ActivityTimeline({
+  items,
+  proposal,
+  zone,
+}: {
+  items?: Activity[];
+  proposal: string;
+  zone: string;
+}) {
   if (!items?.length) return null;
   return (
     <div className="flex flex-col gap-4">
@@ -697,7 +853,7 @@ function ActivityTimeline({ items, proposal }: { items?: Activity[]; proposal: s
             {a.kind.startsWith('proposal') ? proposal : a.body}
           </p>
           <small className="text-xs text-muted-foreground">
-            {date(a.createdAt)} · {time(a.createdAt)}
+            {date(a.createdAt, zone)} · {time(a.createdAt, zone)}
           </small>
         </div>
       ))}
@@ -707,10 +863,12 @@ function ActivityTimeline({ items, proposal }: { items?: Activity[]; proposal: s
 function InboxView({
   me,
   search,
+  onSearch,
   initialAssignment,
 }: {
   me: Me;
   search: string;
+  onSearch: (search: string) => void;
   initialAssignment: string | null;
 }) {
   const [state, setState] = useState(initialAssignment ? '' : 'open');
@@ -749,32 +907,40 @@ function InboxView({
   const [channelId, setChannelId] = useState('');
   const [priority, setPriority] = useState('');
   const [label, setLabel] = useState('');
+  const [filter, setFilter] = useState('all');
   const [moreFilters, setMoreFilters] = useState(false);
   const [page, setPage] = useState(1);
   const { data: channels } = useSWR<Channel[]>('/channels', fetcher);
-  useEffect(() => setPage(1), [state, assignment, channelId, priority, label]);
-  useEffect(() => setChecked({}), [state, assignment, channelId, priority, label, page, search]);
-  const query = new URLSearchParams({ assignment, page: String(page) });
+  useEffect(() => setPage(1), [state, assignment, channelId, priority, label, filter]);
+  useEffect(
+    () => setChecked({}),
+    [state, assignment, channelId, priority, label, filter, page, search],
+  );
+  const filters = { state, assignment, channelId, priority, label, mode: filter };
+  const query = inboxQuery(filters, page);
   if (linkedConversation) query.set('conversationId', linkedConversation);
   if (linkedPhone) query.set('phone', linkedPhone);
   if (linkedNumber) query.set('phoneNumberId', linkedNumber);
-  if (state) query.set('state', state);
-  if (channelId) query.set('channelId', channelId);
-  if (priority) query.set('priority', priority);
-  if (label.trim()) query.set('label', label.trim());
   const {
     data: chats,
     error,
     mutate,
   } = useSWR<Chat[]>('/conversations?' + query, fetcher, { refreshInterval: 5000 });
   const [selected, setSelected] = useState<string | null>(null);
-  const [filter, setFilter] = useState('all');
   const filtered = chats?.filter(
     (c) =>
-      (filter === 'all' || c.conversation.status === filter) &&
-      (c.contact.name.toLowerCase().includes(search.toLowerCase()) ||
-        c.contact.phone.includes(search)),
+      c.contact.name.toLowerCase().includes(search.toLowerCase()) ||
+      c.contact.phone.includes(search),
   );
+  function clearFilters() {
+    setState(defaultInboxFilters.state);
+    setAssignment(defaultInboxFilters.assignment);
+    setChannelId('');
+    setPriority('');
+    setLabel('');
+    setFilter(defaultInboxFilters.mode);
+    onSearch('');
+  }
   const active =
     chats?.find((c) => c.conversation.id === selected) ??
     (linkedPhone && chats?.length === 1 ? chats[0] : undefined);
@@ -786,13 +952,23 @@ function InboxView({
           id,
           expectedRevision,
         })),
-        assignedTo: bulkTarget || null,
+        assignedTo: bulkTarget === 'none' ? null : bulkTarget,
       });
       setChecked({});
-      toast.success('Conversaciones asignadas');
+      setBulkTarget('');
+      toast.success(bulkTarget === 'none' ? 'Responsable quitado' : 'Conversaciones asignadas');
     } catch (e) {
+      // The selection stays; its revisions are re-read so the person can decide again on what they now see.
       toast.error((e as Error).message);
-      setChecked({});
+      const fresh = await mutate();
+      setChecked((previous) =>
+        Object.fromEntries(
+          Object.entries(previous).map(([id, revision]) => [
+            id,
+            fresh?.find((c) => c.conversation.id === id)?.conversation.revision ?? revision,
+          ]),
+        ),
+      );
     } finally {
       setAssigning(false);
       mutate();
@@ -980,7 +1156,10 @@ function InboxView({
                       value={bulkTarget}
                       onChange={(e) => setBulkTarget(e.target.value)}
                     >
-                      <NativeSelectOption value="">Sin asignar</NativeSelectOption>
+                      <NativeSelectOption value="" disabled>
+                        Elige un responsable
+                      </NativeSelectOption>
+                      <NativeSelectOption value="none">Quitar responsable</NativeSelectOption>
                       {workload?.members
                         .filter((m) => !m.disabled)
                         .map((m) => (
@@ -989,9 +1168,18 @@ function InboxView({
                           </NativeSelectOption>
                         ))}
                     </NativeSelect>
-                    <Button size="sm" disabled={assigning} onClick={assignSelection}>
-                      Asignar selección
-                    </Button>
+                    <ConfirmAction
+                      ask={bulkTarget === 'none'}
+                      title="¿Quitar el responsable?"
+                      description={`Las ${Object.keys(checked).length} conversaciones seleccionadas quedarán sin responsable.`}
+                      action="Quitar responsable"
+                      destructive
+                      onConfirm={assignSelection}
+                    >
+                      <Button size="sm" disabled={assigning || !bulkTarget}>
+                        Asignar selección
+                      </Button>
+                    </ConfirmAction>
                   </>
                 )}
               </div>
@@ -1000,10 +1188,26 @@ function InboxView({
           <div className="flex flex-col md:min-h-0 md:flex-1 md:overflow-y-auto">
             {!chats ? (
               <Loading />
+            ) : !filtered?.length && filtersActive(filters, search) ? (
+              <Empty>
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <ListFilter />
+                  </EmptyMedia>
+                  <EmptyTitle>Sin resultados con estos filtros</EmptyTitle>
+                  <EmptyDescription>
+                    Puede haber conversaciones que no coinciden con lo que elegiste.
+                  </EmptyDescription>
+                </EmptyHeader>
+                <EmptyContent>
+                  <Button variant="outline" size="sm" onClick={clearFilters}>
+                    Quitar filtros
+                  </Button>
+                </EmptyContent>
+              </Empty>
             ) : !filtered?.length ? (
               <EmptyState title="Todo al día">
-                Las conversaciones entrantes aparecerán aquí. Revisa los filtros si buscas otra
-                atención.
+                Las conversaciones entrantes aparecerán aquí.
               </EmptyState>
             ) : (
               filtered.map(({ conversation: c, contact, channel, unreadCount }) => (
@@ -1087,6 +1291,11 @@ function InboxView({
               ))
             )}
           </div>
+          {!!search.trim() && chats?.length === 100 && (
+            <p className="border-t px-3 pt-2 text-xs text-muted-foreground" role="status">
+              La búsqueda por nombre solo revisa las 100 conversaciones de esta página.
+            </p>
+          )}
           <div className="flex items-center justify-between gap-2 border-t p-3">
             <Button
               variant="outline"
@@ -1188,8 +1397,10 @@ function ChatPanel({
           .includes(messageSearch.toLocaleLowerCase('es'))),
   );
   const bottom = useRef<HTMLDivElement>(null);
+  // Follow new messages only while the person is at the end; reading further up stays put (MR-26).
+  const following = useRef(true);
   useEffect(() => {
-    bottom.current?.scrollIntoView({ block: 'nearest' });
+    if (following.current) bottom.current?.scrollIntoView({ block: 'nearest' });
   }, [messages?.length, c.id]);
   useEffect(() => setBody(''), [c.id]);
   const lastRead = useRef('');
@@ -1291,6 +1502,7 @@ function ChatPanel({
         <ActivityTimeline
           items={activities?.slice(0, 16)}
           proposal="Propuesta de agenda registrada"
+          zone={me.tenant.timeZone}
         />
       </div>
     </div>
@@ -1364,20 +1576,27 @@ function ChatPanel({
                     ? 'La conversación está cerrada.'
                     : 'Tu equipo está a cargo. El agente está en pausa.'}
               </span>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={!managesTeam(me) && !!c.assignedTo && c.assignedTo !== me.subject}
-                onClick={() =>
+              <ConfirmAction
+                ask={c.status !== 'agent'}
+                title="¿Activar el agente en esta conversación?"
+                description="El agente responderá al paciente por WhatsApp. Tu equipo puede retomarla en cualquier momento."
+                action="Activar agente"
+                onConfirm={() =>
                   action(
                     c.status === 'agent' ? 'human' : 'agent',
                     c.status === 'agent' ? me.subject : undefined,
                   )
                 }
               >
-                {c.status === 'agent' ? 'Tomar conversación' : 'Activar agente'}
-                <ArrowUpRight />
-              </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={!managesTeam(me) && !!c.assignedTo && c.assignedTo !== me.subject}
+                >
+                  {c.status === 'agent' ? 'Tomar conversación' : 'Activar agente'}
+                  <ArrowUpRight />
+                </Button>
+              </ConfirmAction>
             </AlertDescription>
           </Alert>
           <div className="flex flex-wrap items-center gap-2">
@@ -1415,12 +1634,23 @@ function ChatPanel({
           )}
           <ErrorBox error={error} />
         </div>
-        <div className="flex min-h-48 flex-1 flex-col gap-3 overflow-y-auto p-4">
+        <div
+          className="message-list flex min-h-48 flex-1 flex-col gap-3 overflow-y-auto p-4"
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            following.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 80;
+          }}
+        >
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
             <Separator className="flex-1" />
             <span>Historial de atención</span>
             <Separator className="flex-1" />
           </div>
+          {(messages?.length ?? 0) >= 200 && (
+            <p className="text-center text-xs text-muted-foreground" role="status">
+              Se muestran los últimos 200 mensajes.
+            </p>
+          )}
           {visibleMessages?.length === 0 && (
             <p className="text-center text-sm text-muted-foreground">
               {onlyFiles
@@ -1498,10 +1728,16 @@ function ChatPanel({
             value={body}
             onChange={(e) => setBody(e.target.value)}
             maxLength={4000}
+            disabled={!canReply}
           />
           <div className="flex items-center gap-2">
-            <Button asChild variant="ghost" size="icon-sm">
-              <label title="Adjuntar archivo">
+            <Button
+              asChild
+              variant="ghost"
+              size="icon-sm"
+              className={cn((busy || !canReply) && 'pointer-events-none opacity-50')}
+            >
+              <label title="Adjuntar archivo" aria-disabled={busy || !canReply}>
                 <Paperclip />
                 <span className="sr-only">Adjuntar archivo</span>
                 <input
@@ -1736,17 +1972,36 @@ function ContactsView({ search }: { search: string }) {
     </>
   );
 }
+/** Names for the cards, by id: the contact may sit past the first page of 100 (MR-17). */
+async function contactNames(ids: string[]) {
+  const pages = [];
+  for (let i = 0; i < ids.length; i += 100)
+    pages.push(
+      api<Contact[]>(
+        '/contacts?' +
+          ids
+            .slice(i, i + 100)
+            .map((id) => 'id=' + id)
+            .join('&'),
+      ),
+    );
+  return new Map((await Promise.all(pages)).flat().map((c) => [c.id, c.name]));
+}
 function OpportunitiesView({ search }: { search: string }) {
   const { data, error, mutate } = useSWR<Opportunity[]>('/opportunities', fetcher);
-  const { data: contacts } = useSWR<Contact[]>('/contacts', fetcher);
-  const [create, setCreate] = useState(false);
+  const ids = [...new Set(data?.map((o) => o.contactId))].sort();
+  const { data: names } = useSWR(ids.length ? 'contact-names:' + ids.join(',') : null, () =>
+    contactNames(ids),
+  );
+  // The stage the new follow-up starts in; null while the dialog is closed.
+  const [create, setCreate] = useState<string | null>(null);
   return (
     <>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <span className="text-sm text-muted-foreground">
           Seguimientos de la atención y oportunidades del hospital
         </span>
-        <Button size="sm" onClick={() => setCreate(true)}>
+        <Button size="sm" onClick={() => setCreate('new')}>
           <Plus />
           Nuevo seguimiento
         </Button>
@@ -1777,7 +2032,7 @@ function OpportunitiesView({ search }: { search: string }) {
                   <CardContent className="flex flex-col gap-4">
                     <div className="flex items-center gap-2 text-sm text-muted-foreground">
                       <UserRound className="size-4 shrink-0" />
-                      {contacts?.find((c) => c.id === o.contactId)?.name ?? 'Contacto'}
+                      {names?.get(o.contactId) ?? 'Contacto'}
                     </div>
                     {o.value > 0 && (
                       <strong className="flex flex-wrap items-baseline gap-2 font-semibold">
@@ -1820,11 +2075,15 @@ function OpportunitiesView({ search }: { search: string }) {
                   </CardContent>
                 </Card>
               ))}
+              {rows && !rows.length && (
+                <p className="px-1 text-sm text-muted-foreground">Sin seguimientos</p>
+              )}
               <Button
                 variant="ghost"
                 size="sm"
                 className="justify-start"
-                onClick={() => setCreate(true)}
+                aria-label={'Agregar seguimiento en ' + label}
+                onClick={() => setCreate(id)}
               >
                 <Plus />
                 Agregar seguimiento
@@ -1835,22 +2094,17 @@ function OpportunitiesView({ search }: { search: string }) {
       </div>
       <FormDialog
         title="Nuevo seguimiento"
-        open={create}
-        onClose={() => setCreate(false)}
+        open={!!create}
+        onClose={() => setCreate(null)}
         fields={[
           { name: 'title', label: 'Título', required: true },
-          {
-            name: 'contactId',
-            label: 'Contacto',
-            required: true,
-            options: contacts?.map((c) => ({ value: c.id, label: c.name })) ?? [],
-          },
+          { name: 'contactId', label: 'Contacto', type: 'contact', required: true },
           { name: 'value', label: 'Valor estimado (USD)', type: 'number', value: '0' },
           {
             name: 'stage',
             label: 'Etapa',
             required: true,
-            value: 'new',
+            value: create ?? 'new',
             options: stages.map(([value, label]) => ({ value, label })),
           },
         ]}
@@ -1893,6 +2147,8 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
     new Date(),
   );
   const [day, setDay] = useState(today);
+  // The dialog picks its own day; the agenda behind it stays on the one being viewed (MR-27).
+  const [dialogDay, setDialogDay] = useState(today);
   const [create, setCreate] = useState(false);
   const [modify, setModify] = useState<AgendaRow | null>(null);
   const [doctor, setDoctor] = useState('');
@@ -1922,11 +2178,10 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
     error: availabilityError,
     isLoading: availabilityLoading,
   } = useSWR<Availability>(
-    create || modify ? `/hospital/availability?date=${day}` : null,
+    create || modify ? `/hospital/availability?date=${dialogDay}` : null,
     fetcher,
     { shouldRetryOnError: false },
   );
-  const { data: contacts } = useSWR<Contact[]>('/contacts', fetcher);
   const options = availability?.professionals.find((p) => p.clinicianId === doctor);
   const slots = options ? freeSlots(options) : [];
   // A day nobody attends (a Sunday) used to look like a broken form: every doctor listed, no hour to pick.
@@ -1962,7 +2217,14 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
           </CardTitle>
           <CardDescription>Todos los doctores</CardDescription>
           <CardAction>
-            <Button size="sm" disabled={!data || !!error} onClick={() => setCreate(true)}>
+            <Button
+              size="sm"
+              disabled={!data || !!error}
+              onClick={() => {
+                setDialogDay(day);
+                setCreate(true);
+              }}
+            >
               <Plus />
               Nueva cita
             </Button>
@@ -2063,7 +2325,10 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
                       variant="ghost"
                       size="sm"
                       disabled={r.status !== 'booked' && r.status !== 'not-recorded'}
-                      onClick={() => setModify(r)}
+                      onClick={() => {
+                        setDialogDay(day);
+                        setModify(r);
+                      }}
                     >
                       Reprogramar
                     </Button>
@@ -2136,21 +2401,14 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
             <FieldGroup>
               <UiField>
                 <FieldLabel htmlFor="appointment-contact">Paciente vinculado</FieldLabel>
-                <NativeSelect
+                <ContactPicker
                   id="appointment-contact"
-                  name="contactId"
+                  label="Paciente vinculado"
+                  patientId={modify?.patientId}
+                  linkedOnly
+                  empty="Selecciona un paciente"
                   required
-                  defaultValue={contacts?.find((c) => c.patientId === modify?.patientId)?.id ?? ''}
-                >
-                  <NativeSelectOption value="">Selecciona un paciente</NativeSelectOption>
-                  {contacts
-                    ?.filter((c) => c.patientId && (!modify || c.patientId === modify.patientId))
-                    .map((c) => (
-                      <NativeSelectOption value={c.id} key={c.id}>
-                        {c.name}
-                      </NativeSelectOption>
-                    ))}
-                </NativeSelect>
+                />
                 <FieldDescription>
                   Si un paciente no aparece, vincula primero su expediente desde la conversación.
                 </FieldDescription>
@@ -2160,8 +2418,8 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
                 <Input
                   id="appointment-date"
                   type="date"
-                  value={day}
-                  onChange={(e) => setDay(e.target.value)}
+                  value={dialogDay}
+                  onChange={(e) => setDialogDay(e.target.value)}
                   required
                 />
               </UiField>
@@ -2187,7 +2445,7 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
                       type="button"
                       variant="outline"
                       size="sm"
-                      onClick={() => setDay(nextOpenDay)}
+                      onClick={() => setDialogDay(nextOpenDay)}
                     >
                       Ir al próximo día con horario
                     </Button>
@@ -2282,15 +2540,18 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
               variant="destructive"
               disabled={savingAppointment || !cancelReason}
               onClick={async () => {
-                if (appointmentBusy.current) return;
-                const c = contacts?.find((x) => x.patientId === cancel?.patientId);
-                if (!c) {
-                  toast.error('Vincula este paciente a un contacto antes de cancelar.');
-                  return;
-                }
+                if (appointmentBusy.current || !cancel) return;
                 appointmentBusy.current = true;
                 setSavingAppointment(true);
                 try {
+                  // The server finds the contact linked to this patient, wherever it is listed.
+                  const [c] = await api<Contact[]>(
+                    '/contacts?patientId=' + encodeURIComponent(cancel.patientId),
+                  );
+                  if (!c) {
+                    toast.error('Vincula este paciente a un contacto antes de cancelar.');
+                    return;
+                  }
                   await saveAppointment({
                     action: 'cancel',
                     appointmentId: cancel?.appointmentId,
@@ -2321,9 +2582,9 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
   );
 }
 function AgentView({ me }: { me: Me }) {
-  const { data } = useSWR<Activity[]>('/activities', fetcher, { refreshInterval: 5000 });
+  const { data, error } = useSWR<Activity[]>('/activities', fetcher, { refreshInterval: 5000 });
   const admin = me.role === 'admin';
-  const { data: contacts } = useSWR<Contact[]>('/contacts', fetcher);
+  const agentActions = data?.filter((a) => a.actorRole === 'agent_ai');
   const [contactId, setContactId] = useState('');
   const [query, setQuery] = useState('');
   const [answer, setAnswer] = useState('');
@@ -2376,19 +2637,12 @@ function AgentView({ me }: { me: Me }) {
             </div>
             <UiField>
               <FieldLabel htmlFor="assistant-contact">Contacto para acciones</FieldLabel>
-              <NativeSelect
+              <ContactPicker
                 id="assistant-contact"
-                aria-label="Contacto para acciones"
-                value={contactId}
-                onChange={(e) => setContactId(e.target.value)}
-              >
-                <NativeSelectOption value="">Solo consultar métricas</NativeSelectOption>
-                {contacts?.map((c) => (
-                  <NativeSelectOption value={c.id} key={c.id}>
-                    {c.name}
-                  </NativeSelectOption>
-                ))}
-              </NativeSelect>
+                label="Contacto para acciones"
+                empty="Solo consultar métricas"
+                onChange={setContactId}
+              />
               <FieldDescription>
                 La ficha del contacto seleccionado permanece en el CRM.
               </FieldDescription>
@@ -2466,11 +2720,13 @@ function AgentView({ me }: { me: Me }) {
             </CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
+            <ErrorBox error={error} />
             <ActivityTimeline
-              items={data?.filter((a) => a.actor === 'Agente' || a.kind === 'handoff').slice(0, 10)}
+              items={agentActions?.slice(0, 10)}
               proposal="Propuesta de cita registrada"
+              zone={me.tenant.timeZone}
             />
-            {!data?.some((a) => a.actor === 'Agente' || a.kind === 'handoff') && (
+            {data && !agentActions?.length && (
               <EmptyState icon={Sparkles} title="Listo para acompañar">
                 Las acciones aparecerán al habilitar la atención automática.
               </EmptyState>
@@ -2508,9 +2764,42 @@ type SettingsData = {
 };
 function SettingsView({ me }: { me: Me }) {
   const { mutate: globalMutate } = useSWRConfig();
-  const { data, error, mutate } = useSWR<SettingsData>('/settings', fetcher);
+  const { data, error, mutate, isValidating } = useSWR<SettingsData>('/settings', fetcher, {
+    shouldRetryOnError: false,
+  });
   const { data: channels, mutate: refreshChannels } = useSWR<Channel[]>('/channels', fetcher);
   const [saving, setSaving] = useState(false);
+  async function setChannel(c: Channel, enabled: boolean) {
+    try {
+      await api('/channels/' + c.id, 'PATCH', { enabled });
+      refreshChannels();
+      toast.success('Canal actualizado');
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  }
+  // Switching the agent is its own action: saving the guide never changes it (MR-21).
+  async function setAgent(agentEnabled: boolean) {
+    if (!data) return;
+    setSaving(true);
+    try {
+      await api('/settings', 'PUT', {
+        name: data.name,
+        timeZone: data.timeZone,
+        guide: data.guide,
+        emergencyPhone: data.emergencyPhone ?? '',
+        emergencyWhatsApp: data.emergencyWhatsApp ?? false,
+        agentEnabled,
+      });
+      mutate();
+      globalMutate('/me');
+      toast.success(agentEnabled ? 'Atención automática activada' : 'Atención automática en pausa');
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
   if (me.role !== 'admin')
     return (
       <EmptyState icon={ShieldCheck} title="Solo administradores">
@@ -2519,10 +2808,20 @@ function SettingsView({ me }: { me: Me }) {
     );
   return (
     <>
-      <ErrorBox error={error} />
+      {error && (
+        <Alert variant="destructive">
+          <AlertCircle />
+          <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
+            <span>No pudimos leer la configuración. {error.message}</span>
+            <Button variant="outline" size="sm" disabled={isValidating} onClick={() => mutate()}>
+              <RefreshCw />
+              Reintentar
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
       {data ? (
         <div className="flex flex-col gap-6">
-          <HospitalConnection />
           <div className="grid gap-6 lg:grid-cols-5">
             <Card className="min-w-0 lg:col-span-3">
               <CardHeader>
@@ -2530,9 +2829,24 @@ function SettingsView({ me }: { me: Me }) {
                   <h2>Tu hospital y su guía de atención</h2>
                 </CardTitle>
               </CardHeader>
-              <CardContent>
+              <CardContent className="flex flex-col gap-6">
+                <UiField orientation="horizontal">
+                  <FieldContent>
+                    <FieldLabel htmlFor="settings-agent-enabled">Atención automática</FieldLabel>
+                    <FieldDescription>
+                      Permite al agente atender conversaciones habilitadas. Se aplica al momento.
+                    </FieldDescription>
+                  </FieldContent>
+                  <Switch
+                    id="settings-agent-enabled"
+                    checked={data.agentEnabled}
+                    disabled={saving}
+                    onCheckedChange={(v: boolean) => setAgent(v)}
+                  />
+                </UiField>
+                <Separator />
                 <form
-                  key={data.name + data.timeZone + data.agentEnabled + data.emergencyWhatsApp}
+                  key={data.name + data.timeZone + data.emergencyWhatsApp}
                   onSubmit={async (e) => {
                     e.preventDefault();
                     const f = new FormData(e.currentTarget);
@@ -2544,7 +2858,7 @@ function SettingsView({ me }: { me: Me }) {
                         guide: f.get('guide'),
                         emergencyPhone: f.get('emergencyPhone'),
                         emergencyWhatsApp: f.get('emergencyWhatsApp') === 'on',
-                        agentEnabled: f.get('agentEnabled') === 'on',
+                        agentEnabled: data.agentEnabled,
                       });
                       mutate();
                       globalMutate('/me');
@@ -2632,21 +2946,6 @@ function SettingsView({ me }: { me: Me }) {
                         defaultChecked={data.emergencyWhatsApp ?? false}
                       />
                     </UiField>
-                    <UiField orientation="horizontal">
-                      <FieldContent>
-                        <FieldLabel htmlFor="settings-agent-enabled">
-                          Atención automática
-                        </FieldLabel>
-                        <FieldDescription>
-                          Permite al agente atender conversaciones habilitadas.
-                        </FieldDescription>
-                      </FieldContent>
-                      <Switch
-                        id="settings-agent-enabled"
-                        name="agentEnabled"
-                        defaultChecked={data.agentEnabled}
-                      />
-                    </UiField>
                     <div className="flex justify-end">
                       <Button disabled={saving}>
                         {saving ? <Spinner /> : <Check />}Guardar cambios
@@ -2702,6 +3001,12 @@ function SettingsView({ me }: { me: Me }) {
                   Tu cuenta del Hospital reúne a tu equipo, pacientes y agenda. Google y WhatsApp te
                   pedirán autorización al conectarlos.
                 </p>
+                <a
+                  className="text-sm font-medium underline underline-offset-4"
+                  href="/?view=hospital"
+                >
+                  Revisar la conexión en «Mi hospital»
+                </a>
                 <GoogleCalendarConnection
                   connected={data.googleConnected}
                   selected={data.googleCalendarId}
@@ -2752,22 +3057,28 @@ function SettingsView({ me }: { me: Me }) {
                             <ChannelConnection id={c.id} />
                           </TableCell>
                           <TableCell>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={async () => {
-                                try {
-                                  await api('/channels/' + c.id, 'PATCH', { enabled: !c.enabled });
-                                  refreshChannels();
-                                  toast.success('Canal actualizado');
-                                } catch (e) {
-                                  toast.error((e as Error).message);
-                                }
-                              }}
-                            >
-                              {c.enabled ? <Pause /> : <Play />}
-                              {c.enabled ? 'Pausar' : 'Habilitar'}
-                            </Button>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Badge variant={c.enabled ? 'secondary' : 'outline'}>
+                                {c.enabled ? 'Activo' : 'En pausa'}
+                              </Badge>
+                              <ConfirmAction
+                                ask={c.enabled}
+                                title={`¿Pausar ${c.name}?`}
+                                description="Mientras esté en pausa, Recepción no atiende ni envía mensajes por este número."
+                                action="Pausar canal"
+                                destructive
+                                onConfirm={() => setChannel(c, !c.enabled)}
+                              >
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  aria-label={(c.enabled ? 'Pausar ' : 'Habilitar ') + c.name}
+                                >
+                                  {c.enabled ? <Pause /> : <Play />}
+                                  {c.enabled ? 'Pausar' : 'Habilitar'}
+                                </Button>
+                              </ConfirmAction>
+                            </div>
                           </TableCell>
                         </TableRow>
                       ))}

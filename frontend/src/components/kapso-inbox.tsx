@@ -51,6 +51,8 @@ import {
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
+import { dayInZone, inZone } from '@/lib/format';
+import { useHospitalZone } from '@/hooks/use-hospital-zone';
 import { mergeMessages, windowOpen } from '@/lib/kapso-types';
 import type { Conversation, InboxEvent, Message, MessageStatus, Page } from '@/lib/kapso-types';
 const label = (c: Conversation) =>
@@ -70,11 +72,9 @@ const content = (m: Message) =>
   m.type === 'text'
     ? m.text?.body || m.kapso?.content || ''
     : placeholders[m.type] || `[${m.type || 'mensaje'}]`;
-const time = (m: Message) =>
-  new Date(Number(m.timestamp) * 1000).toLocaleTimeString('es', {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+const sentAt = (m: Message) => Number(m.timestamp) * 1000;
+const time = (m: Message, zone: string) =>
+  inZone(sentAt(m), zone, { hour: '2-digit', minute: '2-digit' });
 function relative(value?: string) {
   if (!value) return '';
   const delta = Math.max(0, Math.floor((Date.now() - Date.parse(value)) / 60000));
@@ -197,6 +197,7 @@ export default function KapsoInbox() {
   );
 }
 function InboxForNumber({ number, selector }: { number: string; selector: React.ReactNode }) {
+  const zone = useHospitalZone();
   const numberQuery = `phoneNumberId=${encodeURIComponent(number)}`;
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selected, setSelected] = useState<Conversation | null>(null);
@@ -687,13 +688,10 @@ function InboxForNumber({ number, selector }: { number: string; selector: React.
                   {messages.map((m, index) => (
                     <div key={m.id} className="flex shrink-0 flex-col gap-2">
                       {(index === 0 ||
-                        new Date(Number(messages[index - 1].timestamp) * 1000).toDateString() !==
-                          new Date(Number(m.timestamp) * 1000).toDateString()) && (
+                        dayInZone(sentAt(messages[index - 1]), zone) !==
+                          dayInZone(sentAt(m), zone)) && (
                         <Badge variant="secondary" className="self-center">
-                          {new Date(Number(m.timestamp) * 1000).toLocaleDateString('es', {
-                            day: 'numeric',
-                            month: 'long',
-                          })}
+                          {inZone(sentAt(m), zone, { day: 'numeric', month: 'long' })}
                         </Badge>
                       )}
                       <div
@@ -713,7 +711,7 @@ function InboxForNumber({ number, selector }: { number: string; selector: React.
                               : 'text-muted-foreground',
                           )}
                         >
-                          <time>{time(m)}</time>
+                          <time>{time(m, zone)}</time>
                           {m.kapso?.direction === 'outbound' && <Status status={m.kapso?.status} />}
                         </span>
                       </div>

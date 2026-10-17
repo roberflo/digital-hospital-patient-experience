@@ -93,6 +93,8 @@ export type Activity = {
   id: string;
   body: string;
   actor: string;
+  /** Who acted: `agent_ai` is the attention agent (MR-30). */
+  actorRole?: string;
   kind: string;
   createdAt: string;
   contactId?: string;

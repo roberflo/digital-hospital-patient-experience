@@ -123,7 +123,7 @@ test('history supports nullable phones, older pages, search, filters and mobile 
   await expect(page.getByText('Mensaje anterior', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Cargar anteriores' })).toHaveCount(0);
   await expect(page.getByLabel('Mensaje', { exact: true })).toBeEnabled();
-  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Inicio', exact: true })).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({
     path: `../artifacts/kapso-inbox-${info.project.name}.png`,
