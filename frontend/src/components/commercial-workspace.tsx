@@ -4,6 +4,7 @@ import useSWR, { useSWRConfig } from 'swr';
 import { toast } from 'sonner';
 import { AlertCircle, Building2, RefreshCw, ExternalLink, Plus, X } from 'lucide-react';
 import { api, fetcher, type Contact, type Opportunity, type Me } from '@/lib/api';
+import { fallbackZone, inZone } from '@/lib/format';
 import { Alert, AlertDescription } from './ui/alert';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -345,7 +346,10 @@ export function CustomerCommercial({
                           <ItemContent className="min-w-0">
                             <ItemTitle>{money(p.quote.total, p.quote.currency)}</ItemTitle>
                             <span className="text-xs text-muted-foreground">
-                              {new Date(p.createdAt).toLocaleString('es-SV')}
+                              {inZone(p.createdAt, me?.tenant.timeZone ?? fallbackZone, {
+                                dateStyle: 'medium',
+                                timeStyle: 'short',
+                              })}
                             </span>
                             <ItemDescription className="line-clamp-none">
                               {p.quote.lines.map((l) => `${l.quantity} × ${l.name}`).join(', ')}
