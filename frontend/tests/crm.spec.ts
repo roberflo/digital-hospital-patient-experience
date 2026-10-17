@@ -139,6 +139,8 @@ test('inbox updates conversation workflow and shared CRM profile', async ({ page
     await page.getByRole('button', { name: 'Cerrar detalles' }).click();
   }
   await nav(page, 'Contactos');
+  // The demo tenant keeps more than 100 contacts after a few runs: find Ana, not the first page.
+  await page.getByLabel('Buscar', { exact: true }).fill('Ana Martínez');
   await expect(page.getByText(email, { exact: true })).toBeVisible();
 });
 
@@ -161,6 +163,7 @@ test('personal views persist and conversation search filters messages', async ({
   await expect(
     page.getByRole('button', { name: 'Eliminar vista ' + view, exact: true }),
   ).toHaveCount(0);
+  await expect(page.getByRole('alertdialog')).toHaveCount(0);
   await page.keyboard.press('Escape');
   await page.getByLabel('Filtrar por estado').selectOption('open');
   await page
@@ -209,6 +212,8 @@ test('admin creates and applies an internal macro', async ({ page }, info) => {
   await expect(
     page.getByRole('button', { name: 'Eliminar macro ' + macro, exact: true }),
   ).toHaveCount(0);
+  // The confirmation has to finish closing before Escape closes the macro dialog behind it.
+  await expect(page.getByRole('alertdialog')).toHaveCount(0);
   await page.keyboard.press('Escape');
   await nav(page, 'Actividad');
   await expect(page.getByText('Nota macro ' + macro, { exact: true })).toBeVisible();
@@ -496,7 +501,6 @@ test('MR-20 activating the agent and deleting a view, a macro or a saved reply a
   const replies = await counter(page, '**/api/crm/saved-replies/r-1', 'DELETE');
   await login(page);
   await nav(page, 'Bandeja de entrada');
-  await page.locator('.conversation-card').filter({ hasText: 'Ana Sintética' }).click();
   async function confirmOnce(open: () => Promise<void>, action: string, calls: unknown[]) {
     await open();
     await page.getByRole('alertdialog').getByRole('button', { name: 'Cancelar' }).click();
@@ -504,12 +508,9 @@ test('MR-20 activating the agent and deleting a view, a macro or a saved reply a
     await open();
     await page.getByRole('alertdialog').getByRole('button', { name: action }).click();
     await expect.poll(() => calls.length).toBe(1);
+    await expect(page.getByRole('alertdialog')).toHaveCount(0);
   }
-  await confirmOnce(
-    () => page.getByRole('button', { name: 'Activar agente' }).click(),
-    'Activar agente',
-    agent,
-  );
+  // Saved views live in the conversation list, which an open chat replaces on mobile: first.
   await page.getByRole('button', { name: 'Administrar vistas guardadas' }).click();
   await confirmOnce(
     () => page.getByRole('button', { name: 'Eliminar vista Urgentes', exact: true }).click(),
@@ -517,6 +518,13 @@ test('MR-20 activating the agent and deleting a view, a macro or a saved reply a
     views,
   );
   await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.locator('.conversation-card').filter({ hasText: 'Ana Sintética' }).click();
+  await confirmOnce(
+    () => page.getByRole('button', { name: 'Activar agente' }).click(),
+    'Activar agente',
+    agent,
+  );
   await page.getByRole('button', { name: 'Acciones rápidas', exact: true }).click();
   await page.getByRole('button', { name: 'Administrar macros', exact: true }).click();
   await confirmOnce(

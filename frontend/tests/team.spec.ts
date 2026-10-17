@@ -83,10 +83,11 @@ test('team assigns multiple conversations, filters workload and transfers one wi
   await page.getByLabel('Filtrar por responsable').selectOption('all');
   await page.getByLabel('Filtrar por estado').selectOption('');
   // These filters were cached at the start of the test: select only once the list shows Ana's
-  // current owner, or the selection carries revisions from before the reassignments (409).
+  // current owner, or the selection carries revisions from before the reassignments (409). The
+  // revalidation of this page has taken more than 5 s on the shared stack under load.
   await expect(
     page.locator('.conversation-card').filter({ hasText: 'Ana Martínez' }),
-  ).toContainText(users.admin.name);
+  ).toContainText(users.admin.name, { timeout: 15000 });
   for (const name of ['Ana Martínez', 'Carlos Rivera']) {
     await page.getByLabel('Seleccionar conversación de ' + name, { exact: true }).check();
   }
