@@ -104,12 +104,20 @@ public static class WhatsAppEndpoints
         using var buffer = new MemoryStream(); var bytes = new byte[8192]; int read;
         while ((read = await ctx.Request.Body.ReadAsync(bytes)) > 0) { if (buffer.Length + read > 2 * 1024 * 1024) return Results.StatusCode(413); buffer.Write(bytes, 0, read); }
         var body = buffer.ToArray(); if (!Rules.VerifySignature(body, ctx.Request.Headers["X-Webhook-Signature"].ToString(), config["KAPSO_WEBHOOK_SECRET"] ?? "")) return Results.Unauthorized();
-        using var json = JsonDocument.Parse(body); var root = json.RootElement;
-        var items = root.TryGetProperty("batch", out var batch) && batch.ValueKind == JsonValueKind.True ? root.GetProperty("data").EnumerateArray().ToArray() : [root];
+        // A signed body that is not the expected shape is refused whole, before anything is written.
+        JsonDocument json; JsonElement[] items;
+        try
+        {
+            json = JsonDocument.Parse(body); var root = json.RootElement;
+            items = root.ValueKind == JsonValueKind.Object && root.TryGetProperty("batch", out var batch) && batch.ValueKind == JsonValueKind.True ? root.GetProperty("data").EnumerateArray().ToArray() : [root];
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException) { return Results.BadRequest(); }
+        using var owned = json;
+        if (items.Any(x => x.ValueKind != JsonValueKind.Object)) return Results.BadRequest();
         foreach (var item in items)
         {
-            if (!item.TryGetProperty("phone_number_id", out var pid)) continue;
-            var channel = await db.Channels.IgnoreQueryFilters().SingleOrDefaultAsync(x => x.PhoneNumberId == pid.GetString()); if (channel is null) continue;
+            var pid = Get(item, "phone_number_id"); if (pid is null) continue;
+            var channel = await db.Channels.IgnoreQueryFilters().SingleOrDefaultAsync(x => x.PhoneNumberId == pid); if (channel is null) continue;
             scope.Id = channel.TenantId;
             channel.LastWebhookAt=DateTimeOffset.UtcNow;
             // A transaction-wide channel lock serializes duplicate deliveries and contact creation.
@@ -127,7 +135,8 @@ public static class WhatsAppEndpoints
     }
     static async Task Ingest(JsonElement root, JsonElement msg, JsonElement conversation, Channel ch, string evt, CrmDb db, TenantScope scope, IConfiguration config)
     {
-        var external = msg.GetProperty("id").GetString()!; var k = msg.TryGetProperty("kapso", out var ka) ? ka : default;
+        // A message without an id cannot be deduplicated: it is skipped, the rest of the batch goes on.
+        var external = Get(msg, "id"); if (external is null) return; var k = msg.TryGetProperty("kapso", out var ka) ? ka : default;
         var status = Get(k, "status") ?? "received"; var existing = await db.Messages.SingleOrDefaultAsync(x => x.ExternalId == external);
         if (existing != null) { if (status == "read" || status == "failed" || (status == "delivered" && existing.Status != "read") || (status == "sent" && existing.Status is "sending" or "uncertain")) existing.Status = status; return; }
         var phone = Get(conversation, "phone_number") ?? Get(msg, "from") ?? Get(msg, "to"); if (string.IsNullOrEmpty(phone)) return;

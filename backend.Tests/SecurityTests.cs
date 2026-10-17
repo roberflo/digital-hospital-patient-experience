@@ -138,3 +138,52 @@ public sealed class PlatformGateTests : IAsyncLifetime
         Assert.Equal(0, both.Status); Assert.Equal("platform", both.User.Role); Assert.Equal(b, both.Scope.Id);
     }
 }
+
+// MR-16, regression of CrmDb.SaveChangesAsync against the real database: a row of another tenant, or of
+// no tenant, is refused before any write; an Audit row is append-only.
+public sealed class SaveChangesGuardTests : IAsyncLifetime
+{
+    readonly Guid a = Guid.NewGuid(), b = Guid.NewGuid(); DbContextOptions<CrmDb> options = null!;
+    readonly IDataProtectionProvider protection = new EphemeralDataProtectionProvider();
+    CrmDb Db(Guid tenant) => new(options, new TenantScope { Id = tenant }, protection);
+    public async Task InitializeAsync()
+    {
+        options = new DbContextOptionsBuilder<CrmDb>().UseNpgsql(Environment.GetEnvironmentVariable("TEST_DATABASE") ?? throw new Exception("Use scripts/test-backend.sh")).Options;
+        await using var db = Db(a); await db.Database.MigrateAsync();
+        db.Tenants.Add(new Tenant { Id = a, Name = "Recepción A" }); db.Tenants.Add(new Tenant { Id = b, Name = "Recepción B" }); await db.SaveChangesAsync();
+    }
+    public Task DisposeAsync() => Task.CompletedTask;
+    async Task<int> Audits() { await using var db = Db(a); return await db.Audits.IgnoreQueryFilters().CountAsync(x => x.TenantId == a || x.TenantId == b); }
+
+    [Fact] public async Task RowOfAnotherTenantOrOfNoTenantIsRefusedBeforeWriting()
+    {
+        await using (var db = Db(a))
+        {
+            db.Audits.Add(new Audit { TenantId = a, Action = "same.tenant" }); db.Audits.Add(new Audit { TenantId = b, Action = "other.tenant" });
+            Assert.Equal("Tenant boundary violation", (await Assert.ThrowsAsync<InvalidOperationException>(() => db.SaveChangesAsync())).Message);
+        }
+        await using (var db = Db(Guid.Empty))
+        {
+            db.Audits.Add(new Audit { TenantId = Guid.Empty, Action = "no.tenant" });
+            Assert.Equal("Tenant boundary violation", (await Assert.ThrowsAsync<InvalidOperationException>(() => db.SaveChangesAsync())).Message);
+        }
+        Assert.Equal(0, await Audits());
+    }
+    [Fact] public async Task AuditIsAppendOnly()
+    {
+        var id = Guid.NewGuid();
+        await using (var db = Db(a)) { db.Audits.Add(new Audit { Id = id, TenantId = a, Actor = "synthetic", Action = "message.sent", Resource = "r" }); await db.SaveChangesAsync(); }
+        await using (var db = Db(a))
+        {
+            (await db.Audits.SingleAsync(x => x.Id == id)).Action = "message.rewritten";
+            Assert.Equal("Audit is append-only", (await Assert.ThrowsAsync<InvalidOperationException>(() => db.SaveChangesAsync())).Message);
+        }
+        await using (var db = Db(a))
+        {
+            db.Audits.Remove(await db.Audits.SingleAsync(x => x.Id == id));
+            Assert.Equal("Audit is append-only", (await Assert.ThrowsAsync<InvalidOperationException>(() => db.SaveChangesAsync())).Message);
+        }
+        await using (var db = Db(a)) Assert.Equal("message.sent", (await db.Audits.SingleAsync(x => x.Id == id)).Action);
+        Assert.Equal(1, await Audits());
+    }
+}
