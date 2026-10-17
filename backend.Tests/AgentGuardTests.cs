@@ -4,6 +4,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Recepcion;
 using Recepcion.Integrations;
 using Xunit;
@@ -505,6 +506,49 @@ public sealed class AgentGuardTests : IAsyncLifetime
         Assert.Single(h.Interactive);
         Assert.Contains(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => a.Kind == "agent_provider");
     }
+
+    [Theory]
+    [InlineData("2222-0000")]
+    [InlineData(null)]
+    public async Task TheMenuWithoutAModelCarriesTheEmergencyNumber(string? phone)
+    {
+        // MR-1: with the provider down the patient still learns where to call in an emergency; without a number, the text is today's.
+        (await h.Db.Tenants.SingleAsync(t => t.Id == h.Scope.Id)).EmergencyPhone = phone; await h.Db.SaveChangesAsync();
+        var model = new AgentHarness.Fake(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) { Content = new StringContent("{}", Encoding.UTF8, "application/json") }));
+
+        await h.Runtime(model, h.Sender()).Run(h.Job, CancellationToken.None);
+
+        Assert.Equal(phone is null
+            ? "Disculpa, en este momento no puedo leer mensajes escritos.\nSí puedo ayudarte con estas opciones:"
+            : "Disculpa, en este momento no puedo leer mensajes escritos.\nSi es una emergencia, llama al *2222-0000*.\n\nSí puedo ayudarte con estas opciones:", Assert.Single(h.Sent));
+    }
+
+    [Fact]
+    public async Task AHungModelSpendsOnlyItsBudgetAndThePatientGetsTheMenu()
+    {
+        // MR-2: the model's budget ends the wait inside the turn, so the catch that offers the menu runs, not the worker's deadline.
+        var sender = h.Sender(); var clock = System.Diagnostics.Stopwatch.StartNew();
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        await AgentWorker.RunTenant(h.Worker(h.Runtime(AgentHarness.Hang(_ => null), sender, extra: new() { ["AI_TURN_BUDGET_SECONDS"] = "1" }), sender), h.Scope.Id, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, stop.Token);
+
+        Assert.InRange(clock.Elapsed, TimeSpan.Zero, TimeSpan.FromSeconds(15));
+        Assert.Equal("done", await h.Db.Jobs.AsNoTracking().Where(j => j.Id == h.Job.Id).Select(j => j.Status).SingleAsync());
+        Assert.StartsWith("Disculpa, en este momento no puedo leer mensajes escritos", Assert.Single(h.Sent));
+        Assert.Contains(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => a.Kind == "agent_provider");
+    }
+
+    [Fact]
+    public async Task AHungPrimaryLeavesTimeForTheFallback()
+    {
+        // MR-2: each attempt has its own timeout, so a primary that never answers still leaves the budget to the fallback.
+        var model = AgentHarness.Hang(request => request.RequestUri!.Host == "api.openai.com" ? AgentHarness.Reply("Respuesta de respaldo") : null);
+        var clock = System.Diagnostics.Stopwatch.StartNew(); using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        await h.Runtime(model, h.Sender(), extra: new() { ["OPENAI_API_KEY"] = "synthetic-openai", ["OPENAI_MODEL"] = "synthetic-fallback", ["AI_ATTEMPT_TIMEOUT_SECONDS"] = "1" }).Run(h.Job, stop.Token);
+
+        Assert.InRange(clock.Elapsed, TimeSpan.Zero, TimeSpan.FromSeconds(20));
+        Assert.Contains("Respuesta de respaldo", h.Sent);
+    }
 }
 
 /// <summary>Synthetic tenant, contact and conversation over the isolated PostgreSQL database,
@@ -599,4 +643,13 @@ public sealed class AgentHarness(Guid? tenant = null, string phone = "5037000000
     static HttpResponseMessage Raw(string json) => new(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
     public async ValueTask DisposeAsync() { if (Db != null) await Db.DisposeAsync(); }
     public sealed class Fake(Func<HttpRequestMessage, Task<HttpResponseMessage>> handler) : HttpMessageHandler { public int Calls; protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) { Calls++; return handler(request); } }
+    /// <summary>A provider that never answers what <paramref name="answer"/> leaves null: the request waits until it is cancelled.</summary>
+    public static HttpMessageHandler Hang(Func<HttpRequestMessage, HttpResponseMessage?> answer) => new Hung(answer);
+    sealed class Hung(Func<HttpRequestMessage, HttpResponseMessage?> answer) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) { if (answer(request) is { } reply) return reply; await Task.Delay(Timeout.Infinite, ct); throw new InvalidOperationException(); }
+    }
+    /// <summary>What AgentWorker.RunTenant resolves for this tenant, around the given runtime.</summary>
+    public IServiceProvider Worker(AgentRuntime runtime, Fake sender) => new ServiceCollection().AddSingleton(Scope).AddSingleton(Db).AddSingleton(runtime)
+        .AddSingleton(new ConversationService(Db, Scope, new KapsoClient(new HttpClient(sender), new ConfigurationBuilder().AddInMemoryCollection(settings).Build()))).BuildServiceProvider();
 }

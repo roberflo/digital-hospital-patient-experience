@@ -127,6 +127,33 @@ public sealed class AgentAppointmentsTests : IAsyncLifetime
         Assert.Contains("quedó reprogramada", done); Assert.Contains("a las 09:00", done);
     }
 
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{\"appointmentId\":")]
+    public async Task AnUnreadableBookingAnswerGoesToAPersonAndIsNotRepeated(string answer)
+    {
+        // MR-5: the proposal is consumed and Hospital may have booked: the team reconciles, the turn does not fail, and the POST is not sent again.
+        await h.Link(); var posts = 0; var hospital = h.Hospital(availability: Agenda());
+        var hospitalReads = new HttpMessageInvoker(hospital);
+        var unreadable = new AgentHarness.Fake(request =>
+        {
+            if (request.Method != HttpMethod.Post || request.RequestUri!.AbsolutePath != "/v1/agenda") return hospitalReads.SendAsync(request, CancellationToken.None);
+            posts++; return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(answer, System.Text.Encoding.UTF8, "application/json") });
+        });
+        await h.Runtime(h.Model(AgentHarness.ToolCall("propose_action", new { action = "create", doctorId = doctor, startsAt = In(5, 15), durationMinutes = 30 }), AgentHarness.Reply("Listo.")), h.Sender(), unreadable).Run(h.Job, CancellationToken.None);
+        await h.Db.Jobs.ExecuteUpdateAsync(s => s.SetProperty(j => j.Status, "done"));
+        await h.Say("patient", "CONFIRMAR " + (await h.Db.Activities.SingleAsync(a => a.Kind.StartsWith("proposal:"))).Kind[9..]);
+        var sender = h.Sender();
+
+        await AgentWorker.RunTenant(h.Worker(h.Runtime(NoModel, sender, unreadable), sender), h.Scope.Id, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, CancellationToken.None);
+
+        Assert.Equal(1, posts);
+        Assert.Equal("done", await h.Db.Jobs.AsNoTracking().Where(j => j.Id == h.Job.Id).Select(j => j.Status).SingleAsync());
+        Assert.Equal("human", (await h.Fresh()).Status);
+        Assert.Equal("La operación de agenda necesita conciliación. Comprueba el hospital antes de repetirla.", (await h.Db.Activities.AsNoTracking().SingleAsync(a => a.ConversationId == h.Conversation.Id && a.Kind == "handoff")).Body);
+        Assert.DoesNotContain(h.Sent, text => text.Contains("quedó agendada"));
+    }
+
     [Fact]
     public async Task WithoutARecordThereIsNothingToLookUp()
     {

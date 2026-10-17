@@ -201,19 +201,22 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         var turns = session.Select(msg => new ChatMessage(msg.Sender == "patient" ? ChatRole.User : ChatRole.Assistant, msg.Body.Length > 4000 ? msg.Body[..4000] : msg.Body)).ToList();
         if (config["KAPSO_TYPING_INDICATOR"] == "true" && latest.ExternalId is { Length: > 0 } inbound) try { await kapso.Typing(channel.PhoneNumberId, inbound, ct); } catch (HttpRequestException) { } // a courtesy: its failure never costs the patient the answer
         AgentResponse response;
+        // The model's own budget, shorter than the worker's deadline: when it runs out the patient is answered below, with time to spare.
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct); budget.CancelAfter(TimeSpan.FromSeconds(Seconds("AI_TURN_BUDGET_SECONDS", 90)));
         try
         {
-            response = await agent.RunAsync(turns, cancellationToken: ct);
+            response = await agent.RunAsync(turns, cancellationToken: budget.Token);
             // A reasoning model can come back with no text. Nothing ran, so asking once more has no side effects.
-            if (calls == 0 && fault is null && Final(response).Length == 0) response = await agent.RunAsync(turns, cancellationToken: ct);
+            if (calls == 0 && fault is null && Final(response).Length == 0) response = await agent.RunAsync(turns, cancellationToken: budget.Token);
         }
-        catch (Exception ex) when (ex is ClientResultException or HttpRequestException || (ex is OperationCanceledException && !ct.IsCancellationRequested))
+        // Attempts that never answered come back from the retry policy as one AggregateException.
+        catch (Exception ex) when (ex is ClientResultException or HttpRequestException or AggregateException { InnerException: HttpRequestException or OperationCanceledException } || (ex is OperationCanceledException && !ct.IsCancellationRequested))
         {
             // No provider answered (outage, rate limit, no credit). The patient is told a person will answer instead of being left in silence;
             // anything a tool already did stays recorded in the history for that person.
             db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "agent_provider", Actor = "Sistema", ActorRole = "system", Body = $"Ningún proveedor de IA respondió ({(ex as ClientResultException)?.Status.ToString() ?? ex.GetType().Name}). Conversación pasada a una persona." });
             // Booking, registering and the prescription all work from the menu, which needs no model: offer that instead of a person.
-            if (calls == 0) { await db.SaveChangesAsync(CancellationToken.None); await conversations.Send(conv.Id, "Disculpa, en este momento no puedo leer mensajes escritos.\nSí puedo ayudarte con estas opciones:", "agent", "agent:" + job.Id, ct: CancellationToken.None, choices: MenuNow); return; }
+            if (calls == 0) { await db.SaveChangesAsync(CancellationToken.None); await conversations.Send(conv.Id, "Disculpa, en este momento no puedo leer mensajes escritos.\n" + (emergencyLine ? $"Si es una emergencia, llama al *{tenant.EmergencyPhone}*.\n\n" : "") + "Sí puedo ayudarte con estas opciones:", "agent", "agent:" + job.Id, ct: CancellationToken.None, choices: MenuNow); return; }
             await Handoff(conv, "La atención automática no está disponible en este momento.", CancellationToken.None); return;
         }
         fault?.Throw();
@@ -411,12 +414,13 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
     static string Final(AgentResponse response) => response.Messages.LastOrDefault() is { } last && last.Role == ChatRole.Assistant ? last.Text : "";
     async Task<bool> Active(Guid id, long revision, CancellationToken ct) => kapso.CanSend(false) && await db.Tenants.AnyAsync(x => x.Id == scope.Id && x.AgentEnabled, ct) && await db.Conversations.AsNoTracking().AnyAsync(x => x.Id == id && x.Status == "agent" && x.State == "open" && x.Revision == revision && db.Channels.Any(c => c.Id == x.ChannelId && c.Enabled), ct);
 
+    int Seconds(string key, int fallback) => int.TryParse(config[key], out var value) && value > 0 ? value : fallback;
     /// <summary>NVIDIA NIM first; OpenAI repeats a failed model call when its key and model are configured.</summary>
     IChatClient Chat()
     {
         IChatClient Provider(string key, string endpoint, string model)
         {
-            var client = new OpenAI.Chat.ChatClient(model, new ApiKeyCredential(key), new OpenAIClientOptions { Endpoint = new Uri(endpoint.TrimEnd('/')), Transport = new HttpClientPipelineTransport(http), RetryPolicy = new ClientRetryPolicy(3) }).AsIChatClient();
+            var client = new OpenAI.Chat.ChatClient(model, new ApiKeyCredential(key), new OpenAIClientOptions { Endpoint = new Uri(endpoint.TrimEnd('/')), Transport = new HttpClientPipelineTransport(http), RetryPolicy = new ClientRetryPolicy(1), NetworkTimeout = TimeSpan.FromSeconds(Seconds("AI_ATTEMPT_TIMEOUT_SECONDS", 30)) }).AsIChatClient();
             if (!new Uri(endpoint).Host.EndsWith("openai.com", StringComparison.OrdinalIgnoreCase)) return client;
             // OpenAI's own models, probed 2026-10-04: a temperature other than the default is rejected (gpt-5-nano), and tools in Chat
             // Completions need the reasoning effort stated on some (gpt-6-luna: none). So no temperature, and the effort is configuration.
@@ -945,7 +949,8 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
                     var created = await hospital.CreateAppointmentAsync(scope.Id, contact.Phone, new HospitalAppointmentCreate(contact.PatientId!.Value, doctor, start, duration, p.TryGetProperty("kind", out var visit) && visit.GetString() is { } said ? said : await db.Activities.AnyAsync(x => x.ContactId == contact.Id && x.Kind == "patient_registered", ct) ? "first-visit" : "follow-up"), ct);
                     // Hospital's overlap probe counts cancelled appointments too, so a slot the agenda shows free can answer «overlaps».
                     // The agenda's own count decides: only another active appointment in the slot is a real overlap for a person to sort out.
-                    reference = created.AppointmentId;
+                    // An answer with no appointment in it is not a booking: the team checks Hospital (MR-5).
+                    reference = created.AppointmentId != Guid.Empty ? created.AppointmentId : throw new JsonException("Hospital no devolvió la cita creada.");
                     if (created.Overlaps && await hospital.SlotOccupancyAsync(scope.Id, doctor, start, timeZone, ct) is not (0 or 1)) { await Handoff(conv, "Cita registrada con un solapamiento. Recepción debe verificar la disponibilidad.", ct); return; }
                 }
             }
@@ -957,9 +962,9 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
                 : $"Listo{(registered && FirstName(contact.Name) is { } who ? ", " + who : "")}, {(registered ? "ya te registré y " : "")}tu cita quedó {(action == "reschedule" ? "reprogramada" : "agendada")}:\n*{When(p.GetProperty("startsAt").GetDateTimeOffset())}*\n\n¡Te esperamos!";
             await conversations.Send(conv.Id, booked, "agent", "confirm:" + job.Id, ct: ct, choices: action == "cancel" ? null : new([new("ACTIVAR RECORDATORIOS", "Recordarme la cita")]));
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or HospitalIntegrationException or ArgumentException)
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or HospitalIntegrationException or ArgumentException or JsonException or KeyNotFoundException or InvalidOperationException or FormatException)
         {
-            // Nothing is retried. With a registration and an appointment in one proposal the team reads how far it got and which hour was wanted.
+            // Nothing is retried. An answer from Hospital that cannot be read is as uncertain as a timeout: the proposal is already used (MR-5). With a registration and an appointment in one proposal the team reads how far it got and which hour was wanted.
             // ArgumentException is the Hospital client refusing the appointment itself (duration, doctor, an hour that just passed): the card is used, so a person takes over.
             // A record Hospital created and the agent could not verify is named, so reception reconciles that one instead of registering again.
             var orphan = unverified is { } id ? $" Hospital creó un expediente que no se pudo verificar ni vincular: revísalo antes de registrar de nuevo. Referencia Hospital: {id}." : "";
@@ -1020,19 +1025,38 @@ public sealed class AgentWorker(IServiceScopeFactory scopes, ILogger<AgentWorker
 {
     public const int AbandonedAfterMinutes = 5;
     public const string AbandonedNote = "Atención automática interrumpida. Revisa el historial antes de responder.";
+    public const int TenantsAtOnce = 4;
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        while (!stoppingToken.IsCancellationRequested)
+        // One turn in flight per tenant and up to four tenants at once, each in its own scope: a hung turn holds back only its own tenant.
+        var running = new Dictionary<Guid, Task>();
+        void Prune() { foreach (var done in running.Where(x => x.Value.IsCompleted).Select(x => x.Key).ToList()) running.Remove(done); }
+        try
         {
-            try
+            while (!stoppingToken.IsCancellationRequested)
             {
-                using var root = scopes.CreateScope(); var db = root.ServiceProvider.GetRequiredService<CrmDb>();
-                var tenants = await db.Tenants.Select(x => x.Id).ToListAsync(stoppingToken);
-                foreach (var tid in tenants) { using var s = scopes.CreateScope(); await RunTenant(s.ServiceProvider, tid, log, stoppingToken); }
+                try
+                {
+                    using var root = scopes.CreateScope(); var db = root.ServiceProvider.GetRequiredService<CrmDb>();
+                    var tenants = await db.Tenants.Select(x => x.Id).ToListAsync(stoppingToken);
+                    foreach (var tid in tenants)
+                    {
+                        Prune(); if (running.ContainsKey(tid)) continue;
+                        while (running.Count >= TenantsAtOnce) { await Task.WhenAny(running.Values).WaitAsync(stoppingToken); Prune(); }
+                        running[tid] = Task.Run(() => Turn(tid, stoppingToken), CancellationToken.None);
+                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning("Worker unavailable {ErrorType}", ex.GetType().Name); }
+                await Task.Delay(1500, stoppingToken);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning("Worker unavailable {ErrorType}", ex.GetType().Name); }
-            await Task.Delay(1500, stoppingToken);
         }
+        finally { await Task.WhenAll(running.Values); }
+    }
+    async Task Turn(Guid tid, CancellationToken stoppingToken)
+    {
+        try { await using var s = scopes.CreateAsyncScope(); await RunTenant(s.ServiceProvider, tid, log, stoppingToken); }
+        catch (Exception ex) when (!stoppingToken.IsCancellationRequested) { log.LogWarning("Worker unavailable {ErrorType}", ex.GetType().Name); }
+        catch (OperationCanceledException) { }
     }
     public static async Task RunTenant(IServiceProvider sp, Guid tid, ILogger log, CancellationToken stoppingToken)
     {
@@ -1051,6 +1075,19 @@ public sealed class AgentWorker(IServiceScopeFactory scopes, ILogger<AgentWorker
             log.LogWarning("Agent job failed {JobId} {ErrorType}", job.Id, ex.GetType().Name);
         }
         await d.SaveChangesAsync(CancellationToken.None);
+        if (job.Status == "failed") await TellFailed(d, service, job, log);
+    }
+    /// <summary>A turn that failed is not left in silence: the patient is told once, by the job's key, while WhatsApp still lets us write.</summary>
+    static async Task TellFailed(CrmDb d, ConversationService service, Job job, ILogger log)
+    {
+        try
+        {
+            var c = await d.Conversations.AsNoTracking().SingleAsync(x => x.Id == job.ConversationId, CancellationToken.None);
+            if (!Rules.WithinWindow(c.LastInboundAt, DateTimeOffset.UtcNow) || !await d.Channels.AnyAsync(x => x.Id == c.ChannelId && x.Enabled, CancellationToken.None)) return;
+            var phone = await d.Tenants.Where(x => x.Id == job.TenantId).Select(x => x.EmergencyPhone).SingleAsync(CancellationToken.None);
+            await service.Send(c.Id, "No pude completar tu solicitud. Ya avisé al equipo del hospital para que te responda por aquí." + (phone is { Length: > 0 } ? $"\n\nSi es una emergencia, llama al *{phone}*." : ""), "agent", "failed:" + job.Id, ct: CancellationToken.None);
+        }
+        catch (Exception ex) { log.LogWarning("Agent failure notice not sent {JobId} {ErrorType}", job.Id, ex.GetType().Name); } // the failed job and its trail are already saved
     }
     public static async Task RetireAbandoned(CrmDb d, TenantScope scope, ConversationService service, CancellationToken ct)
     {

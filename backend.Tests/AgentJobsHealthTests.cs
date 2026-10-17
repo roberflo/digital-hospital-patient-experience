@@ -77,12 +77,50 @@ public sealed partial class AgentIntegrationTests {
         Assert.Empty(await fresh.Activities.Where(x=>x.Kind=="error").ToListAsync());
     }
     [Fact]public async Task ClaimedTurnThatFailsLeavesAnErrorTrail(){
-        var ai=new Fake(_=>throw new InvalidOperationException("Synthetic model failure"));var k=Never();
-        await AgentWorker.RunTenant(Tenant(ai,k),scope.Id,NullLogger.Instance,CancellationToken.None);
+        (await db.Tenants.SingleAsync(x=>x.Id==scope.Id)).EmergencyPhone="2222-0000";await db.SaveChangesAsync();
+        var ai=new Fake(_=>throw new InvalidOperationException("Synthetic model failure"));var k=Sending();var tenant=Tenant(ai,k);
+        await AgentWorker.RunTenant(tenant,scope.Id,NullLogger.Instance,CancellationToken.None);
         await using var fresh=Other();
         var j=await fresh.Jobs.SingleAsync(x=>x.Id==job.Id);Assert.Equal("failed",j.Status);Assert.Equal("Revisión humana requerida: InvalidOperationException",j.Error);
         var a=Assert.Single(await fresh.Activities.Where(x=>x.ConversationId==conversation.Id&&x.Kind=="error").ToListAsync());Assert.Equal("system",a.ActorRole);Assert.DoesNotContain("Synthetic",a.Body);
-        var c=await fresh.Conversations.SingleAsync(x=>x.Id==conversation.Id);Assert.Equal("human",c.Status);Assert.Equal(1L,c.Revision);Assert.Equal(0,k.Calls);
+        var c=await fresh.Conversations.SingleAsync(x=>x.Id==conversation.Id);Assert.Equal("human",c.Status);Assert.Equal(2L,c.Revision); // the failure, then the message to the patient
+        // MR-3: the patient is told once that the team was told, with the hospital's emergency number.
+        var told=Assert.Single(await fresh.Messages.Where(x=>x.Sender=="agent").ToListAsync());Assert.Equal("failed:"+job.Id,told.RequestKey);Assert.Equal("sent",told.Status);
+        Assert.Equal("No pude completar tu solicitud. Ya avisé al equipo del hospital para que te responda por aquí.\n\nSi es una emergencia, llama al *2222-0000*.",told.Body);Assert.Equal(1,k.Calls);
+        await AgentWorker.RunTenant(tenant,scope.Id,NullLogger.Instance,CancellationToken.None);
+        Assert.Equal(1,k.Calls);Assert.Single(await fresh.Messages.Where(x=>x.Sender=="agent").ToListAsync());
+    }
+    [Fact]public async Task AFailedTurnOutsideTheWhatsAppWindowSendsNothing(){
+        conversation.LastInboundAt=DateTimeOffset.UtcNow.AddDays(-2);await db.SaveChangesAsync();
+        var k=Sending();await AgentWorker.RunTenant(Tenant(new Fake(_=>throw new InvalidOperationException("Synthetic model failure")),k),scope.Id,NullLogger.Instance,CancellationToken.None);
+        await using var fresh=Other();Assert.Equal("failed",(await fresh.Jobs.SingleAsync(x=>x.Id==job.Id)).Status);Assert.Equal(0,k.Calls);
+    }
+    [Fact]public async Task AHungTenantDoesNotHoldBackAnother(){
+        // MR-4: tenant A's model never answers; tenant B's turn, queued once A is stuck, is still served by the same running worker.
+        job.Status="done";var hung="Colgado-"+scope.Id;var inA=new Message{TenantId=scope.Id,ConversationId=conversation.Id,ExternalId="hung-"+scope.Id,Body=hung,Sender="patient"};db.Add(inA);
+        var jobA=new Job{TenantId=scope.Id,ConversationId=conversation.Id,Key="agent:"+inA.ExternalId};db.Add(jobA);await db.SaveChangesAsync();
+        var other=new TenantScope{Id=Guid.NewGuid()};await using var b=new CrmDb(options,other,protection);
+        b.Tenants.Add(new Tenant{Id=other.Id,Name="Synthetic tenant B",AgentEnabled=true});var contactB=new Contact{TenantId=other.Id,Name="Synthetic",Phone="50370000001",PhoneHash=Guid.NewGuid().ToString()};
+        var channelB=new Channel{TenantId=other.Id,Name="Synthetic B",PhoneNumberId=Guid.NewGuid().ToString("N"),Enabled=true};b.Add(contactB);b.Add(channelB);
+        var conversationB=new Conversation{TenantId=other.Id,ChannelId=channelB.Id,ContactId=contactB.Id,Status="agent",LastInboundAt=DateTimeOffset.UtcNow};b.Add(conversationB);
+        var inB=new Message{TenantId=other.Id,ConversationId=conversationB.Id,ExternalId="in-"+other.Id,Body="Consulta sintética B",Sender="patient"};b.Add(inB);await b.SaveChangesAsync();
+        var stuck=new TaskCompletionSource();
+        var model=AgentHarness.Hang(req=>{if(!req.Content!.ReadAsStringAsync().Result.Contains(hung))return Reply("Respuesta sintética");stuck.TrySetResult();return null;});
+        var wire=Sending();var nowhere=new Fake(_=>Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.NotFound)));
+        var services=new ServiceCollection().AddScoped<TenantScope>().AddScoped(sp=>new CrmDb(options,sp.GetRequiredService<TenantScope>(),protection))
+            .AddScoped(sp=>new ConversationService(sp.GetRequiredService<CrmDb>(),sp.GetRequiredService<TenantScope>(),new KapsoClient(new HttpClient(wire),config)))
+            .AddScoped(sp=>new AgentRuntime(new HttpClient(model),config,sp.GetRequiredService<CrmDb>(),sp.GetRequiredService<TenantScope>(),new HospitalClient(new HttpClient(nowhere),config),sp.GetRequiredService<ConversationService>(),new KapsoClient(new HttpClient(wire),config)));
+        await using var provider=services.BuildServiceProvider();
+        using var worker=new AgentWorker(provider.GetRequiredService<IServiceScopeFactory>(),NullLogger<AgentWorker>.Instance);
+        await worker.StartAsync(CancellationToken.None);string statusA="",statusB="";
+        try{
+            await stuck.Task.WaitAsync(TimeSpan.FromSeconds(60));
+            var jobB=new Job{TenantId=other.Id,ConversationId=conversationB.Id,Key="agent:"+inB.ExternalId};b.Add(jobB);await b.SaveChangesAsync();
+            for(var i=0;i<300&&statusB!="done";i++){await Task.Delay(100);await using var fresh=new CrmDb(options,other,protection);statusB=await fresh.Jobs.Where(x=>x.Id==jobB.Id).Select(x=>x.Status).SingleAsync();}
+            await using(var fresh=Other())statusA=await fresh.Jobs.Where(x=>x.Id==jobA.Id).Select(x=>x.Status).SingleAsync();
+        }
+        finally{await worker.StopAsync(CancellationToken.None);}
+        Assert.Equal("done",statusB);Assert.Equal("running",statusA);
     }
     [Fact]public async Task AbandonedTurnIsRetiredByTheRunningWorker(){
         await Abandon(job);

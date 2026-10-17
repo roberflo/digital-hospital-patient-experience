@@ -147,7 +147,7 @@ public sealed class FallbackChatClient(IChatClient primary, IChatClient fallback
     {
         var sent = messages.ToList();
         try { return await base.GetResponseAsync(sent, options, cancellationToken); }
-        catch (Exception ex) when (!cancellationToken.IsCancellationRequested && ex is HttpRequestException or TaskCanceledException or ClientResultException { Status: 0 or 408 or 429 or >= 500 })
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested && ex is HttpRequestException or TaskCanceledException or AggregateException { InnerException: HttpRequestException or TaskCanceledException } or ClientResultException { Status: 0 or 408 or 429 or >= 500 })
         {
             onFallback(); return await fallback.GetResponseAsync(sent, options, cancellationToken);
         }
