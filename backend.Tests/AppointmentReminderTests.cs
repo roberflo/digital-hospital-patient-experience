@@ -18,7 +18,7 @@ public sealed class AppointmentReminderTests : IAsyncLifetime
     readonly Guid hanging = Guid.NewGuid(), answering = Guid.NewGuid(), appointment = Guid.NewGuid();
     readonly DateTimeOffset start = ReminderRules.Instant(DateTimeOffset.UtcNow.AddMinutes(50));
     DbContextOptions<CrmDb> options = null!; readonly IDataProtectionProvider protection = new EphemeralDataProtectionProvider();
-    Contact second = null!; int sends; HttpStatusCode delivery = HttpStatusCode.OK;
+    Contact first = null!, second = null!; int sends; readonly System.Collections.Concurrent.ConcurrentQueue<Guid> reads = new(); HttpStatusCode delivery = HttpStatusCode.OK;
 
     public async Task InitializeAsync()
     {
@@ -28,10 +28,11 @@ public sealed class AppointmentReminderTests : IAsyncLifetime
         await using var db = new CrmDb(options, new TenantScope { Id = tenant }, protection); await db.Database.MigrateAsync();
         var channel = new Channel { TenantId = tenant, Name = "Synthetic", PhoneNumberId = Guid.NewGuid().ToString("N"), Enabled = true }; db.Add(channel);
         db.Tenants.Add(new Tenant { Id = tenant, Name = "Hospital Sintético", RemindersEnabled = true, ReminderChannelId = channel.Id });
-        // The hanging contact goes first, so the one that answers is only reached if the sync goes on.
-        db.Add(new Contact { TenantId = tenant, Name = "Synthetic one", Phone = "50370000001", PhoneHash = Guid.NewGuid().ToString(), PatientId = hanging, ReminderConsentAt = DateTimeOffset.UtcNow });
+        // Inserted against their Id order, so a walk in storage order is told apart from one by Id; the tests below hold for either order.
+        var ids = new[] { Guid.NewGuid(), Guid.NewGuid() }.OrderByDescending(id => id.ToString()).ToArray();
+        db.Add(first = new Contact { Id = ids[0], TenantId = tenant, Name = "Synthetic one", Phone = "50370000001", PhoneHash = Guid.NewGuid().ToString(), PatientId = hanging, ReminderConsentAt = DateTimeOffset.UtcNow });
         await db.SaveChangesAsync();
-        second = new Contact { TenantId = tenant, Name = "Synthetic two", Phone = "50370000002", PhoneHash = Guid.NewGuid().ToString(), PatientId = answering, ReminderConsentAt = DateTimeOffset.UtcNow };
+        second = new Contact { Id = ids[1], TenantId = tenant, Name = "Synthetic two", Phone = "50370000002", PhoneHash = Guid.NewGuid().ToString(), PatientId = answering, ReminderConsentAt = DateTimeOffset.UtcNow };
         db.Add(second); await db.SaveChangesAsync();
     }
     public Task DisposeAsync() => Task.CompletedTask;
@@ -43,6 +44,8 @@ public sealed class AppointmentReminderTests : IAsyncLifetime
         await using var db = Db();
         Assert.Equal(2, await db.AppointmentReminders.CountAsync(r => r.ContactId == second.Id));
         Assert.Contains("1 contacto", (await db.Tenants.SingleAsync(t => t.Id == tenant)).ReminderSyncError);
+        // The walk has a stable order (by contact Id), not whatever order the database returns.
+        Assert.Equal(new[] { first, second }.OrderBy(c => c.Id.ToString()).Select(c => c.PatientId!.Value), reads.Take(2));
     }
 
     [Fact]
@@ -60,7 +63,7 @@ public sealed class AppointmentReminderTests : IAsyncLifetime
     }
 
     // Kapso refusing the send (4xx) is a definite failure; a 5xx may have been delivered and stays uncertain. Neither is retried.
-    [Theory][InlineData(HttpStatusCode.BadRequest, "failed")][InlineData(HttpStatusCode.ServiceUnavailable, "uncertain")]
+    [Theory][InlineData(HttpStatusCode.BadRequest, "failed")][InlineData(HttpStatusCode.ServiceUnavailable, "uncertain")][InlineData(HttpStatusCode.Accepted, "uncertain")] // 2xx without a message id: it may have been sent
     public async Task AReminderKapsoRefusesIsFailedAndOneItMayHaveSentIsUncertain(HttpStatusCode status, string expected)
     {
         delivery = status;
@@ -76,6 +79,7 @@ public sealed class AppointmentReminderTests : IAsyncLifetime
         var row = await check.AppointmentReminders.SingleAsync(r => r.Window == "hour_before" && r.AppointmentId == appointment);
         Assert.Equal(expected, row.Status);
         Assert.Equal(expected, (await check.Messages.SingleAsync(m => m.Id == row.MessageId)).Status);
+        Assert.Equal(expected == "failed" ? "WhatsApp rechazó el envío; no se entregó." : "Entrega sin confirmar. Revisa WhatsApp antes de volver a enviar.", row.Reason);
         Assert.Equal(1, sends);
     }
 
@@ -92,6 +96,7 @@ public sealed class AppointmentReminderTests : IAsyncLifetime
         var hospital = new Handler(async (request, ct) =>
         {
             var path = request.RequestUri!.AbsolutePath;
+            if (path.StartsWith("/v1/patients/")) reads.Enqueue(Guid.Parse(path["/v1/patients/".Length..]));
             if (path.Contains(hanging.ToString())) { await Task.Delay(Timeout.Infinite, ct); }
             if (path == $"/v1/patients/{answering}") return Json(new { patientId = answering, phone = second.Phone });
             if (path == $"/v1/agenda/patients/{answering}") return Json(new { rows = new[] { new { appointmentId = appointment, scheduledStart = start, status = "booked" } } });

@@ -254,6 +254,7 @@ public sealed class PlatformOwnerTests : IAsyncLifetime
         {
             Assert.Equal("hospital-api.example.com", req.RequestUri.Host); Assert.Equal(HttpMethod.Get, req.Method);
             Assert.Equal("Bearer", req.Headers.Authorization?.Scheme); Assert.Equal(OwnerToken, req.Headers.Authorization?.Parameter);
+            Assert.True(req.Headers.TryGetValues("X-Correlation-Id", out var correlation) && Guid.TryParse(correlation.Single(), out _)); // MR-10
             return Json(new { hospitals });
         }
         if (path.EndsWith("/protocol/openid-connect/token"))

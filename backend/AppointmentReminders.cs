@@ -41,7 +41,9 @@ public sealed class AppointmentReminderService(CrmDb db,TenantScope scope,Hospit
         var channel = await db.Channels.SingleOrDefaultAsync(c=>c.Id==channelId,ct);
         if(channel is null || !channel.Enabled) throw new ArgumentException("El canal de recordatorios está desactivado.");
         var day=HospitalClient.ClinicalDay(now,tenant.TimeZone);var to=day.AddDays(2);
-        var contacts=await db.Contacts.Where(c=>c.PatientId!=null&&c.ReminderConsentAt!=null).ToListAsync(ct);
+        // ponytail: walked by Id, so a sync that spends its budget always leaves the same contacts last. Walk by last-synced-at
+        // ascending if a slow Hospital makes that happen in practice (needs a per-contact sync column, i.e. a migration).
+        var contacts=await db.Contacts.Where(c=>c.PatientId!=null&&c.ReminderConsentAt!=null).OrderBy(c=>c.Id).ToListAsync(ct);
         var pending=await db.AppointmentReminders.Where(r=>r.Status=="pending"||r.Status=="sending").ToListAsync(ct);
         foreach(var row in pending.Where(r=>r.Status=="sending"&&r.AttemptedAt<now.AddMinutes(-10)))
         {
@@ -123,7 +125,9 @@ public sealed class AppointmentReminderService(CrmDb db,TenantScope scope,Hospit
         catch(Exception ex) when(ex is HttpRequestException or TaskCanceledException or ArgumentException)
         {
             // Kapso refusing the send (4xx) means nothing was delivered; a 5xx or timeout may have been. Neither is retried.
-            message.Status=ex is ArgumentException or HttpRequestException{StatusCode:>=HttpStatusCode.BadRequest and <HttpStatusCode.InternalServerError}?"failed":"uncertain";row.Status=message.Status;row.Reason="Entrega sin confirmar. Revisa WhatsApp antes de volver a enviar.";
+            var refused=ex is HttpRequestException{StatusCode:>=HttpStatusCode.BadRequest and <HttpStatusCode.InternalServerError};
+            message.Status=refused||ex is ArgumentException?"failed":"uncertain";row.Status=message.Status;
+            row.Reason=refused?"WhatsApp rechazó el envío; no se entregó.":"Entrega sin confirmar. Revisa WhatsApp antes de volver a enviar.";
         }
         conv.LastMessage=body;conv.UpdatedAt=now;conv.Revision++;
         await db.SaveChangesAsync(CancellationToken.None);

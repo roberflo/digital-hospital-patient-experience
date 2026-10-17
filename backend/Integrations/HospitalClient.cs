@@ -67,7 +67,9 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
         string phone, DateOnly day, CancellationToken ct = default)
     {
         var page = await GetPatientAppointmentRangeAsync(tenantId, patientId, phone, day, day, ct);
-        // Filter inside the trusted adapter before anything reaches a patient or model: a row naming another patient never passes.
+        // Isolation comes from Hospital's patient-scoped endpoint: its rows publish no patientId (openapi.v1.json PatientAgendaRowResponse),
+        // so the filter below never removes a row from the real contract. It stays only while
+        // AgentIntegrationTests.PatientAgendaNeverReturnsOtherPatientsOrIdentifiers feeds day-agenda rows (with patientId) to this path.
         return JsonSerializer.SerializeToElement(page.GetProperty("rows").EnumerateArray()
             .Where(x => !x.TryGetProperty("patientId", out var owner) || owner.GetGuid() == patientId)
             .Select(x => new
@@ -232,13 +234,18 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         request.Headers.Add("X-Correlation-Id", (correlation ?? Guid.NewGuid()).ToString("D"));
         if (body is not null) request.Content = JsonContent.Create(body, options: Json);
-        var response = await http.SendAsync(request, ct);
+        HttpResponseMessage response;
+        // HttpClient.Timeout, not the caller giving up. Hospital may still have applied a write: never retried here.
+        try { response = await http.SendAsync(request, ct); }
+        catch (TaskCanceledException ex) when (ex.InnerException is TimeoutException && !ct.IsCancellationRequested)
+        { throw new HospitalIntegrationException("hospital.timeout", HttpStatusCode.GatewayTimeout); }
         if (!response.IsSuccessStatusCode)
         {
             var status = response.StatusCode;
             var code = $"hospital.http_{(int)status}";
             // A token Hospital no longer accepts (revoked, rotated keys) is dropped; the next request asks for a new one, this one is not retried.
-            if (status == HttpStatusCode.Unauthorized) foreach (var key in Tokens.Keys.Where(k => k.Tenant == tenantId)) Tokens.TryRemove(key, out _);
+            // Only the entry holding the rejected token: one another request has just stored stays.
+            if (status == HttpStatusCode.Unauthorized) foreach (var entry in Tokens.Where(e => e.Key.Tenant == tenantId && e.Value.Token == token)) Tokens.TryRemove(entry);
             if(path.StartsWith("v1/commercial/",StringComparison.Ordinal))
             {
                 try
@@ -346,6 +353,7 @@ public sealed class HospitalIntegrationException(string code, HttpStatusCode sta
         "hospital.http_403" or "hospital.clinical_delivery_not_authorized" => "Tu cuenta no tiene permiso para esta operación en Hospital. Consulta al administrador.",
         "hospital.http_404" or "hospital.prescription_unavailable" or "hospital.appointment_unavailable" => "No encontramos la cita o el documento en Hospital. Actualiza la información y vuelve a intentar.",
         "hospital.http_409" => "La información cambió en Hospital. Actualiza la agenda antes de continuar.",
+        "hospital.timeout" => "Hospital no respondió a tiempo. Comprueba la agenda antes de reintentar.",
         _ => "No pudimos completar la operación en Hospital. Revisa la conexión desde Mi hospital y vuelve a intentar."
     };
     public HttpStatusCode StatusCode { get; } = statusCode;

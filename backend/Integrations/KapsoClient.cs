@@ -60,7 +60,12 @@ public sealed class KapsoClient(HttpClient http, IConfiguration config)
         using var req=Request(HttpMethod.Post,$"{number}/messages");
         req.Content=JsonContent.Create(new{messaging_product="whatsapp",to=Rules.Phone(phone),type="template",template=new{name,language=new{code=language},components=new[]{new{type="body",parameters=new[]{new{type="text",parameter_name="hospital",text=hospital},new{type="text",parameter_name="fecha",text=date},new{type="text",parameter_name="hora",text=time}}}}}});
         using var res=await http.SendAsync(req,ct);res.EnsureSuccessStatusCode();
-        return (await res.Content.ReadFromJsonAsync<JsonElement>(ct)).GetProperty("messages")[0].GetProperty("id").GetString()!;
+        // A 2xx without a message id may still have been delivered: uncertain, like a 5xx, never retried.
+        JsonElement sent;
+        try { sent=await res.Content.ReadFromJsonAsync<JsonElement>(ct); } catch(JsonException) { throw new HttpRequestException("Kapso answered without a message id"); }
+        return sent.ValueKind==JsonValueKind.Object&&sent.TryGetProperty("messages",out var messages)&&messages.ValueKind==JsonValueKind.Array&&messages.GetArrayLength()>0
+            &&messages[0].ValueKind==JsonValueKind.Object&&messages[0].TryGetProperty("id",out var id)&&id.ValueKind==JsonValueKind.String&&id.GetString() is {Length:>0} value
+            ?value:throw new HttpRequestException("Kapso answered without a message id");
     }
     /// <summary>Marks the patient's message as read and shows «escribiendo…» until the next message is sent, or about 25 seconds.</summary>
     public async Task Typing(string number, string messageId, CancellationToken ct = default)

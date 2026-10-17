@@ -19,8 +19,7 @@ public sealed class AgentGuardTests : IAsyncLifetime
     public Task InitializeAsync() => h.Start();
     public Task DisposeAsync() => h.DisposeAsync().AsTask();
 
-    // MR-12: the patient's appointments come only from the patient-scoped agenda, never from the whole day's,
-    // even for a connection that predates UsePatientAgenda.
+    // MR-12: the patient's appointments come only from the patient-scoped agenda, never from the whole day's.
     [Fact]
     public async Task PatientAppointmentsNeverReadTheWholeDayAgenda()
     {
@@ -33,7 +32,7 @@ public sealed class AgentGuardTests : IAsyncLifetime
             return hospital.SendAsync(request, CancellationToken.None);
         });
         var model = h.Model(AgentHarness.ToolCall("my_appointments", new { date = DateTimeOffset.UtcNow.AddDays(3).ToString("yyyy-MM-dd") }), AgentHarness.Reply("No tienes citas ese día."));
-        await h.Runtime(model, h.Sender(), guarded, new() { [$"Hospital:Tenants:{h.Scope.Id}:UsePatientAgenda"] = null }).Run(h.Job, CancellationToken.None);
+        await h.Runtime(model, h.Sender(), guarded).Run(h.Job, CancellationToken.None);
         Assert.Contains(paths, path => path.StartsWith("/v1/agenda/patients/"));
         Assert.DoesNotContain("/v1/agenda/day", paths);
     }
@@ -565,7 +564,7 @@ public sealed class AgentHarness(Guid? tenant = null, string phone = "5037000000
     {
         var token = "e30." + Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(new { tenant_id = Scope.Id, exp = DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds() })).TrimEnd('=').Replace('+', '-').Replace('/', '_') + ".synthetic";
         var prefix = $"Hospital:Tenants:{Scope.Id}:";
-        var config = new ConfigurationBuilder().AddInMemoryCollection(settings).AddInMemoryCollection(new Dictionary<string, string?> { [prefix + "BaseUrl"] = "https://hospital.example.invalid/", [prefix + "AccessToken"] = token, [prefix + "AllowClinicalDelivery"] = "true", [prefix + "UseReceptionBridge"] = "true", [prefix + "UsePatientAgenda"] = "true" }).AddInMemoryCollection(extra ?? []).Build();
+        var config = new ConfigurationBuilder().AddInMemoryCollection(settings).AddInMemoryCollection(new Dictionary<string, string?> { [prefix + "BaseUrl"] = "https://hospital.example.invalid/", [prefix + "AccessToken"] = token, [prefix + "AllowClinicalDelivery"] = "true", [prefix + "UseReceptionBridge"] = "true" }).AddInMemoryCollection(extra ?? []).Build();
         var kapso = new KapsoClient(new HttpClient(sender), config);
         return new(new HttpClient(model), config, Db, Scope, new HospitalClient(new HttpClient(hospital ?? new Fake(_ => throw new InvalidOperationException("Unexpected hospital request"))), config), new ConversationService(Db, Scope, kapso), kapso);
     }

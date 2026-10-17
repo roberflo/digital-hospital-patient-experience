@@ -84,8 +84,7 @@ public sealed partial class AgentIntegrationTests:IAsyncLifetime {
             Assert.Contains("from=2026-10-03&to=2026-10-03",req.RequestUri.Query);
             return Task.FromResult(Json(new{rows=new[]{new{appointmentId=appointment,scheduledStart=DateTimeOffset.Parse("2026-10-03T19:00:00-06:00"),durationMinutes=30,clinicianName="Doctor sintético",status="booked"}}}));
         });
-        var cfg=new ConfigurationBuilder().AddConfiguration(GoogleConfig()).AddInMemoryCollection(new Dictionary<string,string?>{[$"Hospital:Tenants:{scope.Id}:UsePatientAgenda"]="true"}).Build();
-        var client=new HospitalClient(new HttpClient(handler),cfg);
+        var client=new HospitalClient(new HttpClient(handler),GoogleConfig());
         var result=await client.GetPatientAppointmentsAsync(scope.Id,contact.Id,contact.Phone,day);
         Assert.Equal(appointment,result[0].GetProperty("appointmentId").GetGuid());
         Assert.False(result[0].TryGetProperty("patientId",out _));

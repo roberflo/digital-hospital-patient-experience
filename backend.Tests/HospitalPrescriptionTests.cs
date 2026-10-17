@@ -101,6 +101,26 @@ public sealed class HospitalPrescriptionTests
         await new HospitalClient(new HttpClient(handler),neighbourConfig).GetVerifiedPatientAsync(neighbour,patient,"50370000001");
         Assert.Equal(before+1,tokens);
     }
+    // MR-6: a token Hospital rejects (401) is dropped, so the next request asks for a new one; the rejected request is not retried.
+    [Fact]
+    public async Task ATokenHospitalRejectsIsNotReused()
+    {
+        var tenant=Guid.NewGuid();var patient=Guid.NewGuid();var tokens=0;var hospital=0;
+        var token="e30."+Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(new{tenant_id=tenant,exp=DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds()})).TrimEnd('=').Replace('+','-').Replace('/','_')+".synthetic";
+        var config=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{
+            [$"Hospital:Tenants:{tenant}:BaseUrl"]="https://hospital.example.invalid/",
+            [$"Hospital:Tenants:{tenant}:TokenEndpoint"]="https://identity.example.invalid/realms/hospital/protocol/openid-connect/token",
+            [$"Hospital:Tenants:{tenant}:ClientId"]=$"recepcion-service-{tenant:D}",[$"Hospital:Tenants:{tenant}:ClientSecret"]="synthetic-secret"}).Build();
+        var client=new HospitalClient(new HttpClient(new Handler(request=>{
+            if(request.RequestUri!.Host=="identity.example.invalid"){tokens++;return new(HttpStatusCode.OK){Content=JsonContent.Create(new{access_token=token})};}
+            return ++hospital==1?new(HttpStatusCode.Unauthorized):new(HttpStatusCode.OK){Content=JsonContent.Create(new{patientId=patient,phone="50370000001"})};
+        })),config);
+        Assert.Equal("hospital.http_401",(await Assert.ThrowsAsync<HospitalIntegrationException>(()=>client.GetVerifiedPatientAsync(tenant,patient,"50370000001"))).Code);
+        Assert.Equal(1,hospital);
+        await client.GetVerifiedPatientAsync(tenant,patient,"50370000001");
+        await client.GetVerifiedPatientAsync(tenant,patient,"50370000001");
+        Assert.Equal(2,tokens);Assert.Equal(3,hospital);
+    }
     sealed class Handler(Func<HttpRequestMessage,HttpResponseMessage> send):HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken ct)=>Task.FromResult(send(request));
