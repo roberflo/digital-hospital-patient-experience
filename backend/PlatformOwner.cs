@@ -103,6 +103,7 @@ public static class PlatformOwner
             using var http = factory.CreateClient("hospital-setup");
             using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(api, "v1/platform/hospitals"));
             request.Headers.Authorization = new("Bearer", bearer.Parameter);
+            request.Headers.Add("X-Correlation-Id", Guid.NewGuid().ToString("D"));
             using var response = await http.SendAsync(request, ct);
             if (!response.IsSuccessStatusCode) throw Unreadable("hospital.platform_unreadable");
             using var doc = System.Text.Json.JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));

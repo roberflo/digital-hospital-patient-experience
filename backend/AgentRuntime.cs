@@ -39,7 +39,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         var waitingSince = conv.Status == "human" ? await HandedOverUnanswered(ct) : null;
         if (conv.Status != "agent" && waitingSince is null) return;
         revision = conv.Revision; contact = await db.Contacts.SingleAsync(x => x.Id == conv.ContactId, ct);
-        hospital.CallAs($"Recepcion-AgenteWhatsApp/1.0 (conversacion {conv.Id}; trabajo {job.Id})");
+        hospital.CallAs($"Recepcion-AgenteWhatsApp/1.0 (conversacion {conv.Id}; trabajo {job.Id})", job.Id);
         var history = await db.Messages.Where(x => x.ConversationId == conv.Id).OrderByDescending(x => x.CreatedAt).Take(AgentMemory.Window).ToListAsync(ct); history.Reverse();
         session = AgentMemory.Session(history);
         var latest = history.LastOrDefault(x => x.Sender == "patient"); if (latest is null || job.Key != "agent:" + latest.ExternalId) return;

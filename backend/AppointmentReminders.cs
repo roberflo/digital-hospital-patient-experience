@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -31,7 +32,8 @@ public static class ReminderRules
 
 public sealed class AppointmentReminderService(CrmDb db,TenantScope scope,HospitalClient hospital,KapsoClient kapso,ConversationService conversations,IConfiguration config)
 {
-    public async Task Sync(DateTimeOffset now, CancellationToken ct = default)
+    /// <param name="contactBudget">How long one contact's Hospital read may take before it counts as a failure (20 s).</param>
+    public async Task Sync(DateTimeOffset now, CancellationToken ct = default, TimeSpan? contactBudget = null)
     {
         using var lease = await conversations.Lock(ReminderRules.LockId(scope.Id),ct);
         var tenant = await db.Tenants.SingleAsync(t=>t.Id==scope.Id,ct);
@@ -39,7 +41,9 @@ public sealed class AppointmentReminderService(CrmDb db,TenantScope scope,Hospit
         var channel = await db.Channels.SingleOrDefaultAsync(c=>c.Id==channelId,ct);
         if(channel is null || !channel.Enabled) throw new ArgumentException("El canal de recordatorios está desactivado.");
         var day=HospitalClient.ClinicalDay(now,tenant.TimeZone);var to=day.AddDays(2);
-        var contacts=await db.Contacts.Where(c=>c.PatientId!=null&&c.ReminderConsentAt!=null).ToListAsync(ct);
+        // ponytail: walked by Id, so a sync that spends its budget always leaves the same contacts last. Walk by last-synced-at
+        // ascending if a slow Hospital makes that happen in practice (needs a per-contact sync column, i.e. a migration).
+        var contacts=await db.Contacts.Where(c=>c.PatientId!=null&&c.ReminderConsentAt!=null).OrderBy(c=>c.Id).ToListAsync(ct);
         var pending=await db.AppointmentReminders.Where(r=>r.Status=="pending"||r.Status=="sending").ToListAsync(ct);
         foreach(var row in pending.Where(r=>r.Status=="sending"&&r.AttemptedAt<now.AddMinutes(-10)))
         {
@@ -53,7 +57,8 @@ public sealed class AppointmentReminderService(CrmDb db,TenantScope scope,Hospit
         {
             try
             {
-                var agenda=await hospital.GetPatientAppointmentRangeAsync(scope.Id,contact.PatientId!.Value,contact.Phone,day,to,ct);
+                using var read=CancellationTokenSource.CreateLinkedTokenSource(ct);read.CancelAfter(contactBudget??TimeSpan.FromSeconds(20));
+                var agenda=await hospital.GetPatientAppointmentRangeAsync(scope.Id,contact.PatientId!.Value,contact.Phone,day,to,read.Token);
                 var rows=agenda.GetProperty("rows").EnumerateArray().Where(a=>ReminderRules.Booked(a.GetProperty("status").GetString())).ToArray();
                 var valid=rows.Select(a=>(Id:a.GetProperty("appointmentId").GetGuid(),Start:ReminderRules.Instant(a.GetProperty("scheduledStart").GetDateTimeOffset()))).ToHashSet();
                 foreach(var old in pending.Where(r=>r.ContactId==contact.Id&&r.Status=="pending"))
@@ -73,7 +78,8 @@ public sealed class AppointmentReminderService(CrmDb db,TenantScope scope,Hospit
                     }
                 await db.SaveChangesAsync(ct);
             }
-            catch(Exception ex) when(ex is HospitalIntegrationException or HttpRequestException or ArgumentException or JsonException)
+            // A contact that times out is one failure; only the sync's own deadline stops the others.
+            catch(Exception ex) when(ex is HospitalIntegrationException or HttpRequestException or ArgumentException or JsonException || ex is OperationCanceledException && !ct.IsCancellationRequested)
             { failures++; } // No stale Hospital snapshot is used to authorize sending.
         }
         tenant.ReminderLastSyncAt=now;tenant.ReminderSyncError=failures>0?$"No se pudo verificar la agenda de {failures} contacto(s). Se volverá a consultar Hospital.":null;
@@ -118,7 +124,10 @@ public sealed class AppointmentReminderService(CrmDb db,TenantScope scope,Hospit
         }
         catch(Exception ex) when(ex is HttpRequestException or TaskCanceledException or ArgumentException)
         {
-            message.Status=ex is ArgumentException?"failed":"uncertain";row.Status=message.Status;row.Reason="Entrega sin confirmar. Revisa WhatsApp antes de volver a enviar.";
+            // Kapso refusing the send (4xx) means nothing was delivered; a 5xx or timeout may have been. Neither is retried.
+            var refused=ex is HttpRequestException{StatusCode:>=HttpStatusCode.BadRequest and <HttpStatusCode.InternalServerError};
+            message.Status=refused||ex is ArgumentException?"failed":"uncertain";row.Status=message.Status;
+            row.Reason=refused?"WhatsApp rechazó el envío; no se entregó.":"Entrega sin confirmar. Revisa WhatsApp antes de volver a enviar.";
         }
         conv.LastMessage=body;conv.UpdatedAt=now;conv.Revision++;
         await db.SaveChangesAsync(CancellationToken.None);
@@ -135,27 +144,41 @@ public sealed class AppointmentReminderWorker(IServiceScopeFactory scopes,ILogge
             {
                 using var root=scopes.CreateScope();var db=root.ServiceProvider.GetRequiredService<CrmDb>();
                 var ids=await db.Tenants.Where(t=>t.RemindersEnabled).Select(t=>t.Id).ToListAsync(ct);
-                foreach(var tenant in ids)
-                {
-                    using var s=scopes.CreateScope();s.ServiceProvider.GetRequiredService<TenantScope>().Id=tenant;
-                    var scoped=s.ServiceProvider.GetRequiredService<CrmDb>();var service=s.ServiceProvider.GetRequiredService<AppointmentReminderService>();
-                    try
-                    {
-                        using var deadline=CancellationTokenSource.CreateLinkedTokenSource(ct);deadline.CancelAfter(TimeSpan.FromMinutes(2));
-                        await service.Sync(DateTimeOffset.UtcNow,deadline.Token);
-                        var due=await scoped.AppointmentReminders.Where(r=>r.Status=="pending"&&r.DueAt<=DateTimeOffset.UtcNow).OrderBy(r=>r.DueAt).Select(r=>r.Id).Take(100).ToListAsync(deadline.Token);
-                        foreach(var id in due)
-                        {
-                            try { await service.Dispatch(id,DateTimeOffset.UtcNow,deadline.Token); }
-                            catch(Exception ex) when(!deadline.IsCancellationRequested && ex is HospitalIntegrationException or HttpRequestException or ArgumentException or JsonException)
-                            { await scoped.AppointmentReminders.Where(r=>r.Id==id&&r.Status=="pending").ExecuteUpdateAsync(s=>s.SetProperty(r=>r.Reason,"No se pudo verificar Hospital o la plantilla. Se reintentará dentro de la ventana."),deadline.Token); }
-                        }
-                    }
-                    catch(Exception ex) when(!ct.IsCancellationRequested){log.LogWarning("Reminder sweep unavailable {TenantId} {ErrorType}",tenant,ex.GetType().Name);}
-                }
+                foreach(var tenant in ids) await RunTenant(scopes,tenant,log,ct);
             }
             catch(Exception ex) when(!ct.IsCancellationRequested){log.LogWarning("Reminder worker unavailable {ErrorType}",ex.GetType().Name);}
             await Task.Delay(TimeSpan.FromMinutes(1),ct);
         }
+    }
+
+    /// <summary>One tenant's pass: sync the agenda, then send what is due. Sending has its own deadline, so a sync that spends
+    /// its whole budget on a slow Hospital never holds back a reminder already due (it was verified when it was created and
+    /// Dispatch re-reads Hospital before sending).</summary>
+    public static async Task RunTenant(IServiceScopeFactory scopes,Guid tenant,ILogger log,CancellationToken ct,TimeSpan? syncBudget=null,TimeSpan? contactBudget=null)
+    {
+        using var s=scopes.CreateScope();s.ServiceProvider.GetRequiredService<TenantScope>().Id=tenant;
+        var scoped=s.ServiceProvider.GetRequiredService<CrmDb>();var service=s.ServiceProvider.GetRequiredService<AppointmentReminderService>();
+        try
+        {
+            using var deadline=CancellationTokenSource.CreateLinkedTokenSource(ct);deadline.CancelAfter(syncBudget??TimeSpan.FromMinutes(2));
+            await service.Sync(DateTimeOffset.UtcNow,deadline.Token,contactBudget);
+        }
+        catch(Exception ex) when(!ct.IsCancellationRequested)
+        {
+            log.LogWarning("Reminder sync unavailable {TenantId} {ErrorType}",tenant,ex.GetType().Name);
+            scoped.ChangeTracker.Clear(); // nothing half-synced is saved by the sends below
+        }
+        try
+        {
+            using var deadline=CancellationTokenSource.CreateLinkedTokenSource(ct);deadline.CancelAfter(TimeSpan.FromMinutes(2));
+            var due=await scoped.AppointmentReminders.Where(r=>r.Status=="pending"&&r.DueAt<=DateTimeOffset.UtcNow).OrderBy(r=>r.DueAt).Select(r=>r.Id).Take(100).ToListAsync(deadline.Token);
+            foreach(var id in due)
+            {
+                try { await service.Dispatch(id,DateTimeOffset.UtcNow,deadline.Token); }
+                catch(Exception ex) when(!deadline.IsCancellationRequested && ex is HospitalIntegrationException or HttpRequestException or ArgumentException or JsonException)
+                { await scoped.AppointmentReminders.Where(r=>r.Id==id&&r.Status=="pending").ExecuteUpdateAsync(s=>s.SetProperty(r=>r.Reason,"No se pudo verificar Hospital o la plantilla. Se reintentará dentro de la ventana."),deadline.Token); }
+            }
+        }
+        catch(Exception ex) when(!ct.IsCancellationRequested){log.LogWarning("Reminder sweep unavailable {TenantId} {ErrorType}",tenant,ex.GetType().Name);}
     }
 }

@@ -81,7 +81,7 @@ Ese mismo comando se ejecutó posteriormente en `mcr.microsoft.com/dotnet/sdk:10
 
 ## Ampliación de agenda (2026-10-02)
 
-La bandeja consulta próximas citas por paciente vinculado mediante el nuevo endpoint acotado. Configura `UsePatientAgenda=true` al desplegar la nueva API para que también lo use el agente. La UI de Agenda comunica errores de disponibilidad, conserva la clave del intento y registra acciones exitosas en el historial CRM. La validación usa la zona horaria del hospital, incluido un horario UTC que corresponde al día clínico anterior.
+La bandeja consulta próximas citas por paciente vinculado mediante el nuevo endpoint acotado. El agente usa solo ese endpoint: nunca lee la agenda del día completa (MR-12). La UI de Agenda comunica errores de disponibilidad, conserva la clave del intento y registra acciones exitosas en el historial CRM. La validación usa la zona horaria del hospital, incluido un horario UTC que corresponde al día clínico anterior.
 
 Conexión local autorizada y activa desde el 2026-10-03. Crear, consultar, reprogramar y cancelar pasó desde API e interfaz de Recepción, contrastando cada estado con Hospital. Ver `integrations/hospital/PATIENT-AGENDA.md` para evidencia y procedimiento.
 

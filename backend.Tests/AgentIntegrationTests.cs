@@ -84,14 +84,23 @@ public sealed partial class AgentIntegrationTests:IAsyncLifetime {
             Assert.Contains("from=2026-10-03&to=2026-10-03",req.RequestUri.Query);
             return Task.FromResult(Json(new{rows=new[]{new{appointmentId=appointment,scheduledStart=DateTimeOffset.Parse("2026-10-03T19:00:00-06:00"),durationMinutes=30,clinicianName="Doctor sintético",status="booked"}}}));
         });
-        var cfg=new ConfigurationBuilder().AddConfiguration(GoogleConfig()).AddInMemoryCollection(new Dictionary<string,string?>{[$"Hospital:Tenants:{scope.Id}:UsePatientAgenda"]="true"}).Build();
-        var client=new HospitalClient(new HttpClient(handler),cfg);
+        var client=new HospitalClient(new HttpClient(handler),GoogleConfig());
         var result=await client.GetPatientAppointmentsAsync(scope.Id,contact.Id,contact.Phone,day);
         Assert.Equal(appointment,result[0].GetProperty("appointmentId").GetGuid());
         Assert.False(result[0].TryGetProperty("patientId",out _));
         var before=handler.Calls;
         await Assert.ThrowsAsync<ArgumentException>(()=>client.GetPatientAppointmentRangeAsync(scope.Id,contact.Id,contact.Phone,day,day.AddDays(31)));
         Assert.Equal(before,handler.Calls);
+    }
+    // MR-10: a turn's requests to Hospital carry the job's id, so Hospital's logs can be joined to the turn.
+    [Fact]public async Task AgentTurnSendsItsJobIdAsHospitalCorrelationId(){
+        await using var h=new AgentHarness();await h.Start();await h.Link();
+        var hospital=new HttpMessageInvoker(h.Hospital());var seen=new List<string?>();
+        var tracing=new AgentHarness.Fake(request=>{seen.Add(request.Headers.TryGetValues("X-Correlation-Id",out var values)?values.Single():null);return hospital.SendAsync(request,CancellationToken.None);});
+        var model=h.Model(AgentHarness.ToolCall("my_appointments",new{date=DateTimeOffset.UtcNow.AddDays(3).ToString("yyyy-MM-dd")}),AgentHarness.Reply("No tienes citas ese día."));
+        await h.Runtime(model,h.Sender(),tracing).Run(h.Job,CancellationToken.None);
+        Assert.NotEmpty(seen);
+        Assert.All(seen,id=>{Assert.True(Guid.TryParse(id,out var parsed));Assert.Equal(h.Job.Id,parsed);});
     }
     [Fact]public async Task SlotValidationUsesLocalDayAndRequestedDoctor(){
         var doctor=Guid.NewGuid();var start=DateTimeOffset.UtcNow.AddDays(2).Date.AddHours(1);var instant=new DateTimeOffset(start,TimeSpan.Zero);

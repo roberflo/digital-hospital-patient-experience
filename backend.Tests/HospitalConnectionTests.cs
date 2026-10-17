@@ -20,7 +20,7 @@ public class HospitalConnectionTests
         Assert.Equal($"recepcion-service-{tenant:D}",values["ClientId"]);
         Assert.Equal("https://identity.example.com/realms/hospital/protocol/openid-connect/token",values["TokenEndpoint"]);
         Assert.Equal("http://hospital-api:8080",values["BaseUrl"]);
-        Assert.Equal("true",values["UsePatientAgenda"]);
+        Assert.False(values.ContainsKey("UsePatientAgenda")); // MR-12: the option is gone, the patient agenda is the only one
         // Delivering prescriptions is never implied by being connected.
         Assert.False(values.ContainsKey("AllowClinicalDelivery"));Assert.False(values.ContainsKey("UseReceptionBridge"));
         Assert.NotEqual(values["ClientId"],HospitalConnectionStore.Defaults(Guid.NewGuid(),config)["ClientId"]);
@@ -38,7 +38,7 @@ public class HospitalConnectionTests
     {
         var values=HospitalConnectionRules.Validate(new("http://hospital-api:8080","https://hospital.example.com","recepcion","synthetic-secret"),Config());
         Assert.Equal("https://identity.example.com/realms/hospital/protocol/openid-connect/token",values["TokenEndpoint"]);
-        Assert.Equal("true",values["UsePatientAgenda"]);
+        Assert.False(values.ContainsKey("UsePatientAgenda")); // MR-12: the option is gone, the patient agenda is the only one
         Assert.False(values.ContainsKey("AllowClinicalDelivery"));
         Assert.Null(values["AccessToken"]);
     }

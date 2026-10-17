@@ -30,7 +30,7 @@ public sealed class HospitalConnectionStore(CrmDb db, IConfiguration config)
         {
             ["BaseUrl"]=config["HOSPITAL_API_URL"], ["PublicUrl"]=config["HOSPITAL_PUBLIC_URL"],
             ["TokenEndpoint"]=issuer.TrimEnd('/')+"/protocol/openid-connect/token",
-            ["ClientId"]=$"recepcion-service-{tenant:D}", ["ClientSecret"]=config["HOSPITAL_SERVICE_CLIENT_SECRET"], ["UsePatientAgenda"]="true"
+            ["ClientId"]=$"recepcion-service-{tenant:D}", ["ClientSecret"]=config["HOSPITAL_SERVICE_CLIENT_SECRET"]
         };
     }
 }
@@ -56,6 +56,6 @@ public static class HospitalConnectionRules
         var issuer=config["KEYCLOAK_INTERNAL_ISSUER"]??config["Auth:Authority"];
         if(!Uri.TryCreate(issuer,UriKind.Absolute,out var identity)||identity.Scheme is not("http" or "https")||!string.IsNullOrEmpty(identity.UserInfo)||!string.IsNullOrEmpty(identity.Query)||!string.IsNullOrEmpty(identity.Fragment))
             throw new ArgumentException("Configura primero la identidad compartida de Hospital en Easypanel.");
-        return new(){["BaseUrl"]=api.AbsoluteUri,["PublicUrl"]=web.GetLeftPart(UriPartial.Authority),["ClientId"]=Rules.Required(input.ClientId,150),["ClientSecret"]=Rules.Required(input.ClientSecret,4096),["TokenEndpoint"]=issuer!.TrimEnd('/')+"/protocol/openid-connect/token",["AccessToken"]=null,["UsePatientAgenda"]="true"};
+        return new(){["BaseUrl"]=api.AbsoluteUri,["PublicUrl"]=web.GetLeftPart(UriPartial.Authority),["ClientId"]=Rules.Required(input.ClientId,150),["ClientSecret"]=Rules.Required(input.ClientSecret,4096),["TokenEndpoint"]=issuer!.TrimEnd('/')+"/protocol/openid-connect/token",["AccessToken"]=null};
     }
 }
