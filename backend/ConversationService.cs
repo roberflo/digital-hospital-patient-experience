@@ -30,9 +30,18 @@ public sealed class ConversationService(CrmDb db, TenantScope scope, KapsoClient
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or ArgumentException)
         {
-            // The remote operation may have succeeded: retain the attempted message and never retry automatically.
-            message.Status = ex is ArgumentException ? "failed" : "uncertain"; conv.Status = "human";
-            db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = id, ContactId = conv.ContactId, Kind = "delivery", Actor = "Sistema", ActorRole = "system", Body = message.Status == "uncertain" ? "Entrega sin confirmar. Comprueba WhatsApp antes de volver a enviar." : "El envío no está habilitado o fue rechazado localmente." });
+            // A 4xx is Kapso refusing the message: nothing went out. Otherwise the remote operation may have
+            // succeeded. Either way retain the attempted message and never retry automatically.
+            var refused = ex is HttpRequestException { StatusCode: { } code } && (int)code is >= 400 and < 500;
+            message.Status = ex is ArgumentException || refused ? "failed" : "uncertain"; conv.Status = "human";
+            db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = id, ContactId = conv.ContactId, Kind = "delivery", Actor = "Sistema", ActorRole = "system", Body = message.Status == "uncertain" ? "Entrega sin confirmar. Comprueba WhatsApp antes de volver a enviar."
+                : !refused ? "El envío no está habilitado o fue rechazado localmente."
+                : (ex as HttpRequestException)!.StatusCode switch
+                {
+                    System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden => "Recepción no está autorizada en WhatsApp; revisa la conexión del canal.",
+                    System.Net.HttpStatusCode.TooManyRequests => "WhatsApp limitó los envíos; el mensaje no salió. Inténtalo en unos minutos.",
+                    _ => "WhatsApp rechazó el envío; el mensaje no salió."
+                } });
         }
         conv.LastMessage=body.Length>160?body[..160]:body;conv.Revision++; conv.UpdatedAt = DateTimeOffset.UtcNow; await db.SaveChangesAsync(CancellationToken.None); return message;
     }

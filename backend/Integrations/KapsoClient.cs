@@ -29,8 +29,16 @@ public sealed class KapsoClient(HttpClient http, IConfiguration config)
         var payload = new Dictionary<string, object> { { "messaging_product", "whatsapp" }, { "to", Rules.Phone(phone) }, { "type", type } };
         payload[type] = interactive ?? (type == "text" ? new { body } : new Dictionary<string, object> { { "id", mediaId ?? throw new ArgumentException("Archivo requerido") } });
         using var req = Request(HttpMethod.Post, $"{number}/messages"); req.Content = JsonContent.Create(payload);
-        using var res = await http.SendAsync(req, ct); res.EnsureSuccessStatusCode(); var json = await res.Content.ReadFromJsonAsync<JsonElement>(ct);
-        return json.GetProperty("messages")[0].GetProperty("id").GetString()!;
+        using var res = await http.SendAsync(req, ct); res.EnsureSuccessStatusCode();
+        try
+        {
+            var json = await res.Content.ReadFromJsonAsync<JsonElement>(ct);
+            if (json.ValueKind == JsonValueKind.Object && json.TryGetProperty("messages", out var sent) && sent.ValueKind == JsonValueKind.Array && sent.GetArrayLength() > 0
+                && sent[0].ValueKind == JsonValueKind.Object && sent[0].TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String && id.GetString() is { Length: > 0 } value) return value;
+        }
+        catch (JsonException) { }
+        // Accepted but unreadable: it may have gone out, so the caller treats it like a 5xx (uncertain, never retried).
+        throw new HttpRequestException("Kapso aceptó el envío sin devolver el id del mensaje");
     }
     public async Task<JsonElement> ReminderTemplate(string number, string name, string language, CancellationToken ct = default)
     {
