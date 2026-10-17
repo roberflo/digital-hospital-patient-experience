@@ -280,7 +280,10 @@ async function counter(page: Page, url: string, method: string, json: unknown = 
 test('MR-17 pickers and cards find the patient on the server, past the 100 on page 1', async ({
   page,
 }) => {
-  const recent = Array.from({ length: 100 }, (_, i) => synthetic('Reciente ' + i));
+  // Every contact is linked: the first page of linked ones still does not hold the one we look for.
+  const recent = Array.from({ length: 100 }, (_, i) =>
+    synthetic('Reciente ' + i, { patientId: crypto.randomUUID() }),
+  );
   const old = synthetic('Paciente Antigua', { patientId: PATIENT });
   const reads: URL[] = [];
   await page.route('**/api/crm/contacts?*', (route) => {
@@ -288,7 +291,9 @@ test('MR-17 pickers and cards find the patient on the server, past the 100 on pa
     reads.push(url);
     const q = url.searchParams.get('q')?.toLowerCase();
     const ids = url.searchParams.getAll('id');
-    const all = [...recent, old];
+    const all = [...recent, old].filter(
+      (c) => url.searchParams.get('linked') !== 'true' || c.patientId,
+    );
     return route.fulfill({
       json: url.searchParams.has('patientId')
         ? all.filter((c) => c.patientId === url.searchParams.get('patientId'))
@@ -355,7 +360,11 @@ test('MR-17 pickers and cards find the patient on the server, past the 100 on pa
   await expect(picker.locator('option', { hasText: 'Paciente Antigua' })).toHaveCount(0);
   await page.getByLabel('Buscar paciente vinculado').fill('antigua');
   await picker.selectOption({ label: 'Paciente Antigua' });
-  expect(reads.some((u) => u.searchParams.get('q') === 'antigua')).toBe(true);
+  expect(
+    reads.some(
+      (u) => u.searchParams.get('q') === 'antigua' && u.searchParams.get('linked') === 'true',
+    ),
+  ).toBe(true);
   await page.getByLabel('Doctor', { exact: true }).selectOption('d-1');
   await page.getByLabel('Horario disponible').selectOption(start);
   await page.getByRole('button', { name: 'Confirmar cita', exact: true }).click();
@@ -551,22 +560,50 @@ test('MR-21 saving the guide keeps the agentEnabled the server sent', async ({ p
   expect(saved[0]).toMatchObject({ guide: 'Guía sintética editada', agentEnabled: true });
 });
 
-test.describe('MR-23 a browser in Tokyo', () => {
+// The hospital is in Madrid: neither the browser's zone (Tokyo) nor the code's fallback (San Salvador).
+// At 5cce865 the agent timeline printed the date in the browser zone and the time in San Salvador,
+// so these two rows read «18 oct · 10:30 a. m.» and «17 oct · 05:30 p. m.»: both assertions fail there.
+test.describe('MR-23 a browser in Tokyo, a hospital in Madrid', () => {
   test.use({ timezoneId: 'Asia/Tokyo' });
-  test('shows inbox times in the hospital zone with es-SV', async ({ page }) => {
-    const late = chat('Ana Sintética', { updatedAt: '2026-10-17T03:30:00Z' });
-    await serveInbox(page, [late]);
+  test('agent timeline dates and times use the hospital zone with es-SV', async ({ page }) => {
     await page.route('**/api/crm/me', async (route) => {
       const me = await (await route.fetch()).json();
       return route.fulfill({
-        json: { ...me, tenant: { ...me.tenant, timeZone: 'America/El_Salvador' } },
+        json: { ...me, tenant: { ...me.tenant, timeZone: 'Europe/Madrid' } },
       });
     });
+    await page.route('**/api/crm/activities', (route) =>
+      route.fulfill({
+        json: [
+          // 16:30Z: 18:30 on the 17th in Madrid, already the 18th in Tokyo.
+          {
+            id: 'a-day',
+            actor: 'Agente',
+            actorRole: 'agent_ai',
+            kind: 'agent_tool',
+            body: 'Acción sintética de la tarde',
+            createdAt: '2026-10-17T16:30:00Z',
+          },
+          // 23:30Z: 01:30 on the 17th in Madrid, 17:30 on the 16th in San Salvador.
+          {
+            id: 'a-night',
+            actor: 'Agente',
+            actorRole: 'agent_ai',
+            kind: 'agent_tool',
+            body: 'Acción sintética de la madrugada',
+            createdAt: '2026-10-16T23:30:00Z',
+          },
+        ],
+      }),
+    );
     await login(page);
-    await nav(page, 'Bandeja de entrada');
-    const card = page.locator('.conversation-card').filter({ hasText: 'Ana Sintética' });
-    await expect(card.locator('time')).toHaveText(/09:30\s?p\.\s?m\./);
-    await expect(card.locator('time')).not.toHaveText(/12:30/);
+    await page.goto('/?view=agent');
+    const row = (body: string) =>
+      page.locator('div.border-l').filter({ hasText: body }).locator('small');
+    await expect(row('Acción sintética de la tarde')).toHaveText(/^17 oct\.? · 06:30\s?p\.\s?m\.$/);
+    await expect(row('Acción sintética de la madrugada')).toHaveText(
+      /^17 oct\.? · 01:30\s?a\.\s?m\.$/,
+    );
   });
 });
 
@@ -693,8 +730,13 @@ test('MR-29 «Inicio», distinct icons, aria-current, and settings link to «Mi 
   );
   await page.keyboard.press('Escape'); // closes the menu sheet on mobile; a no-op on desktop
   await expect(page.getByRole('heading', { name: 'Mi hospital', exact: true })).toHaveCount(0);
+  await page.evaluate(() => Object.assign(window, { sameDocument: true }));
   await page.getByRole('link', { name: 'Revisar la conexión en «Mi hospital»' }).click();
   await expect(page).toHaveURL(/view=hospital/);
+  // The «Mi hospital» view is on screen, reached without reloading the page.
+  await expect(page.getByRole('heading', { name: 'Mi hospital', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Mi hospital', level: 2 })).toBeVisible();
+  expect(await page.evaluate(() => 'sameDocument' in window)).toBe(true);
 });
 
 test('MR-30 a column preselects its stage, says «Sin seguimientos», and agent activity is the agent’s', async ({

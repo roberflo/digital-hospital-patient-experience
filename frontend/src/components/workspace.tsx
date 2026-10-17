@@ -1,7 +1,6 @@
 'use client';
 import { GoogleCalendarConnection } from './google-calendar-connection';
 import {
-  useDeferredValue,
   useEffect,
   useState,
   useRef,
@@ -428,15 +427,19 @@ function ContactPicker({
   onChange?: (contactId: string) => void;
 }) {
   const [query, setQuery] = useState('');
-  const term = useDeferredValue(query.trim());
+  const [term, setTerm] = useState('');
+  useEffect(() => {
+    const wait = setTimeout(() => setTerm(query.trim()), 250);
+    return () => clearTimeout(wait);
+  }, [query]);
   const [picked, setPicked] = useState<Contact>();
   const { data, error } = useSWR<Contact[]>(
     patientId
       ? '/contacts?patientId=' + encodeURIComponent(patientId)
-      : '/contacts?q=' + encodeURIComponent(term),
+      : '/contacts?q=' + encodeURIComponent(term) + (linkedOnly ? '&linked=true' : ''),
     fetcher,
   );
-  const found = (data ?? []).filter((c) => !linkedOnly || c.patientId);
+  const found = data ?? [];
   // The chosen contact stays choosable while the search moves on.
   const options = picked && !found.some((c) => c.id === picked.id) ? [picked, ...found] : found;
   const value = picked?.id ?? (patientId ? (found[0]?.id ?? '') : '');
@@ -488,7 +491,7 @@ function ContactPicker({
             : term
               ? `Nadie coincide con «${term}».`
               : linkedOnly
-                ? 'Ningún paciente vinculado entre los contactos recientes: búscalo por nombre.'
+                ? 'Aún no hay pacientes vinculados.'
                 : 'Aún no hay contactos.'}
         </FieldDescription>
       )}
@@ -533,6 +536,8 @@ function AppSidebar({
                 href="/"
                 aria-label="Recepción inicio"
                 onClick={(e) => {
+                  // A new tab or window keeps the browser's own behaviour, as the global interceptor does.
+                  if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
                   e.preventDefault();
                   go('dashboard');
                 }}
@@ -1171,7 +1176,11 @@ function InboxView({
                     <ConfirmAction
                       ask={bulkTarget === 'none'}
                       title="¿Quitar el responsable?"
-                      description={`Las ${Object.keys(checked).length} conversaciones seleccionadas quedarán sin responsable.`}
+                      description={
+                        Object.keys(checked).length === 1
+                          ? 'La conversación seleccionada quedará sin responsable.'
+                          : `Las ${Object.keys(checked).length} conversaciones seleccionadas quedarán sin responsable.`
+                      }
                       action="Quitar responsable"
                       destructive
                       onConfirm={assignSelection}
@@ -1196,7 +1205,7 @@ function InboxView({
                   </EmptyMedia>
                   <EmptyTitle>Sin resultados con estos filtros</EmptyTitle>
                   <EmptyDescription>
-                    Puede haber conversaciones que no coinciden con lo que elegiste.
+                    Ninguna conversación coincide con estos filtros.
                   </EmptyDescription>
                 </EmptyHeader>
                 <EmptyContent>
@@ -2837,12 +2846,19 @@ function SettingsView({ me }: { me: Me }) {
                       Permite al agente atender conversaciones habilitadas. Se aplica al momento.
                     </FieldDescription>
                   </FieldContent>
-                  <Switch
-                    id="settings-agent-enabled"
-                    checked={data.agentEnabled}
-                    disabled={saving}
-                    onCheckedChange={(v: boolean) => setAgent(v)}
-                  />
+                  <ConfirmAction
+                    ask={!data.agentEnabled}
+                    title="¿Activar la atención automática?"
+                    description="El agente empezará a responder a los pacientes por WhatsApp en las conversaciones habilitadas."
+                    action="Activar atención automática"
+                    onConfirm={() => setAgent(!data.agentEnabled)}
+                  >
+                    <Switch
+                      id="settings-agent-enabled"
+                      checked={data.agentEnabled}
+                      disabled={saving}
+                    />
+                  </ConfirmAction>
                 </UiField>
                 <Separator />
                 <form

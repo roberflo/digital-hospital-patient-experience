@@ -5,13 +5,14 @@ namespace Recepcion;
 public static class CrmEndpoints
 {
     public static void Audit(CrmDb db, TenantScope t, CurrentUser u, string action, Guid id) => db.Audits.Add(new Audit { TenantId = t.Id, Actor = u.Subject, Action = action, Resource = id.ToString() });
-    /// <summary>Contacts by search, by the Hospital patient they are linked to, or by id: pickers and cards find a contact
-    /// on the server instead of in the first page of 100 (MR-17).</summary>
-    public static async Task<List<Contact>> Contacts(CrmDb db, string? q, Guid? patientId, Guid[]? id, int? page)
+    /// <summary>Contacts by search, by the Hospital patient they are linked to, only those linked to any patient, or by id:
+    /// pickers and cards find a contact on the server instead of in the first page of 100 (MR-17).</summary>
+    public static async Task<List<Contact>> Contacts(CrmDb db, string? q, Guid? patientId, bool? linked, Guid[]? id, int? page)
     {
         var offset = (Math.Clamp(page ?? 1, 1, 10000) - 1) * 100;
         IQueryable<Contact> rows = db.Contacts.AsNoTracking();
         if (patientId is { } patient) rows = rows.Where(x => x.PatientId == patient);
+        if (linked == true) rows = rows.Where(x => x.PatientId != null);
         if (id is { Length: > 0 }) { if (id.Length > 100) throw new ArgumentException("Demasiados contactos"); rows = rows.Where(x => id.Contains(x.Id)); }
         var query = rows.OrderByDescending(x => x.CreatedAt).ThenBy(x => x.Id);
         if (string.IsNullOrWhiteSpace(q)) return await query.Skip(offset).Take(100).ToListAsync();
