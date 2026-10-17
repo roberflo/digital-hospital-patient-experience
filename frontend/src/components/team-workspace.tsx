@@ -23,6 +23,7 @@ import { Label } from './ui/label';
 import { NativeSelect, NativeSelectOption } from './ui/native-select';
 import { Spinner } from './ui/spinner';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
+import { ConfirmAction } from './confirm-action';
 
 export type WorkloadMember = Member & { open: number; pending: number; snoozed: number };
 export type Workload = { members: WorkloadMember[]; unassigned: number };
@@ -313,14 +314,22 @@ export function TeamWorkspace({
                       )}
                       {admin && (
                         <TableCell>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            disabled={busy !== null || m.subject === me.subject}
-                            onClick={() => toggle(m)}
+                          <ConfirmAction
+                            ask={!m.disabled}
+                            title={`¿Desactivar el acceso de ${m.name}?`}
+                            description="No podrá entrar a Recepción hasta que restaures su acceso."
+                            action="Desactivar acceso"
+                            destructive
+                            onConfirm={() => toggle(m)}
                           >
-                            {m.disabled ? 'Restaurar acceso' : 'Desactivar acceso'}
-                          </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={busy !== null || m.subject === me.subject}
+                            >
+                              {m.disabled ? 'Restaurar acceso' : 'Desactivar acceso'}
+                            </Button>
+                          </ConfirmAction>
                         </TableCell>
                       )}
                     </TableRow>
