@@ -7,6 +7,8 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using System.Collections.Concurrent;
 using Recepcion;
 using Xunit;
 
@@ -15,16 +17,17 @@ using Xunit;
 public sealed class WhatsAppWebhookTests : IAsyncLifetime
 {
     const string Secret = "synthetic-webhook-secret";
-    readonly Guid tenant = Guid.NewGuid(); readonly string number = Guid.NewGuid().ToString("N");
+    readonly Guid tenant = Guid.NewGuid(), channel = Guid.NewGuid(); readonly string number = Guid.NewGuid().ToString("N");
     DbContextOptions<CrmDb> options = null!;
     static string Connection => Environment.GetEnvironmentVariable("TEST_DATABASE") ?? throw new InvalidOperationException("Use scripts/test-backend.sh");
+    static readonly CapturedLogs Logs = new();
     // One built, never started, host for the class: EF caches CrmDb's model, and with it the first data
     // protection provider it saw, so a host disposed after one test would break the next one's encryption.
     static readonly Lazy<(WebApplication App, RequestDelegate Receive)> Host = new(() =>
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = "Production" });
         builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?> { ["ConnectionStrings:Database"] = Connection, ["Auth:Authority"] = "https://identity.example.test/realms/hospital", ["KEY_DIRECTORY"] = Directory.CreateTempSubdirectory().FullName, ["KAPSO_WEBHOOK_SECRET"] = Secret, ["PHONE_HASH_KEY"] = "synthetic-phone-key" });
-        builder.Services.AddRecepcionServices(builder.Configuration, false);
+        builder.Services.AddRecepcionServices(builder.Configuration, false); builder.Logging.AddProvider(Logs);
         var app = builder.Build(); app.MapRecepcionApi();
         var endpoint = Assert.Single(((IEndpointRouteBuilder)app).DataSources.SelectMany(x => x.Endpoints).OfType<RouteEndpoint>(), x => x.RoutePattern.RawText == "/webhooks/kapso");
         Assert.Contains("POST", endpoint.Metadata.GetMetadata<IHttpMethodMetadata>()!.HttpMethods);
@@ -36,10 +39,19 @@ public sealed class WhatsAppWebhookTests : IAsyncLifetime
         options = new DbContextOptionsBuilder<CrmDb>().UseNpgsql(Connection).Options;
         await using var db = Db(); await db.Database.MigrateAsync();
         db.Tenants.Add(new Tenant { Id = tenant, Name = "Synthetic tenant" });
-        db.Channels.Add(new Channel { TenantId = tenant, Name = "Synthetic", PhoneNumberId = number, Enabled = true });
+        db.Channels.Add(new Channel { Id = channel, TenantId = tenant, Name = "Synthetic", PhoneNumberId = number, Enabled = true });
         await db.SaveChangesAsync();
     }
     public Task DisposeAsync() => Task.CompletedTask;
+    sealed class CapturedLogs : ILoggerProvider, ILogger
+    {
+        public readonly ConcurrentQueue<(LogLevel Level, string Text)> Entries = new();
+        public ILogger CreateLogger(string category) => this; public void Dispose() { }
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null; public bool IsEnabled(LogLevel level) => true;
+        public void Log<TState>(LogLevel level, EventId id, TState state, Exception? ex, Func<TState, Exception?, string> format) => Entries.Enqueue((level, format(state, ex) + " " + ex));
+    }
+    // Warnings this test's channel left; the channel id is in every one, so parallel tests never mix.
+    string[] Warnings() => Logs.Entries.Where(x => x.Level == LogLevel.Warning && x.Text.Contains(channel.ToString())).Select(x => x.Text).ToArray();
     CrmDb Db() => new(options, new TenantScope { Id = tenant }, new EphemeralDataProtectionProvider());
 
     async Task<int> Post(string json, string? signature = null, string delivery = "delivery-1")
@@ -80,8 +92,10 @@ public sealed class WhatsAppWebhookTests : IAsyncLifetime
     [InlineData("not json")]
     [InlineData("{\"batch\":true,\"data\":5}")] // valid JSON, not a batch
     [InlineData("{\"batch\":true,\"data\":[1]}")] // a batch item that is not an object
+    [InlineData("valid-then-1")] // a valid item first: nothing of it may be written either
     public async Task SignedMalformedJsonIs400AndWritesNothing(string json)
     {
+        if (json == "valid-then-1") json = "{\"batch\":true,\"data\":[" + Inbound("wamid.before-bad") + ",1]}";
         Assert.Equal(400, await Post(json));
         Assert.Equal((0, 0, 0, 0, false), await Rows());
     }
@@ -92,5 +106,23 @@ public sealed class WhatsAppWebhookTests : IAsyncLifetime
         await using var db = Db();
         Assert.Equal("wamid.after", Assert.Single(await db.Messages.Select(x => x.ExternalId).ToListAsync())); // projected: the body is sealed by the host's key ring
         Assert.Equal("agent:wamid.after", Assert.Single(await db.Jobs.Select(x => x.Key).ToListAsync()));
+        // Both items are receipted, so a redelivery skips them; only the item with an id made a contact.
+        Assert.Equal(2, await db.Receipts.CountAsync()); Assert.Equal(1, await db.Contacts.CountAsync());
+        var warning = Assert.Single(Warnings()); Assert.Contains("id", warning); Assert.Contains(tenant.ToString(), warning);
+        Assert.DoesNotContain("50370000002", warning); Assert.DoesNotContain("Hola", warning);
+    }
+    // An unusable phone is one bad item, not a bad delivery: it used to throw a 500 halfway, and every
+    // redelivery lost the rest of the batch again.
+    [Fact] public async Task InvalidPhoneIsSkippedAndTheRestOfTheBatchIsProcessed()
+    {
+        var batch = "{\"batch\":true,\"data\":[" + Inbound("wamid.a", "50370000004") + "," + Inbound("wamid.b", "999abc999") + "," + Inbound("wamid.c", "50370000005") + "]}";
+        Assert.Equal(200, await Post(batch));
+        Assert.Equal(200, await Post(batch));
+        await using var db = Db();
+        Assert.Equal(new[] { "wamid.a", "wamid.c" }, (await db.Messages.Select(x => x.ExternalId).ToListAsync()).Order());
+        Assert.Equal(new[] { "agent:wamid.a", "agent:wamid.c" }, (await db.Jobs.Select(x => x.Key).ToListAsync()).Order());
+        Assert.Equal(2, await db.Contacts.CountAsync()); Assert.Equal(3, await db.Receipts.CountAsync());
+        var warning = Assert.Single(Warnings()); Assert.Contains(tenant.ToString(), warning);
+        Assert.DoesNotContain("999abc999", warning); Assert.DoesNotContain("Hola", warning); Assert.DoesNotContain("wamid", warning);
     }
 }

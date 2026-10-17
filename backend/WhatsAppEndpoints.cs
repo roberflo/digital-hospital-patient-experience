@@ -98,7 +98,7 @@ public static class WhatsAppEndpoints
         }
         row.Enabled = b.Enabled; CrmEndpoints.Audit(db, t, u, u.Platform && !b.Enabled ? "channel.paused" : "channel.enabled", id); await db.SaveChangesAsync(); return Results.Ok(row);
     }
-    static async Task<IResult> Receive(HttpContext ctx, CrmDb db, TenantScope scope, IConfiguration config)
+    static async Task<IResult> Receive(HttpContext ctx, CrmDb db, TenantScope scope, IConfiguration config, ILoggerFactory logs)
     {
         if (ctx.Request.ContentLength > 2 * 1024 * 1024) return Results.StatusCode(413);
         using var buffer = new MemoryStream(); var bytes = new byte[8192]; int read;
@@ -128,19 +128,23 @@ public static class WhatsAppEndpoints
             var receiptKey = ctx.Request.Headers["X-Idempotency-Key"].ToString() + ":" + eventName + ":" + fingerprint;
             if (await db.Receipts.AnyAsync(x => x.Key == receiptKey)) { await tx.CommitAsync(); continue; }
             db.Receipts.Add(new Receipt { TenantId = scope.Id, Key = receiptKey });
-            if (item.TryGetProperty("message", out var msg) && item.TryGetProperty("conversation", out var conversation)) await Ingest(item, msg, conversation, channel, eventName, db, scope, config);
+            if (item.TryGetProperty("message", out var msg) && item.TryGetProperty("conversation", out var conversation)) {
+                // A skipped item keeps its receipt, so a redelivery skips it too. The log names only why and where: no phone, body or id (INV-8).
+                if (await Ingest(item, msg, conversation, channel, eventName, db, scope, config) is { } skipped)
+                    logs.CreateLogger("Recepcion.Webhook").LogWarning("Kapso webhook item skipped: {Reason}. Tenant {TenantId}, channel {ChannelId}.", skipped, channel.TenantId, channel.Id);
+            }
             await db.SaveChangesAsync(); await tx.CommitAsync(); db.ChangeTracker.Clear();
         }
         return Results.Ok(new { accepted = true });
     }
-    static async Task Ingest(JsonElement root, JsonElement msg, JsonElement conversation, Channel ch, string evt, CrmDb db, TenantScope scope, IConfiguration config)
+    static async Task<string?> Ingest(JsonElement root, JsonElement msg, JsonElement conversation, Channel ch, string evt, CrmDb db, TenantScope scope, IConfiguration config)
     {
-        // A message without an id cannot be deduplicated: it is skipped, the rest of the batch goes on.
-        var external = Get(msg, "id"); if (external is null) return; var k = msg.TryGetProperty("kapso", out var ka) ? ka : default;
+        // Messages are reconciled by their WhatsApp id (echoes, status updates): without one the item is skipped, the rest of the batch goes on.
+        var external = Get(msg, "id"); if (external is null) return "message without id"; var k = msg.TryGetProperty("kapso", out var ka) ? ka : default;
         var status = Get(k, "status") ?? "received"; var existing = await db.Messages.SingleOrDefaultAsync(x => x.ExternalId == external);
-        if (existing != null) { if (status == "read" || status == "failed" || (status == "delivered" && existing.Status != "read") || (status == "sent" && existing.Status is "sending" or "uncertain")) existing.Status = status; return; }
-        var phone = Get(conversation, "phone_number") ?? Get(msg, "from") ?? Get(msg, "to"); if (string.IsNullOrEmpty(phone)) return;
-        var hash = Rules.PhoneHash(phone, config["PHONE_HASH_KEY"]!); var contact = await db.Contacts.SingleOrDefaultAsync(x => x.PhoneHash == hash);
+        if (existing != null) { if (status == "read" || status == "failed" || (status == "delivered" && existing.Status != "read") || (status == "sent" && existing.Status is "sending" or "uncertain")) existing.Status = status; return null; }
+        var phone = Get(conversation, "phone_number") ?? Get(msg, "from") ?? Get(msg, "to"); if (string.IsNullOrEmpty(phone)) return null;
+        string hash; try { hash = Rules.PhoneHash(phone, config["PHONE_HASH_KEY"]!); } catch (ArgumentException) { return "unusable phone number"; } var contact = await db.Contacts.SingleOrDefaultAsync(x => x.PhoneHash == hash);
         if (contact is null) { contact = new Contact { TenantId = scope.Id, Name = Get(conversation, "contact_name") ?? "Paciente", Phone = Rules.Phone(phone), PhoneHash = hash }; db.Add(contact); db.Activities.Add(new Activity{TenantId=scope.Id,ContactId=contact.Id,Actor="WhatsApp",ActorRole="system",Kind="contact_created",Body="Contacto creado automáticamente al recibir su primera conversación de WhatsApp."}); }
         var conv = await db.Conversations.SingleOrDefaultAsync(x => x.ChannelId == ch.Id && x.ContactId == contact.Id);
         if (conv is null) { conv = new Conversation { TenantId = scope.Id, ChannelId = ch.Id, ContactId = contact.Id, ExternalId = Get(conversation, "id") ?? "", Status = (await db.Tenants.AnyAsync(x=>x.Id==scope.Id&&x.AgentEnabled))&&ch.Enabled?"agent":"human" }; db.Add(conv); db.Activities.Add(InboxWorkflow.Event(scope,conv,"WhatsApp","conversation_created","Conversación vinculada al contacto CRM.")); }
@@ -158,7 +162,7 @@ public static class WhatsAppEndpoints
         await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_advisory_xact_lock({conversationLock})");
         if(db.Entry(conv).State!=EntityState.Added)await db.Entry(conv).ReloadAsync();
         var reconciled = await db.Messages.SingleOrDefaultAsync(x => x.ExternalId == external);
-        if (reconciled is not null) { if (status == "read" || status == "failed" || (status == "delivered" && reconciled.Status != "read")) reconciled.Status = status; return; }
+        if (reconciled is not null) { if (status == "read" || status == "failed" || (status == "delivered" && reconciled.Status != "read")) reconciled.Status = status; return null; }
         var origin = Get(k, "origin"); var outbound = Get(k, "direction") == "outbound"; var history = origin == "history_sync"; var passive = k.ValueKind == JsonValueKind.Object && k.TryGetProperty("passive", out var pass) && pass.ValueKind == JsonValueKind.True;
         var type = Get(msg, "type") ?? "text"; var content = WhatsAppContent.Inbound(msg, k);
         if (k.ValueKind == JsonValueKind.Object && k.TryGetProperty("transcript", out var transcript)) content = Get(transcript, "text") ?? content;
@@ -176,6 +180,7 @@ public static class WhatsAppEndpoints
             if(InboxWorkflow.ReopenOnInbound(conv,ch.Enabled&&await db.Tenants.AnyAsync(x=>x.Id==scope.Id&&x.AgentEnabled)))db.Activities.Add(InboxWorkflow.Event(scope,conv,"WhatsApp","conversation_state","Conversación reabierta por un nuevo mensaje del cliente."));
             db.Add(new Job { TenantId = scope.Id, ConversationId = conv.Id, Key = "agent:" + external });
         }
+        return null;
     }
     internal static string? Get(JsonElement e, string key) => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(key, out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
 }
