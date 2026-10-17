@@ -1074,6 +1074,7 @@ public sealed class AgentWorker(IServiceScopeFactory scopes, ILogger<AgentWorker
         var scope = sp.GetRequiredService<TenantScope>(); scope.Id = tid; var d = sp.GetRequiredService<CrmDb>(); var service = sp.GetRequiredService<ConversationService>();
         await InboxWorkflow.WakeDue(d,scope,service,stoppingToken);
         await RetireAbandoned(d, scope, service, stoppingToken);
+        await Retention.Daily(d, tid, stoppingToken);
         var job = await d.Jobs.Where(x => x.Status == "pending").OrderBy(x => x.CreatedAt).FirstOrDefaultAsync(stoppingToken); if (job is null) return;
         if (await Claim(d, job.Id, stoppingToken) == 0) return;
         job.Status = "running"; job.StartedAt = DateTimeOffset.UtcNow; var wasAgent = false;
