@@ -19,6 +19,25 @@ public sealed class AgentGuardTests : IAsyncLifetime
     public Task InitializeAsync() => h.Start();
     public Task DisposeAsync() => h.DisposeAsync().AsTask();
 
+    // MR-12: the patient's appointments come only from the patient-scoped agenda, never from the whole day's,
+    // even for a connection that predates UsePatientAgenda.
+    [Fact]
+    public async Task PatientAppointmentsNeverReadTheWholeDayAgenda()
+    {
+        await h.Link();
+        var hospital = new HttpMessageInvoker(h.Hospital()); var paths = new List<string>();
+        var guarded = new AgentHarness.Fake(request =>
+        {
+            paths.Add(request.RequestUri!.AbsolutePath);
+            if (request.RequestUri.AbsolutePath == "/v1/agenda/day") throw new InvalidOperationException("The whole day's agenda must never be read for one patient");
+            return hospital.SendAsync(request, CancellationToken.None);
+        });
+        var model = h.Model(AgentHarness.ToolCall("my_appointments", new { date = DateTimeOffset.UtcNow.AddDays(3).ToString("yyyy-MM-dd") }), AgentHarness.Reply("No tienes citas ese día."));
+        await h.Runtime(model, h.Sender(), guarded, new() { [$"Hospital:Tenants:{h.Scope.Id}:UsePatientAgenda"] = null }).Run(h.Job, CancellationToken.None);
+        Assert.Contains(paths, path => path.StartsWith("/v1/agenda/patients/"));
+        Assert.DoesNotContain("/v1/agenda/day", paths);
+    }
+
     [Theory]
     [InlineData("dosis", "Toma 500 mg de amoxicilina cada 8 horas durante una semana.")]
     [InlineData("dosis", "Puedes subir a 2 tabletas si el dolor sigue.")]

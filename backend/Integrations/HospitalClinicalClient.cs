@@ -60,6 +60,7 @@ public sealed class HospitalClinicalClient(HttpClient http, IConfiguration confi
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(origin, relative));
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
+            request.Headers.Add("X-Correlation-Id", Guid.NewGuid().ToString("D"));
             using var response = await http.SendAsync(request, ct);
             if (!response.IsSuccessStatusCode)
             {

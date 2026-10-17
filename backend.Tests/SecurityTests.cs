@@ -5,6 +5,8 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Recepcion;
 using Recepcion.Integrations;
 using Xunit;
@@ -45,6 +47,39 @@ public sealed class SecurityTests {
     }
     [Fact]public void ClinicalRoleMapsButDoesNotBecomeAdmin(){var p=new ClaimsPrincipal(new ClaimsIdentity([new Claim("realm_access","{\"roles\":[\"Médicos\"]}")],"test"));Assert.Equal("doctor",Identity.MapRole(p));Assert.False(new CurrentUser{Role="doctor"}.Admin);}
     [Fact]public void CalendarIdsAreStableAndTenantBound(){var a=Guid.NewGuid();var b=Guid.NewGuid();var appointment=Guid.NewGuid();Assert.Equal(GoogleCalendarClient.EventId(a,appointment),GoogleCalendarClient.EventId(a,appointment));Assert.NotEqual(GoogleCalendarClient.EventId(a,appointment),GoogleCalendarClient.EventId(b,appointment));Assert.Matches("^[0-9a-f]{64}$",GoogleCalendarClient.EventId(a,appointment));}
+    // MR-8, MR-9: the error handler Program.cs installs turns a Hospital timeout into 504 and logs every
+    // Hospital integration failure by code and trace only: no body, URL, token or identifier.
+    [Fact] public async Task HospitalTimeoutIs504AndIntegrationFailuresLogCodeAndTraceOnly()
+    {
+        var patient=Guid.NewGuid();var logs=new CapturedLogs();
+        var services=new ServiceCollection().AddLogging(b=>b.AddProvider(logs)).BuildServiceProvider();
+        async Task<(int Status,string Title,string Trace)> Run(Exception thrown)
+        {
+            var ctx=new DefaultHttpContext{RequestServices=services,TraceIdentifier="trace-"+Guid.NewGuid().ToString("N")};
+            ctx.Request.Path=$"/api/contacts/{patient}/appointments";ctx.Request.QueryString=new($"?patientId={patient}");ctx.Response.Body=new MemoryStream();
+            await Hosting.Errors(ctx,_=>throw thrown);
+            ctx.Response.Body.Position=0;using var problem=System.Text.Json.JsonDocument.Parse(ctx.Response.Body);
+            return (ctx.Response.StatusCode,problem.RootElement.GetProperty("title").GetString()!,ctx.TraceIdentifier);
+        }
+        var timeout=await Run(new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout",new TimeoutException()));
+        Assert.Equal(504,timeout.Status);Assert.Equal("Hospital no respondió a tiempo. Comprueba la agenda antes de reintentar.",timeout.Title);
+        var refused=await Run(new HospitalIntegrationException("hospital.http_409",System.Net.HttpStatusCode.Conflict));
+        Assert.Equal(409,refused.Status);
+        Assert.Contains(logs.Lines,line=>line.Contains("hospital.http_409")&&line.Contains(refused.Trace));
+        Assert.DoesNotContain(logs.Lines,line=>line.Contains(patient.ToString())||line.Contains("/api/"));
+        var root=new DirectoryInfo(AppContext.BaseDirectory);
+        while(root is not null&&!File.Exists(Path.Combine(root.FullName,"backend","Program.cs")))root=root.Parent;
+        Assert.Contains("app.Use(Hosting.Errors);",File.ReadAllText(Path.Combine(root!.FullName,"backend","Program.cs")));
+    }
+    sealed class CapturedLogs:Microsoft.Extensions.Logging.ILoggerProvider,Microsoft.Extensions.Logging.ILogger
+    {
+        public readonly System.Collections.Concurrent.ConcurrentQueue<string> Lines=new();
+        public Microsoft.Extensions.Logging.ILogger CreateLogger(string category)=>this;
+        public IDisposable? BeginScope<TState>(TState state) where TState:notnull=>null;
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel level)=>true;
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel level,Microsoft.Extensions.Logging.EventId id,TState state,Exception? error,Func<TState,Exception?,string> format)=>Lines.Enqueue(format(state,error)+" "+error);
+        public void Dispose(){}
+    }
 }
 
 // docs/platform-owner.md AC 2 and AC 5: the gate that runs before Identity.Bind, row by row of the

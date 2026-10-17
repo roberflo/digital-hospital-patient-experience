@@ -56,6 +56,51 @@ public sealed class HospitalPrescriptionTests
         else Assert.Equal(latest,await client.GetLatestIssuedPrescriptionIdAsync(tenant,patient,"50370000001"));
         Assert.Equal(2,pages);Assert.Equal(2,reads);
     }
+    // MR-6, MR-7: the service token is reused by the same tenant's credentials until 30 s before it expires,
+    // checked against the tenant on every request, and the phone is verified once per «latest prescription».
+    [Theory][InlineData("reused")][InlineData("expiring")][InlineData("other-tenant")]
+    public async Task ServiceTokenIsReusedPerTenantCredentialAndPhoneIsVerifiedOncePerCall(string scenario)
+    {
+        var tenant=Guid.NewGuid();var patient=Guid.NewGuid();var first=Guid.NewGuid();var second=Guid.NewGuid();
+        static string Token(Guid tenant,TimeSpan life)=>"e30."+Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(new{tenant_id=tenant,exp=DateTimeOffset.UtcNow.Add(life).ToUnixTimeSeconds()})).TrimEnd('=').Replace('+','-').Replace('/','_')+".synthetic";
+        var token=Token(scenario=="other-tenant"?Guid.NewGuid():tenant,scenario=="expiring"?TimeSpan.FromSeconds(20):TimeSpan.FromHours(1));
+        var config=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{
+            [$"Hospital:Tenants:{tenant}:BaseUrl"]="https://hospital.example.invalid/",
+            [$"Hospital:Tenants:{tenant}:TokenEndpoint"]="https://identity.example.invalid/realms/hospital/protocol/openid-connect/token",
+            [$"Hospital:Tenants:{tenant}:ClientId"]="recepcion-service-shared-by-test",
+            [$"Hospital:Tenants:{tenant}:ClientSecret"]="synthetic-secret",
+            [$"Hospital:Tenants:{tenant}:AllowClinicalDelivery"]="true",[$"Hospital:Tenants:{tenant}:UseReceptionBridge"]="true"}).Build();
+        var tokens=0;var patients=0;var hospital=0;
+        var handler=new Handler(request=>{
+            if(request.RequestUri!.Host=="identity.example.invalid"){tokens++;return new(HttpStatusCode.OK){Content=JsonContent.Create(new{access_token=token})};}
+            hospital++;Assert.Equal(token,request.Headers.Authorization!.Parameter);
+            var path=request.RequestUri.AbsolutePath;
+            if(path==$"/v1/patients/{patient}"){patients++;return new(HttpStatusCode.OK){Content=JsonContent.Create(new{patientId=patient,phone="50370000001"})};}
+            if(path.EndsWith("/list"))return new(HttpStatusCode.OK){Content=JsonContent.Create(new{prescriptionIds=new[]{first,second},nextCursor=(string?)null})};
+            var id=Guid.Parse(path.Split('/').Last());
+            return new(HttpStatusCode.OK){Content=JsonContent.Create(new{prescriptionId=id,patientId=patient,encounterId=Guid.NewGuid(),state="signed",signedAt=id==second?DateTimeOffset.UtcNow:DateTimeOffset.UtcNow.AddDays(-1),lines=Array.Empty<object>(),contentWithheld=false})};
+        });
+        var client=new HospitalClient(new HttpClient(handler),config);
+        if(scenario=="other-tenant")
+        {
+            var error=await Assert.ThrowsAsync<HospitalIntegrationException>(()=>client.GetLatestIssuedPrescriptionIdAsync(tenant,patient,"50370000001"));
+            Assert.Equal("hospital.token_tenant_or_expiry_invalid",error.Code);Assert.Equal(0,hospital);
+            return;
+        }
+        Assert.Equal(second,await client.GetLatestIssuedPrescriptionIdAsync(tenant,patient,"50370000001"));
+        Assert.Equal(1,patients);
+        Assert.Equal(scenario=="reused"?1:4,tokens); // list + two reads + patient: one token, or one per request when it expires within 30 s
+        if(scenario!="reused")return;
+        // The same ClientId under another tenant never receives this tenant's cached token.
+        var neighbour=Guid.NewGuid();token=Token(neighbour,TimeSpan.FromHours(1));
+        var neighbourConfig=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{
+            [$"Hospital:Tenants:{neighbour}:BaseUrl"]="https://hospital.example.invalid/",
+            [$"Hospital:Tenants:{neighbour}:TokenEndpoint"]="https://identity.example.invalid/realms/hospital/protocol/openid-connect/token",
+            [$"Hospital:Tenants:{neighbour}:ClientId"]="recepcion-service-shared-by-test",[$"Hospital:Tenants:{neighbour}:ClientSecret"]="synthetic-secret"}).Build();
+        var before=tokens;
+        await new HospitalClient(new HttpClient(handler),neighbourConfig).GetVerifiedPatientAsync(neighbour,patient,"50370000001");
+        Assert.Equal(before+1,tokens);
+    }
     sealed class Handler(Func<HttpRequestMessage,HttpResponseMessage> send):HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken ct)=>Task.FromResult(send(request));

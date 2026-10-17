@@ -1,6 +1,9 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 
@@ -59,21 +62,14 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
         return await ReadAsync<JsonElement>(tenantId,$"v1/agenda/patients/{patientId:D}?from={from:yyyy-MM-dd}&to={to:yyyy-MM-dd}",ct);
     }
 
+    /// <summary>Only ever the patient-scoped agenda: the whole day's agenda carries every other patient (MR-12).</summary>
     public async Task<JsonElement> GetPatientAppointmentsAsync(Guid tenantId, Guid patientId,
         string phone, DateOnly day, CancellationToken ct = default)
     {
-        if(bool.TryParse(Tenant(tenantId)["UsePatientAgenda"],out var scoped)&&scoped){
-            var page=await GetPatientAppointmentRangeAsync(tenantId,patientId,phone,day,day,ct);
-            return JsonSerializer.SerializeToElement(page.GetProperty("rows").EnumerateArray().Select(x=>new{
-                appointmentId=x.GetProperty("appointmentId").GetGuid(),startsAt=x.GetProperty("scheduledStart").GetDateTimeOffset(),
-                durationMinutes=x.GetProperty("durationMinutes").GetInt32(),doctor=x.GetProperty("clinicianName").GetString(),status=x.GetProperty("status").GetString()
-            }).ToArray(),Json);
-        }
-        await GetVerifiedPatientAsync(tenantId, patientId, phone, ct);
-        var agenda = await GetAgendaDayAsync(tenantId, day, ct);
-        // Filter inside the trusted adapter before anything reaches a patient or model.
-        var rows = agenda.GetProperty("rows").EnumerateArray()
-            .Where(x => x.GetProperty("patientId").GetGuid() == patientId)
+        var page = await GetPatientAppointmentRangeAsync(tenantId, patientId, phone, day, day, ct);
+        // Filter inside the trusted adapter before anything reaches a patient or model: a row naming another patient never passes.
+        return JsonSerializer.SerializeToElement(page.GetProperty("rows").EnumerateArray()
+            .Where(x => !x.TryGetProperty("patientId", out var owner) || owner.GetGuid() == patientId)
             .Select(x => new
             {
                 appointmentId = x.GetProperty("appointmentId").GetGuid(),
@@ -81,8 +77,7 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
                 durationMinutes = x.GetProperty("durationMinutes").GetInt32(),
                 doctor = x.GetProperty("clinicianName").GetString(),
                 status = x.GetProperty("status").GetString()
-            }).ToArray();
-        return JsonSerializer.SerializeToElement(rows, Json);
+            }).ToArray(), Json);
     }
 
     public async Task<HospitalAppointmentCreated> CreateAppointmentAsync(Guid tenantId,
@@ -123,6 +118,11 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
     {
         RequireClinicalDelivery(tenantId);
         await GetVerifiedPatientAsync(tenantId, patientId, senderPhone, ct);
+        return await ListVerifiedPrescriptionsAsync(tenantId, patientId, senderPhone, cursor, ct);
+    }
+
+    private async Task<HospitalPrescriptionPage> ListVerifiedPrescriptionsAsync(Guid tenantId, Guid patientId, string senderPhone, string? cursor, CancellationToken ct)
+    {
         using var response = await SendAsync(tenantId, HttpMethod.Post,
             $"v1/reception/patients/{patientId:D}/prescriptions/list", new { phone = senderPhone, cursor }, ct);
         return await ParseAsync<HospitalPrescriptionPage>(response, ct);
@@ -131,13 +131,16 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
     public async Task<Guid?> GetLatestIssuedPrescriptionIdAsync(Guid tenantId, Guid patientId, string phone, CancellationToken ct = default)
     {
         // The bridge paginates timeline order, which need not equal signing order.
+        // The phone is verified once for the whole walk; the bridge rechecks it on every request.
+        RequireClinicalDelivery(tenantId);
+        await GetVerifiedPatientAsync(tenantId, patientId, phone, ct);
         HospitalPrescription? latest = null; string? cursor = null; var seen = new HashSet<string>();
         for (var pageNumber = 0; pageNumber < 100; pageNumber++)
         {
-            var page = await ListIssuedPrescriptionsAsync(tenantId, patientId, phone, cursor, ct);
+            var page = await ListVerifiedPrescriptionsAsync(tenantId, patientId, phone, cursor, ct);
             foreach (var id in page.PrescriptionIds)
             {
-                var prescription = await GetIssuedPrescriptionAsync(tenantId, patientId, phone, id, ct);
+                var prescription = await GetVerifiedPrescriptionAsync(tenantId, patientId, phone, id, ct);
                 if (latest is null || prescription.SignedAt > latest.SignedAt || (prescription.SignedAt == latest.SignedAt && prescription.PrescriptionId.CompareTo(latest.PrescriptionId) > 0)) latest = prescription;
             }
             if (string.IsNullOrEmpty(page.NextCursor)) return latest?.PrescriptionId;
@@ -152,6 +155,11 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
     {
         RequireClinicalDelivery(tenantId);
         await GetVerifiedPatientAsync(tenantId, patientId, senderPhone, ct);
+        return await GetVerifiedPrescriptionAsync(tenantId, patientId, senderPhone, prescriptionId, ct);
+    }
+
+    private async Task<HospitalPrescription> GetVerifiedPrescriptionAsync(Guid tenantId, Guid patientId, string senderPhone, Guid prescriptionId, CancellationToken ct)
+    {
         using var response = await SendAsync(tenantId, HttpMethod.Post,
             $"v1/reception/prescriptions/{prescriptionId:D}", new { phone = senderPhone }, ct);
         var prescription = await ParseAsync<HospitalPrescription>(response, ct);
@@ -218,16 +226,19 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
             || baseUri.Scheme is not ("https" or "http") || !string.IsNullOrEmpty(baseUri.UserInfo)
             || !string.IsNullOrEmpty(baseUri.Query) || !string.IsNullOrEmpty(baseUri.Fragment))
             throw new HospitalIntegrationException("hospital.not_configured", HttpStatusCode.ServiceUnavailable);
-        var token = await GetTokenAsync(tenant, ct);
+        var token = await GetTokenAsync(tenantId, tenant, ct);
         ValidateTokenTenant(token, tenantId);
         using var request = new HttpRequestMessage(method, new Uri(baseUri, path));
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        request.Headers.Add("X-Correlation-Id", (correlation ?? Guid.NewGuid()).ToString("D"));
         if (body is not null) request.Content = JsonContent.Create(body, options: Json);
         var response = await http.SendAsync(request, ct);
         if (!response.IsSuccessStatusCode)
         {
             var status = response.StatusCode;
             var code = $"hospital.http_{(int)status}";
+            // A token Hospital no longer accepts (revoked, rotated keys) is dropped; the next request asks for a new one, this one is not retried.
+            if (status == HttpStatusCode.Unauthorized) foreach (var key in Tokens.Keys.Where(k => k.Tenant == tenantId)) Tokens.TryRemove(key, out _);
             if(path.StartsWith("v1/commercial/",StringComparison.Ordinal))
             {
                 try
@@ -244,7 +255,12 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
         return response;
     }
 
-    private async Task<string> GetTokenAsync(IConfigurationSection tenant, CancellationToken ct)
+    // ponytail: one dictionary per process, never trimmed (one entry per hospital credential) and with no lock: two requests on a cold or
+    // expiring entry both ask Keycloak, and each replica keeps its own. Keyed by tenant as well as credential, so a token never crosses
+    // hospitals; the secret's hash is in the key so a changed secret is tested, not answered from here. A shared cache if replicas multiply.
+    static readonly ConcurrentDictionary<(Guid Tenant, string Endpoint, string ClientId, string Secret), (string Token, DateTimeOffset Until)> Tokens = new();
+
+    private async Task<string> GetTokenAsync(Guid tenantId, IConfigurationSection tenant, CancellationToken ct)
     {
         if (tenant["AccessToken"] is { Length: > 0 } token) return token;
         if (!Uri.TryCreate(tenant["TokenEndpoint"], UriKind.Absolute, out var endpoint)
@@ -252,6 +268,8 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
             || !string.IsNullOrEmpty(endpoint.UserInfo) || !string.IsNullOrEmpty(endpoint.Fragment)
             || string.IsNullOrWhiteSpace(tenant["ClientId"]) || string.IsNullOrWhiteSpace(tenant["ClientSecret"]))
             throw new HospitalIntegrationException("hospital.credentials_missing", HttpStatusCode.ServiceUnavailable);
+        var key = (tenantId, endpoint.AbsoluteUri, tenant["ClientId"]!, Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(tenant["ClientSecret"]!))));
+        if (Tokens.TryGetValue(key, out var kept) && kept.Until > DateTimeOffset.UtcNow) return kept.Token;
         using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
         {
             Content = new FormUrlEncodedContent(new Dictionary<string, string>
@@ -265,13 +283,17 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
         if (!response.IsSuccessStatusCode)
             throw new HospitalIntegrationException("hospital.token_request_failed", HttpStatusCode.ServiceUnavailable);
         var payload = await ParseAsync<JsonElement>(response, ct);
-        return payload.GetProperty("access_token").GetString()
+        var issued = payload.GetProperty("access_token").GetString()
             ?? throw new HospitalIntegrationException("hospital.token_missing", HttpStatusCode.ServiceUnavailable);
+        // Only a token already proven to be this tenant's is kept, and only until 30 s before it expires.
+        Tokens[key] = (issued, DateTimeOffset.FromUnixTimeSeconds(ValidateTokenTenant(issued, tenantId)).AddSeconds(-30));
+        return issued;
     }
 
     // This is an additional routing guard on configured credentials, NOT signature validation.
     // The hospital verifies the signature, audience and issuer with Keycloak on every request.
-    internal static void ValidateTokenTenant(string token, Guid tenantId)
+    /// <returns>The token's expiry, in Unix seconds.</returns>
+    internal static long ValidateTokenTenant(string token, Guid tenantId)
     {
         try
         {
@@ -284,6 +306,7 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
             if (!Guid.TryParse(root.GetProperty("tenant_id").GetString(), out var claimTenant) || claimTenant != tenantId
                 || root.GetProperty("exp").GetInt64() <= DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 10)
                 throw new FormatException();
+            return root.GetProperty("exp").GetInt64();
         }
         catch (Exception e) when (e is FormatException or JsonException or KeyNotFoundException or InvalidOperationException or OverflowException)
         {

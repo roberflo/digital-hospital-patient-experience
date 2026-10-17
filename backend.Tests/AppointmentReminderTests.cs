@@ -1,0 +1,122 @@
+using System.Net;
+using System.Text;
+using System.Text.Json;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
+using Recepcion;
+using Recepcion.Integrations;
+using Xunit;
+
+/// <summary>MR-13: the worker's own per-tenant pass. A contact whose Hospital read hangs is one failure, not the
+/// end of the sync, and a reminder already due is sent even when the sync spends its whole budget.</summary>
+public sealed class AppointmentReminderTests : IAsyncLifetime
+{
+    readonly Guid tenant = Guid.NewGuid();
+    readonly Guid hanging = Guid.NewGuid(), answering = Guid.NewGuid(), appointment = Guid.NewGuid();
+    readonly DateTimeOffset start = ReminderRules.Instant(DateTimeOffset.UtcNow.AddMinutes(50));
+    DbContextOptions<CrmDb> options = null!; readonly IDataProtectionProvider protection = new EphemeralDataProtectionProvider();
+    Contact second = null!; int sends; HttpStatusCode delivery = HttpStatusCode.OK;
+
+    public async Task InitializeAsync()
+    {
+        var connection = Environment.GetEnvironmentVariable("TEST_DATABASE");
+        if (string.IsNullOrEmpty(connection)) throw new InvalidOperationException("Run scripts/test-backend.sh to provide the isolated PostgreSQL database.");
+        options = new DbContextOptionsBuilder<CrmDb>().UseNpgsql(connection).Options;
+        await using var db = new CrmDb(options, new TenantScope { Id = tenant }, protection); await db.Database.MigrateAsync();
+        var channel = new Channel { TenantId = tenant, Name = "Synthetic", PhoneNumberId = Guid.NewGuid().ToString("N"), Enabled = true }; db.Add(channel);
+        db.Tenants.Add(new Tenant { Id = tenant, Name = "Hospital Sintético", RemindersEnabled = true, ReminderChannelId = channel.Id });
+        // The hanging contact goes first, so the one that answers is only reached if the sync goes on.
+        db.Add(new Contact { TenantId = tenant, Name = "Synthetic one", Phone = "50370000001", PhoneHash = Guid.NewGuid().ToString(), PatientId = hanging, ReminderConsentAt = DateTimeOffset.UtcNow });
+        await db.SaveChangesAsync();
+        second = new Contact { TenantId = tenant, Name = "Synthetic two", Phone = "50370000002", PhoneHash = Guid.NewGuid().ToString(), PatientId = answering, ReminderConsentAt = DateTimeOffset.UtcNow };
+        db.Add(second); await db.SaveChangesAsync();
+    }
+    public Task DisposeAsync() => Task.CompletedTask;
+
+    [Fact]
+    public async Task AContactThatHangsIsAFailureAndTheSyncGoesOnWithTheOthers()
+    {
+        await AppointmentReminderWorker.RunTenant(Services(), tenant, NullLogger.Instance, CancellationToken.None, contactBudget: TimeSpan.FromSeconds(3));
+        await using var db = Db();
+        Assert.Equal(2, await db.AppointmentReminders.CountAsync(r => r.ContactId == second.Id));
+        Assert.Contains("1 contacto", (await db.Tenants.SingleAsync(t => t.Id == tenant)).ReminderSyncError);
+    }
+
+    [Fact]
+    public async Task ADueReminderIsSentEvenWhenTheSyncSpendsItsBudget()
+    {
+        await using (var db = Db())
+        {
+            db.Add(new AppointmentReminder { TenantId = tenant, ContactId = second.Id, PatientId = answering, ChannelId = (await db.Tenants.SingleAsync(t => t.Id == tenant)).ReminderChannelId!.Value, AppointmentId = appointment, StartsAt = start, DueAt = start.AddHours(-1), Window = "hour_before" });
+            await db.SaveChangesAsync();
+        }
+        await AppointmentReminderWorker.RunTenant(Services(), tenant, NullLogger.Instance, CancellationToken.None, syncBudget: TimeSpan.FromMilliseconds(500));
+        await using var check = Db();
+        Assert.Equal(1, sends);
+        Assert.Equal("sent", (await check.AppointmentReminders.SingleAsync(r => r.Window == "hour_before" && r.AppointmentId == appointment)).Status);
+    }
+
+    // Kapso refusing the send (4xx) is a definite failure; a 5xx may have been delivered and stays uncertain. Neither is retried.
+    [Theory][InlineData(HttpStatusCode.BadRequest, "failed")][InlineData(HttpStatusCode.ServiceUnavailable, "uncertain")]
+    public async Task AReminderKapsoRefusesIsFailedAndOneItMayHaveSentIsUncertain(HttpStatusCode status, string expected)
+    {
+        delivery = status;
+        await using (var db = Db())
+        {
+            db.Add(new AppointmentReminder { TenantId = tenant, ContactId = second.Id, PatientId = answering, ChannelId = (await db.Tenants.SingleAsync(t => t.Id == tenant)).ReminderChannelId!.Value, AppointmentId = appointment, StartsAt = start, DueAt = start.AddHours(-1), Window = "hour_before" });
+            await db.SaveChangesAsync();
+        }
+        var services = Services();
+        await AppointmentReminderWorker.RunTenant(services, tenant, NullLogger.Instance, CancellationToken.None, contactBudget: TimeSpan.FromSeconds(3));
+        await AppointmentReminderWorker.RunTenant(services, tenant, NullLogger.Instance, CancellationToken.None, contactBudget: TimeSpan.FromSeconds(3));
+        await using var check = Db();
+        var row = await check.AppointmentReminders.SingleAsync(r => r.Window == "hour_before" && r.AppointmentId == appointment);
+        Assert.Equal(expected, row.Status);
+        Assert.Equal(expected, (await check.Messages.SingleAsync(m => m.Id == row.MessageId)).Status);
+        Assert.Equal(1, sends);
+    }
+
+    CrmDb Db() => new(options, new TenantScope { Id = tenant }, protection);
+
+    IServiceScopeFactory Services()
+    {
+        var token = "e30." + Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(new { tenant_id = tenant, exp = DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds() })).TrimEnd('=').Replace('+', '-').Replace('/', '_') + ".synthetic";
+        IConfiguration config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            [$"Hospital:Tenants:{tenant}:BaseUrl"] = "https://hospital.example.invalid/", [$"Hospital:Tenants:{tenant}:AccessToken"] = token,
+            ["REMINDERS_SEND_ENABLED"] = "true", ["KAPSO_API_KEY"] = "synthetic"
+        }).Build();
+        var hospital = new Handler(async (request, ct) =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (path.Contains(hanging.ToString())) { await Task.Delay(Timeout.Infinite, ct); }
+            if (path == $"/v1/patients/{answering}") return Json(new { patientId = answering, phone = second.Phone });
+            if (path == $"/v1/agenda/patients/{answering}") return Json(new { rows = new[] { new { appointmentId = appointment, scheduledStart = start, status = "booked" } } });
+            throw new InvalidOperationException("Unexpected Hospital route");
+        });
+        var kapso = new Handler((request, _) =>
+        {
+            if (request.Method == HttpMethod.Get) return Task.FromResult(request.RequestUri!.AbsolutePath.Contains("message_templates")
+                ? Json(new { data = new[] { new { name = "recepcion_cita_una_hora_v1", language = "es", status = "APPROVED", category = "UTILITY", parameter_format = "NAMED", components = new[] { new { type = "BODY", text = "Cita en {{hospital}} el {{fecha}} a las {{hora}}. BAJA" } } } } })
+                : Json(new { data = new { business_account_id = "synthetic-waba" } }));
+            Interlocked.Increment(ref sends);
+            if (delivery != HttpStatusCode.OK) return Task.FromResult(new HttpResponseMessage(delivery) { Content = new StringContent("{}", Encoding.UTF8, "application/json") });
+            return Task.FromResult(Json(new { messages = new[] { new { id = "reminder-" + Guid.NewGuid() } } }));
+        });
+        var services = new ServiceCollection();
+        services.AddSingleton(config); services.AddSingleton(protection); services.AddScoped<TenantScope>();
+        services.AddScoped(sp => new CrmDb(options, sp.GetRequiredService<TenantScope>(), protection));
+        services.AddScoped(_ => new HospitalClient(new HttpClient(hospital), config));
+        services.AddScoped(_ => new KapsoClient(new HttpClient(kapso), config));
+        services.AddScoped<ConversationService>(); services.AddScoped<AppointmentReminderService>();
+        return services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
+    }
+    static HttpResponseMessage Json(object value) => new(HttpStatusCode.OK) { Content = new StringContent(JsonSerializer.Serialize(value), Encoding.UTF8, "application/json") };
+    sealed class Handler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) => send(request, ct);
+    }
+}

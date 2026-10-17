@@ -49,6 +49,19 @@ public sealed class HospitalClinicalTests
         var result = await client.ReadAsync(tenant, actor.ToString(), token, patient, "50370000001", "timeline", cursor: "a+b/=");
         Assert.Equal("migrated", result.GetProperty("recordOrigin").GetString()); Assert.Equal(2, calls);
     }
+    // MR-10: every staff request to Hospital carries its own correlation id.
+    [Fact]
+    public async Task EveryStaffRequestCarriesItsOwnCorrelationId()
+    {
+        var seen = new List<Guid>();
+        var client = Client(request => {
+            Assert.True(request.Headers.TryGetValues("X-Correlation-Id", out var values) && Guid.TryParse(values.Single(), out var id) && id != Guid.Empty);
+            seen.Add(Guid.Parse(values!.Single()));
+            return request.RequestUri!.AbsolutePath == $"/v1/patients/{patient}" ? Json(new { patientId = patient, phone = "50370000001" }) : Json(new { items = Array.Empty<object>() });
+        });
+        await client.ReadAsync(tenant, actor.ToString(), Token(), patient, "50370000001", "timeline");
+        Assert.Equal(2, seen.Distinct().Count());
+    }
     [Theory][InlineData("phone")][InlineData("patient")]
     public async Task LinkMismatchStopsBeforeClinicalRead(string mismatch)
     {
