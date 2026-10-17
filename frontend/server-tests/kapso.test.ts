@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
+import { registerHooks } from 'node:module';
 import {
   validSignature,
   acceptReceipt,
@@ -11,13 +12,7 @@ import {
 } from '../src/lib/events.ts';
 import { windowOpen, mergeMessages } from '../src/lib/kapso-types.ts';
 import type { Conversation, Message } from '../src/lib/kapso-types.ts';
-import {
-  getConversation,
-  listMessages,
-  sendText,
-  listConversations,
-  cursor,
-} from '../src/lib/kapso.ts';
+import { getConversation, listMessages, listConversations, cursor } from '../src/lib/kapso.ts';
 const number = '613008901896177';
 const id = '11111111-1111-4111-8111-111111111111';
 const conversation: Conversation = {
@@ -132,36 +127,126 @@ test('provider reads scope number, verify conversation ownership and reverse his
   assert.equal(result.paging?.cursors?.after, 'next-cursor');
   assert.throws(() => cursor('a'.repeat(1001)), { status: 400 });
 });
-test('send checks fresh window and binds recipient before any provider send', async (t) => {
-  let current = conversation;
-  let writes = 0;
-  process.env.KAPSO_MANUAL_SEND_ENABLED = 'true';
-  process.env.KAPSO_API_KEY = 'fixture-key';
-  t.mock.method(globalThis, 'fetch', async (_url: string, init: RequestInit) => {
-    if (init.method === 'POST') {
-      writes++;
-      const data = JSON.parse(String(init.body));
-      assert.equal(data.to, '50370000000');
-      return Response.json({ messages: [{ id: 'wamid.sent' }] });
-    }
-    return Response.json({ data: current });
+// MR-36: /inbox sends through Recepción's API (agent paused, Activity, idempotency); never to Kapso.
+test('send goes through the Recepción API with the client key and never POSTs to Kapso', async (t) => {
+  registerHooks({
+    resolve: (specifier, context, next) =>
+      next(specifier === 'next/server' ? 'next/server.js' : specifier, context),
   });
-  await assert.rejects(sendText(id, number, '50379999999', 'test'), { status: 400 });
-  current = { ...conversation, phone_number: null };
-  await assert.rejects(sendText(id, number, '50370000000', 'test'), { status: 400 });
-  current = {
-    ...conversation,
-    kapso: { last_inbound_at: new Date(Date.now() - 86400001).toISOString() },
+  const { NextRequest } = await import('next/server');
+  const { encode } = await import('next-auth/jwt');
+  const { authorizeInbox, sendThroughReception } = await import('../src/lib/inbox-auth.ts');
+  process.env.AUTH_SECRET = 'synthetic-secret-for-tests-only';
+  process.env.NEXTAUTH_URL = 'http://localhost:3215';
+  process.env.API_URL = 'http://api.test';
+  process.env.KAPSO_API_KEY = 'fixture-key';
+  const reception = '22222222-2222-4222-8222-222222222222';
+  const key = '33333333-3333-4333-8333-333333333333';
+  const cookie =
+    'next-auth.session-token=' +
+    (await encode({
+      token: { sub: 'staff', accessToken: 'h.e30.s', accessExpires: Date.now() + 600000 },
+      secret: process.env.AUTH_SECRET,
+    }));
+  // What the API really answers: GET /api/conversations rows and the stored Message.
+  let matches: unknown[] = [{ conversation: { id: reception }, contact: {}, channel: {} }];
+  let sent: Response = Response.json({
+    id: '44444444-4444-4444-8444-444444444444',
+    conversationId: reception,
+    externalId: 'wamid.sent',
+    sender: 'human',
+    body: 'test',
+    type: 'text',
+    status: 'sent',
+    requestKey: key,
+    createdAt: '2026-10-17T15:00:00+00:00',
+  });
+  const calls: { url: string; method: string; headers: Headers; body?: string }[] = [];
+  t.mock.method(globalThis, 'fetch', async (url: string, init: RequestInit = {}) => {
+    const method = init.method ?? 'GET';
+    calls.push({
+      url: String(url),
+      method,
+      headers: new Headers(init.headers),
+      body: init.body ? Buffer.from(init.body as ArrayBuffer).toString() : undefined,
+    });
+    if (String(url) === 'http://api.test/api/channels')
+      return Response.json([{ phoneNumberId: number }]);
+    if (String(url).startsWith(`https://api.kapso.ai/platform/v1/whatsapp/conversations/${id}`))
+      return Response.json({ data: conversation });
+    if (String(url).startsWith('http://api.test/api/conversations?')) return Response.json(matches);
+    if (
+      method === 'POST' &&
+      String(url) === `http://api.test/api/conversations/${reception}/messages`
+    )
+      return sent.clone();
+    return new Response(null, { status: 404 });
+  });
+  const send = async (to: string, idempotencyKey = key) => {
+    const req = new NextRequest(`http://localhost:3215/api/messages?phoneNumberId=${number}`, {
+      method: 'POST',
+      headers: { cookie, origin: 'http://localhost:3215', 'idempotency-key': idempotencyKey },
+    });
+    const { headers } = await authorizeInbox(req);
+    return sendThroughReception(req, number, headers, { conversationId: id, to, text: 'test' });
   };
-  await assert.rejects(sendText(id, number, '50370000000', 'test'), { status: 409 });
-  assert.equal(writes, 0);
-  current = conversation;
-  process.env.KAPSO_MANUAL_SEND_ENABLED = 'false';
-  await assert.rejects(sendText(id, number, '50370000000', 'test'), { status: 403 });
-  process.env.KAPSO_MANUAL_SEND_ENABLED = 'true';
-  assert.equal((await sendText(id, number, '50370000000', 'test')).id, 'wamid.sent');
-  assert.equal(writes, 1);
-  process.env.KAPSO_MANUAL_SEND_ENABLED = 'false';
+  const posts = () => calls.filter((c) => c.method === 'POST');
+
+  const message = await send('+50370000000');
+  assert.equal(message.id, 'wamid.sent');
+  assert.equal(message.kapso?.status, 'sent');
+  assert.equal(message.kapso?.whatsapp_conversation_id, id);
+  const lookup = new URL(
+    calls.find((c) => c.url.startsWith('http://api.test/api/conversations?'))!.url,
+  );
+  assert.equal(lookup.searchParams.get('phone'), '+50370000000');
+  assert.equal(lookup.searchParams.get('phoneNumberId'), number);
+  assert.equal(posts().length, 1);
+  assert.equal(posts()[0].url, `http://api.test/api/conversations/${reception}/messages`);
+  assert.equal(posts()[0].headers.get('idempotency-key'), key);
+  assert.deepEqual(JSON.parse(posts()[0].body!), { body: 'test' });
+  assert.equal(
+    calls.filter((c) => c.url.startsWith('https://api.kapso.ai') && c.method !== 'GET').length,
+    0,
+  );
+
+  calls.length = 0;
+  await assert.rejects(send('50379999999'), { status: 400 });
+  await assert.rejects(send('50370000000', 'not a key'), { status: 400 });
+  matches = [];
+  await assert.rejects(send('50370000000'), {
+    status: 409,
+    message: 'Esta conversación aún no está en Recepción',
+  });
+  matches = [{ conversation: { id: reception } }, { conversation: { id: id } }];
+  await assert.rejects(send('50370000000'), {
+    status: 409,
+    message: 'Esta conversación aún no está en Recepción',
+  });
+  assert.equal(posts().length, 0);
+
+  // The API decides whether manual sending is on; its refusal reaches the UI as it was written.
+  matches = [{ conversation: { id: reception } }];
+  sent = Response.json(
+    { title: 'El envío manual está en pausa. Solicita a administración habilitarlo.', status: 400 },
+    { status: 400 },
+  );
+  await assert.rejects(send('50370000000'), {
+    status: 400,
+    message: 'El envío manual está en pausa. Solicita a administración habilitarlo.',
+  });
+  sent = Response.json({
+    id: reception,
+    externalId: null,
+    body: 'test',
+    status: 'uncertain',
+    createdAt: '2026-10-17T15:00:00+00:00',
+  });
+  await assert.rejects(send('50370000000'), { status: 502 });
+  assert.equal(
+    calls.filter((c) => c.url.startsWith('https://api.kapso.ai') && c.method !== 'GET').length,
+    0,
+  );
 });
 
 test('shared signed receiver routes each number separately without trusting inconsistent scopes', () => {

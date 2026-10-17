@@ -153,6 +153,10 @@ test('optimistic send reconciles SSE and ACK without duplicate or regressed chec
       to: base.phone_number,
       text: sent.text.body,
     });
+    // MR-36: the pending message's uuid is the key Recepción deduplicates by.
+    expect(route.request().headers()['idempotency-key']).toMatch(
+      /^[a-f\d]{8}-[a-f\d]{4}-4[a-f\d]{3}-[89ab][a-f\d]{3}-[a-f\d]{12}$/,
+    );
     await page.evaluate(
       (event) => window.dispatchEvent(new CustomEvent('kapso-test-event', { detail: event })),
       {

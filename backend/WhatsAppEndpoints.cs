@@ -6,6 +6,13 @@ namespace Recepcion;
 
 public static class WhatsAppEndpoints
 {
+    /// <summary>A reply typed by the staff, from the CRM or /inbox: pauses the agent, leaves the Activity and is idempotent by the client's key.</summary>
+    public static async Task<IResult> SendMessage(Guid id, SendInput b, HttpContext ctx, CrmDb db, TenantScope t, CurrentUser u, ConversationService svc)
+    {
+        var conv = await db.Conversations.SingleOrDefaultAsync(x => x.Id == id); if (conv is null) return Results.NotFound();
+        using (var teamLease = await svc.Lock(t.Id)) using (var l = await svc.Lock(id)) { await db.Entry(conv).ReloadAsync(); TeamEndpoints.RequireEditable(conv,u); InboxWorkflow.SetState(conv,"open"); conv.Status = "human"; conv.AssignedTo = u.Subject; conv.Revision++; await db.SaveChangesAsync(); }
+        var msg = await svc.Send(id, Rules.Required(b.Body, 4000), "human", ctx.Request.Headers["Idempotency-Key"].ToString(), actingSubject: u.Subject, actor: u); CrmEndpoints.Audit(db, t, u, "message.sent", msg.Id); await db.SaveChangesAsync(); return Results.Ok(msg);
+    }
     public static void MapWhatsApp(this WebApplication app)
     {
         var api = app.MapGroup("/api").RequireAuthorization();
@@ -26,12 +33,7 @@ public static class WhatsAppEndpoints
             return conv.Select(x => new { conversation = x, contact = contacts.GetValueOrDefault(x.ContactId), channel = channels.GetValueOrDefault(x.ChannelId),unreadCount=unread.GetValueOrDefault(x.Id) });
         });
         api.MapGet("/conversations/{id:guid}/messages", async (Guid id, CrmDb db) => await db.Conversations.AnyAsync(x => x.Id == id) ? Results.Ok(await db.Messages.Where(x => x.ConversationId == id).OrderByDescending(x => x.CreatedAt).Take(200).OrderBy(x => x.CreatedAt).ToListAsync()) : Results.NotFound());
-        api.MapPost("/conversations/{id:guid}/messages", async (Guid id, SendInput b, HttpContext ctx, CrmDb db, TenantScope t, CurrentUser u, ConversationService svc) =>
-        {
-            var conv = await db.Conversations.SingleOrDefaultAsync(x => x.Id == id); if (conv is null) return Results.NotFound();
-            using (var teamLease = await svc.Lock(t.Id)) using (var l = await svc.Lock(id)) { await db.Entry(conv).ReloadAsync(); TeamEndpoints.RequireEditable(conv,u); InboxWorkflow.SetState(conv,"open"); conv.Status = "human"; conv.AssignedTo = u.Subject; conv.Revision++; await db.SaveChangesAsync(); }
-            var msg = await svc.Send(id, Rules.Required(b.Body, 4000), "human", ctx.Request.Headers["Idempotency-Key"].ToString(), actingSubject: u.Subject, actor: u); CrmEndpoints.Audit(db, t, u, "message.sent", msg.Id); await db.SaveChangesAsync(); return Results.Ok(msg);
-        });
+        api.MapPost("/conversations/{id:guid}/messages", SendMessage);
         api.MapPost("/conversations/{id:guid}/media", async (Guid id, HttpContext ctx, CrmDb db, TenantScope t, CurrentUser u, KapsoClient kapso, ConversationService svc) =>
         {
             var conv = await db.Conversations.SingleOrDefaultAsync(x => x.Id == id); if (conv is null) return Results.NotFound();
