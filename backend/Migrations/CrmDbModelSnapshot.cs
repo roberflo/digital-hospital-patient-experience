@@ -760,6 +760,8 @@ namespace Recepcion.Api.Migrations
 
                     b.HasAlternateKey("TenantId", "Id");
 
+                    b.HasIndex("TenantId", "CreatedAt");
+
                     b.HasIndex("TenantId", "Key")
                         .IsUnique();
 

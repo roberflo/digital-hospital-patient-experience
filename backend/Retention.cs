@@ -11,13 +11,21 @@ public static class Retention
     public static readonly TimeSpan Keep = TimeSpan.FromDays(30);
     // ponytail: once a day per process, in memory; each replica sweeps once a day (the deletes are idempotent). A shared last-run row if that ever costs.
     static readonly ConcurrentDictionary<Guid, DateOnly> swept = new();
-    public static async Task Daily(CrmDb d, Guid tenant, CancellationToken ct)
+    /// <summary>Deletes in statements of <paramref name="batch"/> rows, at most <paramref name="cap"/> per table a day; what is left waits for tomorrow.
+    /// A failure is logged by type only and the day still counts as swept, so a broken sweep is retried tomorrow, not on every tick.</summary>
+    public static async Task Daily(CrmDb d, Guid tenant, ILogger log, CancellationToken ct, int batch = 5000, int cap = 100_000)
     {
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         if (swept.TryGetValue(tenant, out var day) && day == today) return;
-        var cutoff = DateTimeOffset.UtcNow - Keep;
-        await d.Jobs.Where(x => (x.Status == "done" || x.Status == "failed") && x.CreatedAt < cutoff).ExecuteDeleteAsync(ct);
-        await d.Receipts.Where(x => x.CreatedAt < cutoff).ExecuteDeleteAsync(ct);
         swept[tenant] = today;
+        var cutoff = DateTimeOffset.UtcNow - Keep;
+        try
+        {
+            for (int n = 0, deleted = batch; deleted == batch && n < cap; n += deleted)
+                deleted = await d.Jobs.Where(x => (x.Status == "done" || x.Status == "failed") && x.CreatedAt < cutoff).OrderBy(x => x.CreatedAt).Take(Math.Min(batch, cap - n)).ExecuteDeleteAsync(ct);
+            for (int n = 0, deleted = batch; deleted == batch && n < cap; n += deleted)
+                deleted = await d.Receipts.Where(x => x.CreatedAt < cutoff).OrderBy(x => x.CreatedAt).Take(Math.Min(batch, cap - n)).ExecuteDeleteAsync(ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested) { log.LogWarning("Retention sweep failed {ErrorType}. Tenant {TenantId}.", ex.GetBaseException().GetType().Name, tenant); }
     }
 }

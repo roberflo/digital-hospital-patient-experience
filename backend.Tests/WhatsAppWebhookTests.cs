@@ -87,6 +87,20 @@ public sealed class WhatsAppWebhookTests : IAsyncLifetime
         Assert.Equal(200, await Post(json)); // INV-6: Kapso redelivers the same event; no second message, job or receipt.
         Assert.Equal((1, 1, 1, 1, true), await Rows());
     }
+    [Fact] public async Task ARedeliveryAfterTheReceiptIsSweptStillAddsNothing()
+    {
+        // MR-39: the receipt lives 30 days; past that, the message's ExternalId is what keeps a redelivery from becoming a second turn.
+        var json = Inbound("wamid.swept");
+        Assert.Equal(200, await Post(json));
+        await using (var db = Db())
+        {
+            (await db.Receipts.SingleAsync()).CreatedAt = DateTimeOffset.UtcNow.AddDays(-31); await db.SaveChangesAsync();
+            await Retention.Daily(db, tenant, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, CancellationToken.None);
+            Assert.Empty(await db.Receipts.ToListAsync());
+        }
+        Assert.Equal(200, await Post(json, delivery: "delivery-2"));
+        Assert.Equal((1, 1, 1, 1, true), await Rows());
+    }
     [Theory]
     [InlineData("{\"phone_number_id\":")] // truncated
     [InlineData("not json")]
