@@ -51,7 +51,8 @@ public static class HospitalEndpoints
             if(!await h.IsSlotAvailableAsync(t.Id,input.DoctorId,input.StartsAt,input.DurationMinutes,zone))return Results.Conflict(new{title="El horario ya no está disponible"});
         }
         if (input.Action == "create") visit ??= await h.FirstOrFollowUpAsync(t.Id, contact.PatientId.Value, input.StartsAt);
-        var key = Rules.Required(ctx.Request.Headers["Idempotency-Key"].ToString(), 100);
+        // 94: «staff:» plus the browser's key fits Hospital's 100 (MR-41).
+        var key = Rules.Required(ctx.Request.Headers["Idempotency-Key"].ToString(), 94);
         // MR-41: the browser's key reaches Hospital on a create, checked against Hospital's format before the receipt spends it.
         var hospitalKey = input.Action == "create" ? HospitalClient.IdempotencyKey("staff:" + key) : null;
         if (await db.Receipts.AnyAsync(x => x.Key == "appointment:" + key)) return Results.Conflict(new { title = "Solicitud ya procesada. Comprueba la agenda antes de repetir." });
@@ -59,7 +60,9 @@ public static class HospitalEndpoints
         db.Receipts.Add(receipt); CrmEndpoints.Audit(db, t, u, "appointment.requested", contact.Id); await db.SaveChangesAsync();
         try { return await Apply(input, db, h, t, u, contact, contact.PatientId.Value, visit, hospitalKey); }
         // Hospital refused the person (401/403), or their token was refused before it was sent: nothing was applied, so the key is not spent.
-        catch (HospitalIntegrationException e) when (e.Code is "hospital.user_forbidden" or "hospital.user_token_rejected")
+        // A create that timed out is uncertain, but Hospital deduplicates it by its Idempotency-Key (MR-41): the key is freed so the same request,
+        // sent again with the same key, reaches Hospital and gets the original appointment. Cancelling and moving carry no key to Hospital: those stay spent.
+        catch (HospitalIntegrationException e) when (e.Code is "hospital.user_forbidden" or "hospital.user_token_rejected" || e.Code == "hospital.timeout" && hospitalKey is not null)
         { db.Receipts.Remove(receipt); await db.SaveChangesAsync(); throw; }
     }
     static async Task<IResult> Apply(AppointmentInput input, CrmDb db, HospitalClient h, TenantScope t, CurrentUser u, Contact contact, Guid patientId, string? visit, string? hospitalKey)

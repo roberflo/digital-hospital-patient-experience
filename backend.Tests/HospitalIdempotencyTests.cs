@@ -24,16 +24,16 @@ public sealed class HospitalIdempotencyTests : IAsyncLifetime
 
     /// <summary>Every write sent to Hospital, with the Idempotency-Key it carried (null when it carried none).</summary>
     readonly List<(string Path, string? Key)> writes = [];
-    /// <summary>The harness's Hospital, which also registers adults; <paramref name="refuse"/> answers a write instead of it.</summary>
+    /// <summary>The harness's Hospital, which also registers adults; <paramref name="refuse"/> answers any write (or throws) instead of it.</summary>
     AgentHarness.Fake Hospital(Func<HttpRequestMessage, HttpResponseMessage?>? refuse = null)
     {
         var inner = new HttpMessageInvoker(h.Hospital(availability: Agenda())); var created = Guid.NewGuid();
         return new(async request =>
         {
             var path = request.RequestUri!.AbsolutePath;
-            if (request.Method == HttpMethod.Post && path is "/v1/agenda" or "/v1/patients")
+            if (request.Method == HttpMethod.Post)
             {
-                lock (writes) writes.Add((path, request.Headers.TryGetValues("Idempotency-Key", out var keys) ? keys.Single() : null));
+                if (path is "/v1/agenda" or "/v1/patients") lock (writes) writes.Add((path, request.Headers.TryGetValues("Idempotency-Key", out var keys) ? keys.Single() : null));
                 if (refuse?.Invoke(request) is { } refusal) return refusal;
                 if (path == "/v1/patients") { var registered = AgentHarness.Json(new { created = true, patientId = created, duplicateCandidates = Array.Empty<object>() }); registered.StatusCode = HttpStatusCode.Created; return registered; }
             }
@@ -70,7 +70,8 @@ public sealed class HospitalIdempotencyTests : IAsyncLifetime
     [Fact]
     public async Task ConfirmingTheSameProposalAgainSendsTheSameKey()
     {
-        // What a replay of the same confirmation sends: the key comes from the proposal, not from the turn or the job that runs it.
+        // Simulates a resend that production prevents: Confirm consumes the proposal before writing, so the same proposal is never confirmed
+        // twice. Reopening it here only shows that the key comes from the proposal, not from the turn or the job that runs it.
         await h.Link(); var hospital = Hospital();
         var proposal = await ProposeAppointment(hospital); var body = proposal.Body;
         await Confirm(proposal, hospital);
@@ -92,6 +93,21 @@ public sealed class HospitalIdempotencyTests : IAsyncLifetime
 
         Assert.Equal(("/v1/patients", "agent-register:" + proposal.Id), Assert.Single(writes));
         await h.Db.Entry(h.Contact).ReloadAsync(); Assert.NotNull(h.Contact.PatientId);
+    }
+
+    [Fact]
+    public async Task ARegistrationWithItsHourKeysEachWriteByTheSameProposal()
+    {
+        var hospital = Hospital();
+        var proposal = await Propose(hospital, "propose_registration", Adult);
+        // The hour tapped before the form, with the keys ProposeRegistration stores it under: one card, one Confirmar.
+        var card = System.Text.Json.Nodes.JsonNode.Parse(proposal.Body)!.AsObject();
+        card["startsAt"] = Start.ToString("O"); card["doctorId"] = Doctor.ToString(); card["durationMinutes"] = 30;
+        proposal.Body = card.ToJsonString(); await h.Db.SaveChangesAsync();
+
+        await Confirm(proposal, hospital);
+
+        Assert.Equal([("/v1/patients", "agent-register:" + proposal.Id), ("/v1/agenda", "agent:" + proposal.Id)], writes);
     }
 
     [Theory]
@@ -142,6 +158,50 @@ public sealed class HospitalIdempotencyTests : IAsyncLifetime
         Assert.Single(writes);
         // The result is uncertain: the key stays spent, so the same request is not sent again from here.
         Assert.True(await h.Db.Receipts.AnyAsync(r => r.Key == "appointment:" + key));
+    }
+
+    [Fact]
+    public async Task AfterATimeoutTheTeamRepeatsTheCreateWithTheSameKeyAndGetsTheOriginal()
+    {
+        // N1 (coordinator's decision): a create that timed out frees its receipt, so repeating it with the same key reaches Hospital, which
+        // answers the original appointment by its Idempotency-Key. No duplicate can come of it: Hospital deduplicates.
+        await h.Link(); var key = Guid.NewGuid().ToString(); var original = Guid.NewGuid(); var timeout = true;
+        var hospital = Hospital(request => request.RequestUri!.AbsolutePath != "/v1/agenda" ? null
+            : timeout ? throw new TaskCanceledException("Synthetic Hospital timeout", new TimeoutException())
+            : AgentHarness.Json(new { appointmentId = original, status = "booked", overlaps = false }));
+
+        var error = await Assert.ThrowsAsync<HospitalIntegrationException>(() => StaffBooks(hospital, key));
+        Assert.Equal("hospital.timeout", error.Code);
+        timeout = false;
+        var retried = await StaffBooks(hospital, key);
+
+        Assert.Equal(StatusCodes.Status200OK, ((IStatusCodeHttpResult)retried).StatusCode);
+        Assert.Equal(original, ((IValueHttpResult)retried).Value is HospitalAppointmentCreated created ? created.AppointmentId : Guid.Empty);
+        Assert.Equal([("/v1/agenda", "staff:" + key), ("/v1/agenda", "staff:" + key)], writes);
+    }
+
+    [Theory]
+    [InlineData("reschedule")]
+    [InlineData("cancel")]
+    public async Task OnlyACreateFreesItsKeyAfterATimeout(string action)
+    {
+        await h.Link(); var key = Guid.NewGuid().ToString();
+        var hospital = Hospital(request => request.Method == HttpMethod.Post && request.RequestUri!.AbsolutePath.EndsWith("/" + action) ? throw new TaskCanceledException("Synthetic Hospital timeout", new TimeoutException()) : null);
+
+        await Assert.ThrowsAsync<HospitalIntegrationException>(() => HospitalEndpoints.ChangeAppointment(new AppointmentInput(h.Contact.Id, action, Guid.NewGuid(), Doctor, Start, 30, action == "cancel" ? "patient-requested" : null), Staff(key), h.Db, h.Client(hospital), h.Scope, new CurrentUser { Subject = "staff-1", Name = "Recepción Sintética", Role = "agent" }));
+
+        Assert.True(await h.Db.Receipts.AnyAsync(r => r.Key == "appointment:" + key));
+    }
+
+    [Fact]
+    public async Task ABrowserKeyTooLongForTheStaffPrefixIsRefusedBeforeAnythingIsSpent()
+    {
+        await h.Link(); var key = new string('a', 95); // «staff:» + 95 would be 101, past Hospital's 100
+
+        await Assert.ThrowsAsync<ArgumentException>(() => StaffBooks(Hospital(), key));
+
+        Assert.Empty(writes);
+        Assert.False(await h.Db.Receipts.AnyAsync(r => r.Key == "appointment:" + key));
     }
 
     [Theory]
