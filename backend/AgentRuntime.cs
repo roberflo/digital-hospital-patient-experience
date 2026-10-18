@@ -981,7 +981,8 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         // and the history says a confirmation was processed, and of what.
         db.Activities.Add(new Activity { TenantId = scope.Id, ContactId = contact.Id, ConversationId = conv.Id, Kind = "proposal_used:" + code, Actor = "Agente", ActorRole = "agent_ai", Body = new JsonObject { ["action"] = action, ["startsAt"] = p.TryGetProperty("startsAt", out var at) ? at.GetString() : null, ["appointmentId"] = p.TryGetProperty("appointmentId", out var which) ? which.GetString() : null }.ToJsonString() });
         await Consume(proposal, ct);
-        // MR-41: what Hospital will key this confirmation's writes by; one proposal, one operation.
+        // MR-41: what Hospital keys this confirmation's writes by; one proposal, one operation. From the proposal, never the turn or the job,
+        // so the same confirmation sent again is answered with the original. The registration has its own key, of the same proposal.
         var idempotency = "agent:" + proposal.Id;
         // A registration made after tapping an hour carries the appointment in the same proposal: one decision, one Confirmar.
         var registered = action == "register"; var booking = action is "create" or "reschedule" || (registered && p.TryGetProperty("startsAt", out _)); string? wanted = null;
@@ -1002,7 +1003,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             if (registered)
             {
                 // 2. POST of the patient, 3. verify and link. False means a possible duplicate or a contact already linked: nothing else happens.
-                written = true; if (!await Register(conv, contact, p, wanted, job, ct)) return;
+                written = true; if (!await Register(conv, contact, p, wanted, job, "agent-register:" + proposal.Id, ct)) return;
                 // The patient confirmed their data, so they are registered even when the hour is gone; the free hours go out with it, without being asked for.
                 if (!booking || !free) { await OfferSlots(true, null, ct, booking ? "Ya te registré. Ese horario se acaba de ocupar.\n" : $"Listo{(FirstName(contact.Name) is { } welcome ? ", " + welcome : "")}, ya te registré.\n"); return; }
                 action = "create"; // 4. the appointment, by the same path as any other: reachable only with the record created and linked in this turn
@@ -1025,7 +1026,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
                 if (action == "reschedule") await hospital.RescheduleAppointmentAsync(scope.Id, contact.PatientId!.Value, contact.Phone, p.GetProperty("appointmentId").GetGuid(), doctor, start, duration, ct);
                 else
                 {
-                    var created = await hospital.CreateAppointmentAsync(scope.Id, contact.Phone, new HospitalAppointmentCreate(contact.PatientId!.Value, doctor, start, duration, visit!), ct);
+                    var created = await hospital.CreateAppointmentAsync(scope.Id, contact.Phone, new HospitalAppointmentCreate(contact.PatientId!.Value, doctor, start, duration, visit!), idempotency, ct);
                     // Hospital's overlap probe counts cancelled appointments too, so a slot the agenda shows free can answer «overlaps».
                     // The agenda's own count decides: only another active appointment in the slot is a real overlap for a person to sort out.
                     // An answer with no appointment in it is not a booking: the team checks Hospital (MR-5).
@@ -1056,11 +1057,11 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
     }
     /// <summary>Creates the record in Hospital, verifies it answers with this phone and links it. False when nothing was linked: a possible
     /// duplicate (never forced; reception decides, and reads which hour was wanted) or a contact that already has a record.</summary>
-    async Task<bool> Register(Conversation conv, Contact contact, JsonElement p, string? wanted, Job job, CancellationToken ct)
+    async Task<bool> Register(Conversation conv, Contact contact, JsonElement p, string? wanted, Job job, string key, CancellationToken ct)
     {
         if (contact.PatientId is not null) { await conversations.Send(conv.Id, "Ya tienes expediente en el hospital.\n¿Para qué día quieres tu cita?", "agent", "confirm:" + job.Id, ct: ct); return false; }
         string Field(string name) => p.GetProperty(name).GetString()!;
-        var registered = await hospital.RegisterPatientAsync(scope.Id, new HospitalPatientRegistration(Field("givenNames"), Field("familyNames"), DateOnly.ParseExact(Field("birthDate"), "yyyy-MM-dd"), Field("sex"), contact.Phone, Field("emergencyName"), Field("emergencyRelationship"), Field("emergencyPhone")), ct);
+        var registered = await hospital.RegisterPatientAsync(scope.Id, new HospitalPatientRegistration(Field("givenNames"), Field("familyNames"), DateOnly.ParseExact(Field("birthDate"), "yyyy-MM-dd"), Field("sex"), contact.Phone, Field("emergencyName"), Field("emergencyRelationship"), Field("emergencyPhone")), key, ct);
         if (!registered.Created || registered.PatientId is not { } patient) { await OfferPerson("Registro por WhatsApp detenido: Hospital encontró un posible expediente existente. Recepción debe revisarlo y vincularlo." + (wanted is null ? "" : $" Quería cita el {wanted}."), "Encontré un expediente que podría ser tuyo.\nVincularlo le toca a recepción.", ct); return false; }
         // Same check as a manual link: the record Hospital created must answer with this conversation's phone.
         unverified = patient; await hospital.GetVerifiedPatientAsync(scope.Id, patient, contact.Phone, ct); unverified = null;

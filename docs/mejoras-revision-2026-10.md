@@ -125,7 +125,7 @@ Commits de Recepción salvo «Hospital». Fecha de todos: 2026-10-17.
 | MR-38 | Pendiente: en curso en la rama `mr/rec-38` | — |
 | MR-39 | Hecho | `2deb945`, `834079f` |
 | MR-40 | Hecho; nits de revisión en `mr/rec-d` | `4aabc9d`, `5a3c5d0`, `1e16e28` |
-| MR-41 | Parcial: Hospital acepta la cabecera; **Recepción todavía no la envía** en `POST v1/agenda` ni `POST v1/patients` | Hospital `4daedd9d`, `71187473`, `c1655713` |
+| MR-41 | Hecho: Recepción envía `Idempotency-Key` en `POST v1/agenda` y `POST v1/patients` (agente `agent:`/`agent-register:` + id de la propuesta; personal `staff:` + la clave del navegador); un 409 `*.idempotency_key_reused` se concilia, nunca se reintenta | Hospital `4daedd9d`, `71187473`, `c1655713`; Recepción rama `mr/rec-41`, `HospitalIdempotencyTests` |
 | MR-42 | Hecho | `4aabc9d`, `91a4f25`, `5a3c5d0`; Hospital `c971eab7`, `fe0fd635` |
 
 ## Anti-criterios

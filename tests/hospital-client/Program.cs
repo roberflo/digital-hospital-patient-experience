@@ -71,10 +71,11 @@ var createHandler = new FakeHandler(request =>
     Assert(body.RootElement.GetProperty("patientId").GetGuid() == patient, "Create patient");
     Assert(body.RootElement.GetProperty("clinicianId").GetGuid() == clinician, "Create clinician");
     Assert(body.RootElement.GetProperty("visitKind").GetString() == "follow-up", "Wire visit kind");
+    Assert(request.Headers.GetValues("Idempotency-Key").Single() == "check:create-1", "Create idempotency key");
     return Ok(new { appointmentId = appointment, status = "booked", overlaps = true });
 });
 var created = await new HospitalClient(new HttpClient(createHandler), config).CreateAppointmentAsync(tenant,
-    "50370000001", new(patient, clinician, DateTimeOffset.UtcNow.AddDays(1), 30, "follow-up"));
+    "50370000001", new(patient, clinician, DateTimeOffset.UtcNow.AddDays(1), 30, "follow-up"), "check:create-1");
 Assert(created.Overlaps && created.AppointmentId == appointment, "Overlap signal preserved");
 Console.WriteLine("PASS: hospital client phone linkage, tenant/expiry guard, cross-patient appointment and prescription isolation, clinical gate, error redaction, exact booking contract and overlap signal.");
 

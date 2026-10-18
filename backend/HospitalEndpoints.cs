@@ -52,15 +52,17 @@ public static class HospitalEndpoints
         }
         if (input.Action == "create") visit ??= await h.FirstOrFollowUpAsync(t.Id, contact.PatientId.Value, input.StartsAt);
         var key = Rules.Required(ctx.Request.Headers["Idempotency-Key"].ToString(), 100);
+        // MR-41: the browser's key reaches Hospital on a create, checked against Hospital's format before the receipt spends it.
+        var hospitalKey = input.Action == "create" ? HospitalClient.IdempotencyKey("staff:" + key) : null;
         if (await db.Receipts.AnyAsync(x => x.Key == "appointment:" + key)) return Results.Conflict(new { title = "Solicitud ya procesada. Comprueba la agenda antes de repetir." });
         var receipt = new Receipt { TenantId = t.Id, Key = "appointment:" + key };
         db.Receipts.Add(receipt); CrmEndpoints.Audit(db, t, u, "appointment.requested", contact.Id); await db.SaveChangesAsync();
-        try { return await Apply(input, db, h, t, u, contact, contact.PatientId.Value, visit); }
+        try { return await Apply(input, db, h, t, u, contact, contact.PatientId.Value, visit, hospitalKey); }
         // Hospital refused the person (401/403), or their token was refused before it was sent: nothing was applied, so the key is not spent.
         catch (HospitalIntegrationException e) when (e.Code is "hospital.user_forbidden" or "hospital.user_token_rejected")
         { db.Receipts.Remove(receipt); await db.SaveChangesAsync(); throw; }
     }
-    static async Task<IResult> Apply(AppointmentInput input, CrmDb db, HospitalClient h, TenantScope t, CurrentUser u, Contact contact, Guid patientId, string? visit)
+    static async Task<IResult> Apply(AppointmentInput input, CrmDb db, HospitalClient h, TenantScope t, CurrentUser u, Contact contact, Guid patientId, string? visit, string? hospitalKey)
     {
         void Record(string text){db.Activities.Add(new Activity{TenantId=t.Id,ContactId=contact.Id,Kind="appointment",Actor=u.Name,ActorRole=u.Role,ActorSubject=u.Subject,Body=text});}
         if (input.Action == "cancel")
@@ -72,7 +74,7 @@ public static class HospitalEndpoints
         {
             await h.RescheduleAppointmentAsync(t.Id, patientId, contact.Phone, input.AppointmentId ?? throw new ArgumentException("Cita requerida"), input.DoctorId, input.StartsAt, input.DurationMinutes); Record("Cita reprogramada en Hospital.");await db.SaveChangesAsync();return Results.Ok(new { status = "rescheduled" });
         }
-        var result=await h.CreateAppointmentAsync(t.Id, contact.Phone, new(patientId, input.DoctorId, input.StartsAt, input.DurationMinutes, visit!));
+        var result=await h.CreateAppointmentAsync(t.Id, contact.Phone, new(patientId, input.DoctorId, input.StartsAt, input.DurationMinutes, visit!), hospitalKey!);
         Record(result.Overlaps?"Cita registrada en Hospital con solapamiento; requiere revisión.":"Cita registrada en Hospital.");await db.SaveChangesAsync();return Results.Ok(result);
     }
 }

@@ -112,16 +112,22 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
             }).ToArray(), Json);
     }
 
+    /// <summary>MR-41: Hospital keeps a create's key per tenant and caller; the same key and body answers the original, another body is a
+    /// 409 <c>*.idempotency_key_reused</c>. This is Hospital's own format, checked here so a key it would refuse is never sent.</summary>
+    public static string IdempotencyKey(string key) =>
+        System.Text.RegularExpressions.Regex.IsMatch(key, @"^[A-Za-z0-9:_-]{1,100}\z") ? key : throw new ArgumentException("Clave de idempotencia inválida.");
+
     public async Task<HospitalAppointmentCreated> CreateAppointmentAsync(Guid tenantId,
-        string senderPhone, HospitalAppointmentCreate input, CancellationToken ct = default)
+        string senderPhone, HospitalAppointmentCreate input, string idempotencyKey, CancellationToken ct = default)
     {
+        IdempotencyKey(idempotencyKey);
         await GetVerifiedPatientAsync(tenantId, input.PatientId, senderPhone, ct);
         ValidateAppointment(input.ClinicianId, input.StartsAt, input.DurationMinutes);
         if (!VisitKinds.Contains(input.VisitKind))
             throw new ArgumentException("Unknown hospital visit kind.");
-        // Hospital deliberately accepts attributed overlaps. The caller must surface Overlaps,
-        // never blindly retry this POST after a timeout (hospital has no idempotency contract).
-        using var response = await SendAsync(tenantId, HttpMethod.Post, "v1/agenda", input, ct);
+        // Hospital deliberately accepts attributed overlaps. The caller must surface Overlaps. Sent again with the same key after a timeout,
+        // Hospital answers the original appointment (MR-41); nothing here retries it, and a reused key is the caller's to reconcile.
+        using var response = await SendAsync(tenantId, HttpMethod.Post, "v1/agenda", input, ct, idempotencyKey);
         return await ParseAsync<HospitalAppointmentCreated>(response, ct);
     }
 
@@ -251,7 +257,7 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
         ?? throw new HospitalIntegrationException("hospital.empty_response", HttpStatusCode.BadGateway);
 
     private async Task<HttpResponseMessage> SendAsync(Guid tenantId, HttpMethod method,
-        string path, object? body, CancellationToken ct)
+        string path, object? body, CancellationToken ct, string? idempotencyKey = null)
     {
         var tenant = Tenant(tenantId);
         if (!Uri.TryCreate(tenant["BaseUrl"]?.TrimEnd('/') + "/", UriKind.Absolute, out var baseUri)
@@ -265,6 +271,7 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
         using var request = new HttpRequestMessage(method, new Uri(baseUri, path));
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         request.Headers.Add("X-Correlation-Id", (correlation ?? Guid.NewGuid()).ToString("D"));
+        if (idempotencyKey is not null) request.Headers.Add("Idempotency-Key", idempotencyKey);
         if (body is not null) request.Content = JsonContent.Create(body, options: Json);
         HttpResponseMessage response;
         // HttpClient.Timeout, not the caller giving up. Hospital may still have applied a write: never retried here.
@@ -283,12 +290,16 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
             // A token Hospital no longer accepts (revoked, rotated keys) is dropped; the next request asks for a new one, this one is not retried.
             // Only the entry holding the rejected token: one another request has just stored stays.
             if (status == HttpStatusCode.Unauthorized) foreach (var entry in Tokens.Where(e => e.Key.Tenant == tenantId && e.Value.Token == token)) Tokens.TryRemove(entry);
-            if(path.StartsWith("v1/commercial/",StringComparison.Ordinal))
+            var commercial=path.StartsWith("v1/commercial/",StringComparison.Ordinal);
+            // A keyed create refused for its key is named (MR-41): the caller reconciles it instead of reading a generic 409.
+            if(commercial || idempotencyKey is not null && status==HttpStatusCode.Conflict)
             {
                 try
                 {
                     var problem=await response.Content.ReadFromJsonAsync<JsonElement>(ct);
-                    if(problem.TryGetProperty("code",out var value)&&value.GetString() is {} commercialCode && commercialCode.StartsWith("commercial.",StringComparison.Ordinal) && commercialCode.Length<100 && commercialCode.All(c=>char.IsAsciiLetterOrDigit(c)||c is '.' or '_'))code=commercialCode;
+                    if(problem.TryGetProperty("code",out var value)&&value.GetString() is {} named && (commercial
+                        ? named.StartsWith("commercial.",StringComparison.Ordinal) && named.Length<100 && named.All(c=>char.IsAsciiLetterOrDigit(c)||c is '.' or '_')
+                        : named is "scheduling.idempotency_key_reused" or "patient.idempotency_key_reused"))code=named;
                 }
                 catch(JsonException) { }
             }
@@ -392,6 +403,7 @@ public sealed class HospitalIntegrationException(string code, HttpStatusCode sta
         "hospital.user_token_rejected" => "Hospital no aceptó tu sesión. Recarga la página; si continúa, consulta al administrador.",
         "hospital.http_403" or "hospital.clinical_delivery_not_authorized" => "Tu cuenta no tiene permiso para esta operación en Hospital. Consulta al administrador.",
         "hospital.http_404" or "hospital.prescription_unavailable" or "hospital.appointment_unavailable" => "No encontramos la cita o el documento en Hospital. Actualiza la información y vuelve a intentar.",
+        "scheduling.idempotency_key_reused" or "patient.idempotency_key_reused" => "Hospital ya tiene esta solicitud registrada con otros datos. Comprueba la agenda del paciente antes de repetirla.",
         "hospital.http_409" => "La información cambió en Hospital. Actualiza la agenda antes de continuar.",
         "hospital.timeout" => "Hospital no respondió a tiempo. Comprueba la agenda antes de reintentar.",
         _ => "No pudimos completar la operación en Hospital. Revisa la conexión desde Mi hospital y vuelve a intentar."
