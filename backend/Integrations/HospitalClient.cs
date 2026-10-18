@@ -285,7 +285,7 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
 
     // ponytail: one dictionary per process, never trimmed (one entry per hospital credential) and with no lock: two requests on a cold or
     // expiring entry both ask Keycloak, and each replica keeps its own. Keyed by tenant as well as credential, so a token never crosses
-    // hospitals; the secret's hash is in the key so a changed secret is tested, not answered from here. A shared cache if replicas multiply.
+    // hospitals; the credential (signing key's kid, or the secret's hash) is in the key so a rotated one is tested, not answered from here.
     static readonly ConcurrentDictionary<(Guid Tenant, string Endpoint, string ClientId, string Secret), (string Token, DateTimeOffset Until)> Tokens = new();
 
     private async Task<string> GetTokenAsync(Guid tenantId, IConfigurationSection tenant, CancellationToken ct)
@@ -294,28 +294,58 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
         if (!Uri.TryCreate(tenant["TokenEndpoint"], UriKind.Absolute, out var endpoint)
             || endpoint.Scheme is not ("https" or "http")
             || !string.IsNullOrEmpty(endpoint.UserInfo) || !string.IsNullOrEmpty(endpoint.Fragment)
-            || string.IsNullOrWhiteSpace(tenant["ClientId"]) || string.IsNullOrWhiteSpace(tenant["ClientSecret"]))
+            || string.IsNullOrWhiteSpace(tenant["ClientId"]))
             throw new HospitalIntegrationException("hospital.credentials_missing", HttpStatusCode.ServiceUnavailable);
-        var key = (tenantId, endpoint.AbsoluteUri, tenant["ClientId"]!, Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(tenant["ClientSecret"]!))));
+        var clientId = tenant["ClientId"]!; var secret = tenant["ClientSecret"];
+        // MR-38: with a connection store the hospital signs with its own key (client-jwt); the audience is Keycloak's
+        // public issuer, the only one it accepts even when reached through KEYCLOAK_INTERNAL_ISSUER (spike 2026-10-17).
+        using var signing = connections is not null && configuration["Auth:Authority"] is { Length: > 0 } ? await connections.SigningKeyAsync(tenantId, ct: ct) : null;
+        if (signing is null && string.IsNullOrWhiteSpace(secret))
+            throw new HospitalIntegrationException("hospital.credentials_missing", HttpStatusCode.ServiceUnavailable);
+        var key = (tenantId, endpoint.AbsoluteUri, clientId, signing is not null ? HospitalConnectionStore.Jwk(signing)["kid"] : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(secret!))));
         if (Tokens.TryGetValue(key, out var kept) && kept.Until > DateTimeOffset.UtcNow) return kept.Token;
-        using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
+        var form = new Dictionary<string, string> { ["grant_type"] = "client_credentials", ["client_id"] = clientId };
+        HttpResponseMessage response;
+        if (signing is not null)
         {
-            Content = new FormUrlEncodedContent(new Dictionary<string, string>
-            {
-                ["grant_type"] = "client_credentials",
-                ["client_id"] = tenant["ClientId"]!,
-                ["client_secret"] = tenant["ClientSecret"]!
-            })
-        };
-        using var response = await http.SendAsync(request, ct);
-        if (!response.IsSuccessStatusCode)
-            throw new HospitalIntegrationException("hospital.token_request_failed", HttpStatusCode.ServiceUnavailable);
-        var payload = await ParseAsync<JsonElement>(response, ct);
-        var issued = payload.GetProperty("access_token").GetString()
-            ?? throw new HospitalIntegrationException("hospital.token_missing", HttpStatusCode.ServiceUnavailable);
-        // Only a token already proven to be this tenant's is kept, and only until 30 s before it expires.
-        Tokens[key] = (issued, DateTimeOffset.FromUnixTimeSeconds(ValidateTokenTenant(issued, tenantId)).AddSeconds(-30));
-        return issued;
+            response = await PostTokenAsync(endpoint, new(form) { ["client_assertion_type"] = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer", ["client_assertion"] = ClientAssertion(signing, clientId, configuration["Auth:Authority"]!) }, ct);
+            // ponytail: MR-38 transition — the account is still a secret client until Hospital's reconciler runs (deploy step 2). Only
+            // invalid_client, and only while HOSPITAL_SERVICE_CLIENT_SECRET exists; deploy step 3 removes the variable, then this branch.
+            if (!string.IsNullOrWhiteSpace(secret) && await IsInvalidClientAsync(response, ct))
+            { response.Dispose(); response = await PostTokenAsync(endpoint, new(form) { ["client_secret"] = secret }, ct); }
+        }
+        else response = await PostTokenAsync(endpoint, new(form) { ["client_secret"] = secret! }, ct);
+        using (response)
+        {
+            if (!response.IsSuccessStatusCode)
+                throw new HospitalIntegrationException("hospital.token_request_failed", HttpStatusCode.ServiceUnavailable);
+            var payload = await ParseAsync<JsonElement>(response, ct);
+            var issued = payload.GetProperty("access_token").GetString()
+                ?? throw new HospitalIntegrationException("hospital.token_missing", HttpStatusCode.ServiceUnavailable);
+            // Only a token already proven to be this tenant's is kept, and only until 30 s before it expires.
+            Tokens[key] = (issued, DateTimeOffset.FromUnixTimeSeconds(ValidateTokenTenant(issued, tenantId)).AddSeconds(-30));
+            return issued;
+        }
+    }
+
+    private Task<HttpResponseMessage> PostTokenAsync(Uri endpoint, Dictionary<string, string> form, CancellationToken ct) =>
+        http.SendAsync(new HttpRequestMessage(HttpMethod.Post, endpoint) { Content = new FormUrlEncodedContent(form) }, ct);
+
+    private static async Task<bool> IsInvalidClientAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        if (response.StatusCode is not (HttpStatusCode.BadRequest or HttpStatusCode.Unauthorized)) return false;
+        try { return (await response.Content.ReadFromJsonAsync<JsonElement>(ct)).TryGetProperty("error", out var error) && error.GetString() == "invalid_client"; }
+        catch (JsonException) { return false; }
+    }
+
+    /// <summary>RFC 7523 client authentication: ES256, iss = sub = the client, a one-minute life and a fresh jti.</summary>
+    internal static string ClientAssertion(ECDsa key, string clientId, string audience)
+    {
+        static string B64(byte[] value) => Convert.ToBase64String(value).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var signed = B64(JsonSerializer.SerializeToUtf8Bytes(new { alg = "ES256", typ = "JWT", kid = HospitalConnectionStore.Jwk(key)["kid"] }))
+            + "." + B64(JsonSerializer.SerializeToUtf8Bytes(new { iss = clientId, sub = clientId, aud = audience, jti = Guid.NewGuid().ToString("N"), iat = now, exp = now + 60 }));
+        return signed + "." + B64(key.SignData(Encoding.ASCII.GetBytes(signed), HashAlgorithmName.SHA256));
     }
 
     // This is an additional routing guard on configured credentials, NOT signature validation.

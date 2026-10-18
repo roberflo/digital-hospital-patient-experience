@@ -12,8 +12,10 @@ En el servicio de infraestructura de **Hospital**, definir y volver a ejecutar s
 KC_RECEPCION_WEB_CLIENT_SECRET=<secreto A>
 KC_RECEPCION_WEB_REDIRECT_URIS=https://recepcion.tudominio.com/api/auth/callback/keycloak
 KC_RECEPCION_WEB_WEB_ORIGINS=https://recepcion.tudominio.com
-KC_RECEPCION_SERVICE_CLIENT_SECRET=<secreto B>
+KC_RECEPCION_JWKS_URL_BASE=http://servicio-api-recepcion:8080/hospital-jwks
 ```
+
+(MR-38) `KC_RECEPCION_JWKS_URL_BASE` se pone también en `keycloak-service-accounts`. Ya no hay «secreto B»: cada `recepcion-service-<UUID>` se autentica con la clave de **su** hospital, que Recepción guarda cifrada y publica en `GET /hospital-jwks/<UUID>` (solo la mitad pública). Keycloak la lee por la red interna. Para migrar una instalación que aún tiene el secreto, sigue los tres pasos de [hospital-integration.md](hospital-integration.md) «MR-38».
 
 El job crea el cliente `recepcion-web` y, por cada hospital que tenga usuarios en el realm, su cuenta `recepcion-service-<UUID>` con exactamente los roles **Recepción** y `reception-agent`. Nadie copia UUIDs: Keycloak ya sabe qué hospitales existen. Un hospital nuevo recibe su cuenta en el siguiente despliegue de Hospital.
 
@@ -23,7 +25,6 @@ En la **API de Recepción** (con volumen persistente `/keys`, `ASPNETCORE_ENVIRO
 Auth__Authority=https://identidad.tudominio.com/realms/hospital
 Auth__Audience=hospital-api
 HOSPITAL_API_URL=http://proyecto_hospital-api:8080
-HOSPITAL_SERVICE_CLIENT_SECRET=<secreto B>
 HOSPITAL_ALLOWED_API_ORIGINS=http://proyecto_hospital-api:8080
 HOSPITAL_PUBLIC_URL=https://hospital.tudominio.com
 DATAPROTECTION_CERT_PATH=/run/secrets/dataprotection.p12.b64

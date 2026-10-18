@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Recepcion;
 using Recepcion.Integrations;
@@ -95,6 +96,110 @@ public class HospitalConnectionTests
         var user=new CurrentUser{Role=role,Subject="someone"};
         Assert.Throws<AccessDeniedException>(()=>HospitalConnectionEndpoints.Setup(user,Config()));
         await Assert.ThrowsAsync<AccessDeniedException>(()=>HospitalConnectionEndpoints.Save(new("http://hospital-api:8080","https://hospital.example.com","recepcion","synthetic-secret"),user,new TenantScope{Id=Guid.NewGuid()},null!,Config(),null!,null!,default));
+    }
+    // ---- MR-38: each `recepcion-service-<tenant>` authenticates with its own key (client-jwt), never with a shared secret ----
+    const string Authority="https://identity.example.com/realms/hospital";
+    static IConfiguration Installation(string? sharedSecret="synthetic-shared-secret") => new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{
+        ["Auth:Authority"]=Authority,["KEYCLOAK_INTERNAL_ISSUER"]="http://keycloak:8080/realms/hospital",["HOSPITAL_API_URL"]="https://hospital-api.example.com",["HOSPITAL_SERVICE_CLIENT_SECRET"]=sharedSecret}).Build();
+    static async Task<(CrmDb Db,Guid A,Guid B)> TwoHospitals()
+    {
+        var options=new DbContextOptionsBuilder<CrmDb>().UseNpgsql(Environment.GetEnvironmentVariable("TEST_DATABASE") ?? throw new InvalidOperationException("Run scripts/test-backend.sh")).Options;
+        var db=new CrmDb(options,new TenantScope{Id=Guid.NewGuid()},new Microsoft.AspNetCore.DataProtection.EphemeralDataProtectionProvider());
+        await db.Database.MigrateAsync();
+        var a=Guid.NewGuid(); var b=Guid.NewGuid();
+        db.Tenants.Add(new Tenant{Id=a,Name="Hospital sintético A"}); db.Tenants.Add(new Tenant{Id=b,Name="Hospital sintético B"}); await db.SaveChangesAsync();
+        return (db,a,b);
+    }
+    static string ServiceToken(Guid tenant) => "x."+Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new{tenant_id=tenant,exp=DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds()}))).TrimEnd('=').Replace('+','-').Replace('/','_')+".x";
+    static byte[] B64(string value){value=value.Replace('-','+').Replace('_','/');return Convert.FromBase64String(value.PadRight((value.Length+3)/4*4,'='));}
+    static JsonElement Keys(Guid tenant,CrmDb db,IConfiguration config) => JsonSerializer.SerializeToElement(HospitalConnectionEndpoints.Jwks(tenant,new HospitalConnectionStore(db,config))).GetProperty("keys");
+    /// <summary>Every token request the client makes, as form fields; Hospital's API answers 200 to everything else.</summary>
+    sealed class Keycloak(Func<Dictionary<string,string>,HttpResponseMessage> token):HttpMessageHandler
+    {
+        public readonly List<Dictionary<string,string>> TokenRequests=new();
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken ct)
+        {
+            if(!request.RequestUri!.AbsolutePath.EndsWith("/protocol/openid-connect/token")) return new(HttpStatusCode.OK){Content=JsonContent.Create(new{displayName="Sintético",timeZone="UTC"})};
+            var form=(await request.Content!.ReadAsStringAsync(ct)).Split('&').Select(x=>x.Split('=')).ToDictionary(x=>Uri.UnescapeDataString(x[0]),x=>Uri.UnescapeDataString(x[1].Replace('+',' ')));
+            TokenRequests.Add(form); return token(form);
+        }
+    }
+    static HttpResponseMessage Issued(Guid tenant) => new(HttpStatusCode.OK){Content=JsonContent.Create(new{access_token=ServiceToken(tenant)})};
+    static HttpResponseMessage InvalidClient() => new(HttpStatusCode.BadRequest){Content=JsonContent.Create(new{error="invalid_client",error_description="Invalid client or Invalid client credentials"})};
+    static (JsonElement Header,JsonElement Claims) Assertion(Dictionary<string,string> form,Guid tenant,JsonElement jwks)
+    {
+        Assert.Equal("urn:ietf:params:oauth:client-assertion-type:jwt-bearer",form["client_assertion_type"]);
+        var parts=form["client_assertion"].Split('.');
+        var header=JsonSerializer.Deserialize<JsonElement>(B64(parts[0])); var claims=JsonSerializer.Deserialize<JsonElement>(B64(parts[1]));
+        Assert.Equal("ES256",header.GetProperty("alg").GetString());
+        var jwk=jwks.EnumerateArray().Single(k=>k.GetProperty("kid").GetString()==header.GetProperty("kid").GetString());
+        using var key=System.Security.Cryptography.ECDsa.Create(new System.Security.Cryptography.ECParameters{Curve=System.Security.Cryptography.ECCurve.NamedCurves.nistP256,Q=new(){X=B64(jwk.GetProperty("x").GetString()!),Y=B64(jwk.GetProperty("y").GetString()!)}});
+        Assert.True(key.VerifyData(Encoding.ASCII.GetBytes(parts[0]+"."+parts[1]),B64(parts[2]),System.Security.Cryptography.HashAlgorithmName.SHA256),"the assertion verifies with this hospital's published key");
+        Assert.Equal($"recepcion-service-{tenant:D}",claims.GetProperty("iss").GetString()); Assert.Equal($"recepcion-service-{tenant:D}",claims.GetProperty("sub").GetString());
+        Assert.Equal(Authority,claims.GetProperty("aud").GetString()); // the spike: Keycloak accepts only its public issuer, even when reached by the internal URL
+        Assert.InRange(claims.GetProperty("exp").GetInt64()-DateTimeOffset.UtcNow.ToUnixTimeSeconds(),1,60);
+        Assert.False(string.IsNullOrEmpty(claims.GetProperty("jti").GetString()));
+        return (header,claims);
+    }
+    [Fact] public async Task EachHospitalSignsWithItsOwnKeyAndNeverSendsTheSharedSecret()
+    {
+        var (db,a,b)=await TwoHospitals(); await using var _=db; var config=Installation();
+        var keycloak=new Keycloak(form=>Issued(Guid.Parse(form["client_id"]["recepcion-service-".Length..])));
+        var client=new HospitalClient(new HttpClient(keycloak),config,new HospitalConnectionStore(db,config));
+        await client.GetClinicAsync(a); await client.GetClinicAsync(b);
+        Assert.Equal(2,keycloak.TokenRequests.Count);
+        Assert.All(keycloak.TokenRequests,form=>{Assert.False(form.ContainsKey("client_secret"));Assert.Equal("client_credentials",form["grant_type"]);});
+        var keysA=Keys(a,db,config); var keysB=Keys(b,db,config);
+        var (headerA,claimsA)=Assertion(keycloak.TokenRequests[0],a,keysA); var (headerB,_)=Assertion(keycloak.TokenRequests[1],b,keysB);
+        Assert.NotEqual(headerA.GetProperty("kid").GetString(),headerB.GetProperty("kid").GetString());
+        Assert.NotEqual(keycloak.TokenRequests[0]["client_assertion"].Split('.')[2],keycloak.TokenRequests[1]["client_assertion"].Split('.')[2]);
+        // A's JWKS carries A's key only: B's assertion does not verify against it.
+        Assert.Throws<InvalidOperationException>(()=>Assertion(keycloak.TokenRequests[1],b,keysA));
+        Assert.DoesNotContain(keysB[0].GetProperty("x").GetString()!,keysA.GetRawText());
+        // Public halves only.
+        Assert.All(keysA.EnumerateArray().Concat(keysB.EnumerateArray()),k=>{Assert.False(k.TryGetProperty("d",out var __));Assert.Equal("EC",k.GetProperty("kty").GetString());Assert.Equal("P-256",k.GetProperty("crv").GetString());});
+        // A hospital Recepción does not know publishes nothing.
+        Assert.Equal(0,Keys(Guid.NewGuid(),db,config).GetArrayLength());
+    }
+    [Fact] public async Task RotatingOneHospitalsKeyLeavesTheOtherHospitalsKeyAlone()
+    {
+        var (db,a,b)=await TwoHospitals(); await using var _=db; var config=Installation();
+        var keycloak=new Keycloak(form=>Issued(Guid.Parse(form["client_id"]["recepcion-service-".Length..])));
+        await new HospitalClient(new HttpClient(keycloak),config,new HospitalConnectionStore(db,config)).GetClinicAsync(a);
+        await new HospitalClient(new HttpClient(keycloak),config,new HospitalConnectionStore(db,config)).GetClinicAsync(b);
+        var beforeA=Keys(a,db,config).GetRawText(); var beforeB=Keys(b,db,config).GetRawText();
+        await new HospitalConnectionStore(db,config).SigningKeyAsync(a,rotate:true);
+        Assert.NotEqual(beforeA,Keys(a,db,config).GetRawText());
+        Assert.Equal(beforeB,Keys(b,db,config).GetRawText());
+        // The next token of A is signed with the new key, not answered from the cache of the old one.
+        await new HospitalClient(new HttpClient(keycloak),config,new HospitalConnectionStore(db,config)).GetClinicAsync(a);
+        Assert.Equal(3,keycloak.TokenRequests.Count);
+        Assertion(keycloak.TokenRequests[2],a,Keys(a,db,config));
+    }
+    // ponytail transition (deploy step 2 of 3): until the reconciler turns the account into client-jwt, Keycloak answers invalid_client.
+    [Fact] public async Task TheSharedSecretIsTriedOnlyAfterKeycloakRejectsTheKeyAsInvalidClient()
+    {
+        var (db,a,_)=await TwoHospitals(); await using var __=db; var config=Installation();
+        var keycloak=new Keycloak(form=>form.ContainsKey("client_secret")?Issued(a):InvalidClient());
+        await new HospitalClient(new HttpClient(keycloak),config,new HospitalConnectionStore(db,config)).GetClinicAsync(a);
+        Assert.Equal(2,keycloak.TokenRequests.Count);
+        Assert.True(keycloak.TokenRequests[0].ContainsKey("client_assertion")); Assert.False(keycloak.TokenRequests[0].ContainsKey("client_secret"));
+        Assert.Equal("synthetic-shared-secret",keycloak.TokenRequests[1]["client_secret"]); Assert.False(keycloak.TokenRequests[1].ContainsKey("client_assertion"));
+        // Any other refusal is not a reason to send the secret.
+        var (db2,b,___)=await TwoHospitals(); await using var ____=db2;
+        var down=new Keycloak(_=>new(HttpStatusCode.ServiceUnavailable));
+        var failure=await Assert.ThrowsAsync<HospitalIntegrationException>(()=>new HospitalClient(new HttpClient(down),config,new HospitalConnectionStore(db2,config)).GetClinicAsync(b));
+        Assert.Equal("hospital.token_request_failed",failure.Code); Assert.Single(down.TokenRequests); Assert.False(down.TokenRequests[0].ContainsKey("client_secret"));
+        // Without the variable (deploy step 3) invalid_client is final.
+        var noSecret=Installation(sharedSecret:null); var rejected=new Keycloak(_=>InvalidClient());
+        var final=await Assert.ThrowsAsync<HospitalIntegrationException>(()=>new HospitalClient(new HttpClient(rejected),noSecret,new HospitalConnectionStore(db2,noSecret)).GetClinicAsync(b));
+        Assert.Equal("hospital.token_request_failed",final.Code); Assert.Single(rejected.TokenRequests);
+    }
+    [Fact] public void HospitalsConnectWithoutTheSharedSecret()
+    {
+        var tenant=Guid.NewGuid(); var values=HospitalConnectionStore.Defaults(tenant,Installation(sharedSecret:null));
+        Assert.Equal($"recepcion-service-{tenant:D}",values["ClientId"]); Assert.Equal("https://hospital-api.example.com",values["BaseUrl"]);
+        Assert.False(values.ContainsKey("ClientSecret"));
     }
     sealed class Handler(Func<HttpRequestMessage,HttpResponseMessage> response):HttpMessageHandler
     {

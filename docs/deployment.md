@@ -29,7 +29,7 @@ API:
 - `NVIDIA_API_KEY`, `AI_BASE_URL=https://integrate.api.nvidia.com/v1`, `AI_MODEL=nvidia/nemotron-3-super-120b-a12b`.
 - Opcionales, en segundos: `AI_TURN_BUDGET_SECONDS` (90 por defecto), lo que el modelo puede tardar en un turno; al agotarse el paciente recibe el menú. Se recorta a 100 (el plazo del turno, 120, menos 20). `AI_ATTEMPT_TIMEOUT_SECONDS` (30 por defecto), lo que puede tardar cada petición al modelo; hay un reintento por proveedor y después el respaldo de OpenAI si está configurado. Se recorta al timeout del `HttpClient` del agente (90).
 - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI=https://<api>/oauth/google/callback`, `FRONTEND_URL=https://<web>`.
-- `HOSPITAL_API_URL`, `HOSPITAL_SERVICE_CLIENT_SECRET`, `HOSPITAL_ALLOWED_API_ORIGINS` y `HOSPITAL_PUBLIC_URL`, una vez por instalación ([hospital-easypanel.md](hospital-easypanel.md)). No hay configuración por hospital.
+- `HOSPITAL_API_URL`, `HOSPITAL_ALLOWED_API_ORIGINS` y `HOSPITAL_PUBLIC_URL`, una vez por instalación (`HOSPITAL_SERVICE_CLIENT_SECRET` solo durante la transición MR-38, ver [hospital-integration.md](hospital-integration.md)) ([hospital-easypanel.md](hospital-easypanel.md)). No hay configuración por hospital.
 
 Web recibe únicamente `AUTH_SECRET`, `NEXTAUTH_SECRET` (mismo valor), `NEXTAUTH_URL=https://<web>`, `API_URL=http://<servicio-api>:8080`, `KEYCLOAK_ISSUER`, `KEYCLOAK_CLIENT_ID`, `KEYCLOAK_CLIENT_SECRET`. No necesita claves Kapso/NIM/Google ni acceso a PostgreSQL.
 

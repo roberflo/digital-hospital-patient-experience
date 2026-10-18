@@ -20,7 +20,21 @@ services.AddHttpClient<HospitalClient>(client => {
 
 Configurar secretos por entorno (UUID ilustrativo, sin credenciales reales):
 
-La conexión de cada hospital se deriva de los ajustes de instalación (`HOSPITAL_API_URL`, `HOSPITAL_SERVICE_CLIENT_SECRET`) y de su cuenta `recepcion-service-<UUID>` en el realm: no se configura por hospital. Las claves `Hospital__Tenants__<UUID>__...` siguen existiendo sólo para excepciones y para autorizar la entrega de recetas:
+La conexión de cada hospital se deriva de los ajustes de instalación (`HOSPITAL_API_URL`) y de su cuenta `recepcion-service-<UUID>` en el realm: no se configura por hospital.
+
+### MR-38 — una credencial por hospital
+
+Cada `recepcion-service-<UUID>` se autentica con `client-jwt` (RFC 7523): Recepción genera, en la primera petición de token de ese hospital, una clave EC P-256 que guarda dentro de su `HospitalConnection` (cifrada, sin migración) y firma un `client_assertion` ES256 (`iss = sub = client_id`, `aud = Auth__Authority`, `jti`, 60 s). Keycloak lee la clave pública en `GET /hospital-jwks/<UUID>` de la API de Recepción: anónimo, fuera de `/api`, solo claves públicas y `{"keys":[]}` para un hospital sin clave o desconocido. El token sigue pasando por `ValidateTokenTenant` y por la caché de MR-6, ahora con el `kid` en la clave de caché. Un Administrador rota la clave de su hospital con `POST /api/hospital/connection/key` (auditado `hospital.key_rotated`); los demás hospitales no cambian. Tras rotar, Keycloak puede tardar ~10 s en volver a leer la JWKS: una petición de token en ese intervalo puede fallar una vez.
+
+Probado contra Keycloak 26.4 el 2026-10-17: `aud` debe ser el emisor **público** (`Auth__Authority`), aunque la petición llegue por `KEYCLOAK_INTERNAL_ISSUER`; con el emisor interno responde `invalid_client` «Invalid token audience».
+
+Despliegue, en este orden:
+
+1. **Recepción** con esta versión, conservando `HOSPITAL_SERVICE_CLIENT_SECRET`. Mientras las cuentas sigan siendo de secreto, Keycloak responde `invalid_client` a la firma y Recepción reintenta una vez con el secreto (rama `ponytail:` en `HospitalClient.GetTokenAsync`). Cualquier otro fallo no envía el secreto.
+2. **Hospital**: `KC_RECEPCION_JWKS_URL_BASE=http://<api-recepción>:8080/hospital-jwks` en `keycloak-config` y `keycloak-service-accounts`, quitar `KC_RECEPCION_SERVICE_CLIENT_SECRET`, desplegar. El job convierte todas las cuentas; comprobar la conexión desde Recepción.
+3. **Recepción**: quitar `HOSPITAL_SERVICE_CLIENT_SECRET` y redesplegar; después borrar la rama de respaldo y la línea `ClientSecret` de `HospitalConnectionStore.Defaults`.
+
+Una conexión guardada a mano con `PUT /api/hospital/connection` (`ClientId`/`ClientSecret` explícitos) usa el mismo orden: primero la clave, y su secreto solo si Keycloak responde `invalid_client`. Las claves `Hospital__Tenants__<UUID>__...` siguen existiendo sólo para excepciones y para autorizar la entrega de recetas:
 
 ```text
 Hospital__Tenants__11111111-1111-1111-1111-111111111111__BaseUrl=https://hospital.example/

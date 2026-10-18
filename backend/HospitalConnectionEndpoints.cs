@@ -12,6 +12,9 @@ public static class HospitalConnectionEndpoints
         api.MapPut("/connection", Save).WithMetadata(new PlatformOperable());
         api.MapGet("/connection", Read).WithMetadata(new PlatformOperable());
         api.MapPost("/connection/check", Check).WithMetadata(new PlatformOperable());
+        // Not PlatformOperable: the platform owner's list is the spec's (docs/platform-owner.md). The hospital's Administrador rotates.
+        api.MapPost("/connection/key", RotateKey);
+        app.MapGet("/hospital-jwks/{tenant:guid}", Jwks).AllowAnonymous();
         // POST keeps patient search terms out of browser history and proxy request URLs.
         api.MapPost("/contacts/{id:guid}/patients/search", async (Guid id, HospitalPatientSearchInput input, HttpContext ctx, CrmDb db, TenantScope t, CurrentUser u, HospitalClient h, CancellationToken ct) =>
         {
@@ -22,6 +25,17 @@ public static class HospitalConnectionEndpoints
             await db.SaveChangesAsync(ct);
             return Results.Ok(new { results });
         });
+    }
+    // MR-38: Keycloak's view of `recepcion-service-<tenant>`'s key. Anonymous and outside /api (Keycloak has no
+    // session here); public halves only, and the same empty set for a hospital that has no key or does not exist.
+    public static object Jwks(Guid tenant, HospitalConnectionStore store) => new { keys = store.PublicKeys(tenant) };
+    public static async Task<IResult> RotateKey(CurrentUser u, TenantScope t, CrmDb db, HospitalConnectionStore store, CancellationToken ct)
+    {
+            u.RequireAdminOrPlatform();
+            (await store.SigningKeyAsync(t.Id, rotate: true, ct))?.Dispose();
+            CrmEndpoints.Audit(db, t, u, "hospital.key_rotated", t.Id);
+            await db.SaveChangesAsync(ct);
+            return Results.Ok(new { rotated = true });
     }
     public static async Task<object> Read(CrmDb db, TenantScope t, CurrentUser u, HospitalClient h, HttpContext ctx, IConfiguration config) => new
         {
@@ -47,6 +61,8 @@ public static class HospitalConnectionEndpoints
             var day = HospitalClient.ClinicalDay(DateTimeOffset.UtcNow,tenant.TimeZone);
             // No persistence until Hospital accepts the credentials and exact authenticated tenant.
             await candidate.GetAvailabilityAsync(t.Id,day,day,ct:ct);
+            // The hospital's signing key survives a re-connection: Keycloak keeps trusting the published one (MR-38).
+            if (tenant.HospitalConnection is { } previous && JsonSerializer.Deserialize<Dictionary<string,string?>>(previous)!.TryGetValue("SigningKey", out var signing)) values["SigningKey"] = signing;
             tenant.HospitalConnection = JsonSerializer.Serialize(values);
             CrmEndpoints.Audit(db,t,u,"hospital.connected",t.Id);
             await db.SaveChangesAsync(ct);
