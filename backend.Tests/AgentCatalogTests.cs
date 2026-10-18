@@ -213,20 +213,21 @@ public sealed class AgentCatalogTests : IAsyncLifetime
     [InlineData("results", "results", "*Motivo:* Entrega de resultados")]
     [InlineData("procedure", "procedure", "*Motivo:* Procedimiento")]
     [InlineData("paperwork", "paperwork", "*Motivo:* Trámite")]
-    [InlineData(null, "follow-up", null)] // what the patient did not say is derived as before
+    [InlineData(null, "follow-up", null)] // what the patient did not say is derived from Hospital (VisitKindTests)
     [InlineData("", "follow-up", null)]   // a model that fills the optional argument with nothing said nothing
     public async Task TheAppointmentIsBookedForWhatThePatientSaidItIsFor(string? kind, string booked, string? line)
     {
         await h.Link();
         var doctor = Guid.NewGuid(); var start = new DateTimeOffset(DateTime.UtcNow.Date.AddDays(3).AddHours(15), TimeSpan.Zero);
-        var hospital = h.Hospital(availability: new { clinicalDayFrom = "", clinicalDayTo = "", maxDaysPerQuery = 31, rollState = "open", professionals = new[] { new { clinicianId = doctor, clinicianName = "Dra. Sintética", placeName = "", defaultDurationMinutes = 30, days = new[] { new { clinicalDay = "", state = "open", takenSlotCount = 0, utcOffset = "-06:00", slots = new[] { new { slotId = "a", startsAt = start, durationMinutes = 30, takenBy = 0, offered = true } } } } } } });
+        var hospital = h.Hospital(availability: new { clinicalDayFrom = "", clinicalDayTo = "", maxDaysPerQuery = 31, rollState = "open", professionals = new[] { new { clinicianId = doctor, clinicianName = "Dra. Sintética", placeName = "", defaultDurationMinutes = 30, days = new[] { new { clinicalDay = "", state = "open", takenSlotCount = 0, utcOffset = "-06:00", slots = new[] { new { slotId = "a", startsAt = start, durationMinutes = 30, takenBy = 0, offered = true } } } } } } },
+            appointments: [new { appointmentId = Guid.NewGuid(), clinicianId = doctor, clinicianName = "Dra. Sintética", scheduledStart = DateTimeOffset.UtcNow.AddDays(-10), durationMinutes = 30, status = "booked" }]); // seen before: what is not said is a follow-up (MR-42)
 
         await h.Runtime(Model(AgentHarness.ToolCall("propose_action", new { action = "create", doctorId = doctor, startsAt = start, durationMinutes = 30, kind }), AgentHarness.Reply("Listo.")), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
 
         var card = Assert.Single(h.Sent);
         if (line is null) Assert.DoesNotContain("Motivo", card); else Assert.Contains(line, card);
         Assert.Empty(h.HospitalWrites); // nothing before the patient confirms
-        await h.Say("patient", "CONFIRMAR " + (await h.Db.Activities.SingleAsync(a => a.Kind.StartsWith("proposal:"))).Kind[9..]);
+        await h.Say("patient", "CONFIRMAR " + Assert.Single(await h.Pending("proposal")).Code);
         await h.Runtime(NoModel, h.Sender(), hospital).Run(h.Job, CancellationToken.None);
 
         Assert.Equal(["/v1/agenda"], h.HospitalWrites);
@@ -243,14 +244,15 @@ public sealed class AgentCatalogTests : IAsyncLifetime
     {
         await h.Link();
         var doctor = Guid.NewGuid(); var start = new DateTimeOffset(DateTime.UtcNow.Date.AddDays(3).AddHours(15), TimeSpan.Zero);
-        var hospital = h.Hospital(availability: new { clinicalDayFrom = "", clinicalDayTo = "", maxDaysPerQuery = 31, rollState = "open", professionals = new[] { new { clinicianId = doctor, clinicianName = "Dra. Sintética", placeName = "", defaultDurationMinutes = 30, days = new[] { new { clinicalDay = "", state = "open", takenSlotCount = 0, utcOffset = "-06:00", slots = new[] { new { slotId = "a", startsAt = start, durationMinutes = 30, takenBy = 0, offered = true } } } } } } });
+        var hospital = h.Hospital(availability: new { clinicalDayFrom = "", clinicalDayTo = "", maxDaysPerQuery = 31, rollState = "open", professionals = new[] { new { clinicianId = doctor, clinicianName = "Dra. Sintética", placeName = "", defaultDurationMinutes = 30, days = new[] { new { clinicalDay = "", state = "open", takenSlotCount = 0, utcOffset = "-06:00", slots = new[] { new { slotId = "a", startsAt = start, durationMinutes = 30, takenBy = 0, offered = true } } } } } } },
+            appointments: [new { appointmentId = Guid.NewGuid(), clinicianId = doctor, clinicianName = "Dra. Sintética", scheduledStart = DateTimeOffset.UtcNow.AddDays(-10), durationMinutes = 30, status = "booked" }]); // seen before: what is not said is a follow-up (MR-42)
 
         await h.Runtime(Model(AgentHarness.ToolCall("hospital_availability", new { date = start.ToString("yyyy-MM-dd"), kind }), AgentHarness.Reply("Estos son los horarios.")), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
         await h.Say("patient", $"CITA {start.ToOffset(TimeSpan.FromHours(-6)):yyyy-MM-ddTHH:mm:sszzz} {doctor:D} 30 Dra. Sintética");
         await h.Runtime(NoModel, h.Sender(), hospital).Run(h.Job, CancellationToken.None);
 
         if (line is null) Assert.DoesNotContain("Motivo", h.Sent[^1]); else Assert.Contains(line, h.Sent[^1]);
-        await h.Say("patient", "CONFIRMAR " + (await h.Db.Activities.SingleAsync(a => a.Kind.StartsWith("proposal:"))).Kind[9..]);
+        await h.Say("patient", "CONFIRMAR " + Assert.Single(await h.Pending("proposal")).Code);
         await h.Runtime(NoModel, h.Sender(), hospital).Run(h.Job, CancellationToken.None);
         using var body = JsonDocument.Parse(Assert.Single(h.HospitalBodies));
         Assert.Equal(booked, body.RootElement.GetProperty("visitKind").GetString());
@@ -269,7 +271,7 @@ public sealed class AgentCatalogTests : IAsyncLifetime
         await h.Runtime(Model(AgentHarness.ToolCall("propose_action", new { action = "create", doctorId = Guid.NewGuid(), startsAt = start, durationMinutes = 30, kind }), AgentHarness.Reply("No pude preparar la cita.")), h.Sender(), h.Hospital()).Run(h.Job, CancellationToken.None);
 
         Assert.Contains("error", ToolResult());
-        Assert.DoesNotContain(await Trail(), a => a.Kind.StartsWith("proposal:"));
+        Assert.Empty(await h.Pending("proposal"));
     }
 
     [Fact]
@@ -281,7 +283,7 @@ public sealed class AgentCatalogTests : IAsyncLifetime
         await h.Runtime(Model(AgentHarness.ToolCall("propose_action", new { action = "reschedule", appointmentId = Guid.NewGuid(), doctorId = Guid.NewGuid(), startsAt = start, durationMinutes = 30, kind = "results" }), AgentHarness.Reply("Listo.")), h.Sender(), h.Hospital()).Run(h.Job, CancellationToken.None);
 
         Assert.DoesNotContain("Motivo", Assert.Single(h.Sent));
-        Assert.DoesNotContain("kind", (await h.Db.Activities.SingleAsync(a => a.Kind.StartsWith("proposal:"))).Body);
+        Assert.DoesNotContain("kind", Assert.Single(await h.Pending("proposal")).Body);
     }
 
     [Fact]

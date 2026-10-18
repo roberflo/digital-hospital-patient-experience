@@ -2147,6 +2147,15 @@ type Availability = {
     }[];
   }[];
 };
+/** The visit kinds Hospital publishes for a new appointment (MR-42). */
+const VISIT_KINDS = [
+  ['first-visit', 'Primera vez'],
+  ['follow-up', 'Subsecuente'],
+  ['procedure', 'Procedimiento'],
+  ['results', 'Entrega de resultados'],
+  ['paperwork', 'Trámite'],
+  ['same-day-urgent', 'Urgencia del día'],
+] as const;
 /** A doctor whose printed name Hospital has not captured yet still has to be choosable. */
 const doctorName = (name: string) => name.trim() || 'Profesional sin nombre';
 const freeSlots = (p: Availability['professionals'][number]) =>
@@ -2161,6 +2170,8 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
   const [create, setCreate] = useState(false);
   const [modify, setModify] = useState<AgendaRow | null>(null);
   const [doctor, setDoctor] = useState('');
+  const [patient, setPatient] = useState('');
+  const [slotStart, setSlotStart] = useState('');
   const [cancel, setCancel] = useState<AgendaRow | null>(null);
   const [cancelReason, setCancelReason] = useState('');
   const appointmentBusy = useRef(false);
@@ -2188,6 +2199,15 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
     isLoading: availabilityLoading,
   } = useSWR<Availability>(
     create || modify ? `/hospital/availability?date=${dialogDay}` : null,
+    fetcher,
+    { shouldRetryOnError: false },
+  );
+  // First visit or follow-up by whether Hospital has an earlier appointment of the patient; the team may choose another kind.
+  const { data: suggested } = useSWR<{ visitKind: string }>(
+    create && patient
+      ? `/hospital/contacts/${patient}/visit-kind` +
+          (slotStart ? `?before=${encodeURIComponent(slotStart)}` : '')
+      : null,
     fetcher,
     { shouldRetryOnError: false },
   );
@@ -2365,6 +2385,8 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
           if (!v) {
             setCreate(false);
             setModify(null);
+            setPatient('');
+            setSlotStart('');
           }
         }}
       >
@@ -2389,6 +2411,7 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
                   doctorId: doctor,
                   startsAt: slot.startsAt,
                   durationMinutes: slot.durationMinutes,
+                  visitKind: modify ? undefined : f.get('visitKind') || undefined,
                 });
                 toast[result.overlaps ? 'warning' : 'success'](
                   result.overlaps
@@ -2398,6 +2421,8 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
                 appointmentRequest.current = null;
                 setCreate(false);
                 setModify(null);
+                setPatient('');
+                setSlotStart('');
                 mutate();
               } catch (err) {
                 toast.error((err as Error).message);
@@ -2417,6 +2442,7 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
                   linkedOnly
                   empty="Selecciona un paciente"
                   required
+                  onChange={setPatient}
                 />
                 <FieldDescription>
                   Si un paciente no aparece, vincula primero su expediente desde la conversación.
@@ -2480,7 +2506,12 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
               </UiField>
               <UiField>
                 <FieldLabel htmlFor="appointment-slot">Horario disponible</FieldLabel>
-                <NativeSelect id="appointment-slot" name="startsAt" required>
+                <NativeSelect
+                  id="appointment-slot"
+                  name="startsAt"
+                  required
+                  onChange={(e) => setSlotStart(e.target.value)}
+                >
                   <NativeSelectOption value="">Selecciona un horario</NativeSelectOption>
                   {slots.map((s) => (
                     <NativeSelectOption key={s.startsAt} value={s.startsAt}>
@@ -2495,6 +2526,29 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
                   </FieldDescription>
                 )}
               </UiField>
+              {!modify && (
+                <UiField>
+                  <FieldLabel htmlFor="appointment-visit-kind">Tipo de visita</FieldLabel>
+                  <NativeSelect
+                    id="appointment-visit-kind"
+                    name="visitKind"
+                    key={suggested?.visitKind ?? 'none'}
+                    defaultValue={suggested?.visitKind ?? ''}
+                  >
+                    <NativeSelectOption value="">
+                      Según su historial en el hospital
+                    </NativeSelectOption>
+                    {VISIT_KINDS.map(([value, label]) => (
+                      <NativeSelectOption key={value} value={value}>
+                        {label}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                  <FieldDescription>
+                    Primera vez si el paciente no tiene citas anteriores en el hospital.
+                  </FieldDescription>
+                </UiField>
+              )}
               <DialogFooter>
                 <Button type="submit" disabled={!slots.length || savingAppointment}>
                   Confirmar cita

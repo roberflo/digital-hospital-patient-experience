@@ -16,6 +16,7 @@ public sealed class AgentVoiceTests : IAsyncLifetime
     {
         var path = request.RequestUri!.AbsolutePath;
         if (path.StartsWith("/v1/patients/")) return Task.FromResult(AgentHarness.Json(new { patientId = h.Contact.PatientId, phone = h.Contact.Phone }));
+        if (path.StartsWith("/v1/agenda/patients/")) return Task.FromResult(AgentHarness.Json(new { rows = Array.Empty<object>() })); // a read, not a write (MR-42)
         if (path == "/v1/agenda/booking-options") return Task.FromResult(AgentHarness.Json(new { clinicalDayFrom = "", clinicalDayTo = "", maxDaysPerQuery = 31, rollState = "open", professionals = new[] { new { clinicianId = doctor, clinicianName = "Dra. Sintética Rivas", placeName = "Consultorio 1", defaultDurationMinutes = 30, days = new[] { new { clinicalDay = "", state = "open", takenSlotCount = 0, utcOffset = "-06:00", slots = new[] { new { slotId = "a", startsAt = start, durationMinutes = 30, takenBy = 0, offered = true } } } } } } }));
         writes.Add(path); return Task.FromResult(AgentHarness.Json(new { appointmentId = Guid.NewGuid(), status = "booked", overlaps = false }));
     });
@@ -122,7 +123,7 @@ public sealed class AgentVoiceTests : IAsyncLifetime
         ReadsLikeAChat(sent);
         Assert.Contains("son 7 datos cortos", sent); Assert.Contains("¿Cuál es tu nombre?", sent);
         Assert.DoesNotContain("parentesco", sent); // one question at a time
-        Assert.Single(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id && a.Kind == "intake").ToListAsync());
+        Assert.Single(await h.Pending("intake"));
     }
 
     [Fact]
@@ -130,7 +131,7 @@ public sealed class AgentVoiceTests : IAsyncLifetime
     {
         // Registering without having chosen an hour: the agent opens the form, the rest needs no model.
         await h.Runtime(h.Model(AgentHarness.ToolCall("start_registration", new { }), AgentHarness.Reply("Ok")), h.Sender()).Run(h.Job, CancellationToken.None);
-        Assert.Single(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id && a.Kind == "intake").ToListAsync());
+        Assert.Single(await h.Pending("intake"));
         foreach (var answer in new[] { "Ana Sintética", "López Prueba", "12/03/1990", "Femenino", "Carlos Sintético", "Hermano", "7000 0001" }) { await h.Say("patient", answer); await h.Runtime(NoModel, h.Sender()).Run(h.Job, CancellationToken.None); }
 
         Assert.All(h.Sent, ReadsLikeAChat);

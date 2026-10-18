@@ -96,6 +96,6 @@ public sealed class AttentionTests : IAsyncLifetime
         await h.Runtime(NoModel, h.Sender()).Run(h.Job, CancellationToken.None);
 
         Assert.Contains("recepción te registra", Assert.Single(h.Sent));
-        Assert.DoesNotContain(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => a.Kind == "intake");
+        Assert.Empty(await h.Pending("intake"));
     }
 }

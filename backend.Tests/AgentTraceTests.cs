@@ -61,7 +61,7 @@ public sealed class AgentTraceTests : IAsyncLifetime
     {
         var hour = new DateTimeOffset(DateTime.UtcNow.Date.AddDays(3).AddHours(15), TimeSpan.Zero).ToOffset(TimeSpan.FromHours(-6)).ToString("yyyy-MM-ddTHH:mm:sszzz");
         await Say($"CITA {hour} {Guid.NewGuid()} 30 Dra. Sintética Rivas");
-        Assert.Contains(hour, Assert.Single(await Trail(), a => a.Kind == "intake").Body); // the form is open and holds the hour
+        Assert.Contains(hour, Assert.Single(await h.Pending("intake")).Body); // the form is open and holds the hour
         await Say("Ana Sintética"); await Say("López Prueba");
 
         var feed = ((Microsoft.AspNetCore.Http.HttpResults.Ok<ActivityFeedPage>)await ActivityFeed.Read(h.Db, h.Scope, null, null, null, null, h.Conversation.Id, null, null, 1, CancellationToken.None)).Value!;
@@ -83,14 +83,14 @@ public sealed class AgentTraceTests : IAsyncLifetime
         });
         // Registering without having chosen an hour: the agent opens the form, the rest needs no model.
         await h.Runtime(h.Model(AgentHarness.ToolCall("start_registration", new { }), AgentHarness.Reply("Ok")), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
-        Assert.Single(await Trail(), a => a.Kind == "intake");
+        Assert.Single(await h.Pending("intake"));
         foreach (var text in new[] { "Ana Sintética", "López Prueba", "12/03/1990", "Femenino", "Carlos Sintético", "Hermano", "7000 0001", "Sí" }) await Say(text, hospital);
 
         await h.Db.Entry(h.Contact).ReloadAsync();
         Assert.Equal("Ana Sintética López Prueba", h.Contact.Name); // the CRM shows who the person said they are, not the WhatsApp profile name
         Assert.Contains(patient.ToString(), (await Trail()).Single(a => a.Kind == "patient_registered").Body);
         Assert.StartsWith("Listo, Ana", h.Sent[^1]);
-        Assert.DoesNotContain(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => a.Kind.StartsWith("intake")); // the finished form is gone, not archived
+        Assert.Empty(await h.Pending("intake")); // the finished form is gone, not archived
     }
 
     [Theory]
@@ -110,7 +110,7 @@ public sealed class AgentTraceTests : IAsyncLifetime
     public async Task TheFormThanksByName()
     {
         await Say($"CITA {new DateTimeOffset(DateTime.UtcNow.Date.AddDays(3).AddHours(15), TimeSpan.Zero).ToOffset(TimeSpan.FromHours(-6)):yyyy-MM-ddTHH:mm:sszzz} {Guid.NewGuid()} 30 Dra. Sintética Rivas");
-        Assert.Single(await Trail(), a => a.Kind == "intake");
+        Assert.Single(await h.Pending("intake"));
         await Say("Ana Sintética");
 
         Assert.StartsWith("Gracias, Ana.", h.Sent[^1]);

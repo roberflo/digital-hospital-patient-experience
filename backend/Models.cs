@@ -85,6 +85,22 @@ public sealed class Activity : TenantRow
     public string Kind { get; set; } = "note"; public string Body { get; set; } = "";
     public string Actor { get; set; } = ""; public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
+/// <summary>What the agent is waiting on in one conversation: a proposal to confirm, the registration form, the question just asked, what the
+/// patient said an appointment is for (MR-40). Working state, not history: it expires, is consumed, and the daily sweep removes it. The answer is
+/// matched to the message that asked (<see cref="PromptMessageId"/>), never to that message's text.</summary>
+public sealed class PendingAction : TenantRow
+{
+    public Guid ConversationId { get; set; }
+    /// <summary>proposal, intake, question or visit_kind.</summary>
+    public string Kind { get; set; } = "";
+    /// <summary>The proposal's confirmation code, the question asked (emergency, person) or the visit kind.</summary>
+    public string Code { get; set; } = "";
+    public string Body { get; set; } = "";
+    public Guid? PromptMessageId { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset ExpiresAt { get; set; }
+    public DateTimeOffset? ConsumedAt { get; set; }
+}
 /// <summary>One durable preference a patient stated about themselves, kept for later conversations: one row per contact and key
 /// (docs/reception-agent.md, criterio 57). Never clinical content.</summary>
 public sealed class ContactMemory : TenantRow
@@ -188,6 +204,7 @@ public sealed class CrmDb(DbContextOptions<CrmDb> options, TenantScope scope, ID
     public DbSet<Contact> Contacts => Set<Contact>(); public DbSet<Company> Companies => Set<Company>();
     public DbSet<Opportunity> Opportunities => Set<Opportunity>(); public DbSet<Activity> Activities => Set<Activity>();
     public DbSet<ContactMemory> ContactMemories => Set<ContactMemory>();
+    public DbSet<PendingAction> PendingActions => Set<PendingAction>();
     public DbSet<Channel> Channels => Set<Channel>(); public DbSet<Conversation> Conversations => Set<Conversation>();
     public DbSet<Message> Messages => Set<Message>(); public DbSet<Job> Jobs => Set<Job>();
     public DbSet<Receipt> Receipts => Set<Receipt>(); public DbSet<Audit> Audits => Set<Audit>();
@@ -215,6 +232,8 @@ public sealed class CrmDb(DbContextOptions<CrmDb> options, TenantScope scope, ID
         // What the agent reads every turn: a conversation's latest messages and trail, and a contact's past actions and preferences.
         b.Entity<Activity>().HasIndex(x => new { x.TenantId, x.ConversationId, x.CreatedAt }); b.Entity<Activity>().HasIndex(x => new { x.TenantId, x.ContactId, x.CreatedAt });
         b.Entity<Message>().HasIndex(x => new { x.TenantId, x.ConversationId, x.CreatedAt });
+        Map<PendingAction>(b); b.Entity<PendingAction>().HasIndex(x => new { x.TenantId, x.ConversationId, x.Kind, x.ExpiresAt });
+        b.Entity<PendingAction>().HasOne<Conversation>().WithMany().HasForeignKey(x => new { x.TenantId, x.ConversationId }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict);
         Map<ContactMemory>(b); b.Entity<ContactMemory>().HasIndex(x => new { x.TenantId, x.ContactId, x.Key }).IsUnique();
         b.Entity<ContactMemory>().HasOne<Contact>().WithMany().HasForeignKey(x => new { x.TenantId, x.ContactId }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Cascade);
         b.Entity<Member>().HasIndex(x => x.Subject).IsUnique();
@@ -246,6 +265,7 @@ public sealed class CrmDb(DbContextOptions<CrmDb> options, TenantScope scope, ID
         b.Entity<Conversation>().Property(x=>x.LastMessage).HasConversion(encrypted!);
         b.Entity<SavedReply>().Property(x=>x.Body).HasConversion(encrypted);
         b.Entity<ContactMemory>().Property(x => x.Value).HasConversion(encrypted);
+        b.Entity<PendingAction>().Property(x => x.Body).HasConversion(encrypted);
         b.Entity<ConversationMacro>().Property(x=>x.Note).HasConversion(encrypted);
         b.Entity<Tenant>().Property(x => x.HospitalConnection).HasConversion(encrypted!);
         b.Entity<Tenant>().Property(x => x.Guide).HasConversion(encrypted); b.Entity<Tenant>().Property(x => x.GoogleRefreshToken).HasConversion(encrypted!);

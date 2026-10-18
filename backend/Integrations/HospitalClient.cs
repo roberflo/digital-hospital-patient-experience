@@ -62,6 +62,24 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
         return await ReadAsync<JsonElement>(tenantId,$"v1/agenda/patients/{patientId:D}?from={from:yyyy-MM-dd}&to={to:yyyy-MM-dd}",ct);
     }
 
+    /// <summary>The visit kinds Hospital publishes for a new appointment.</summary>
+    public static readonly string[] VisitKinds = ["first-visit", "follow-up", "procedure", "results", "paperwork", "same-day-urgent"];
+    /// <summary>MR-42 (decided by the owner 2026-10-17): «first-visit» when Hospital has no appointment of this patient before
+    /// <paramref name="before"/>, else «follow-up». A cancelled appointment did not take place, so it does not count.</summary>
+    public async Task<string> FirstOrFollowUpAsync(Guid tenantId, Guid patientId, string phone, DateTimeOffset before, CancellationToken ct = default)
+    {
+        await GetVerifiedPatientAsync(tenantId, patientId, phone, ct);
+        // ponytail: Hospital answers 31 days per query, so this looks back one year (12 queries, newest first); a patient last seen before that
+        // is booked as a first visit. A Hospital query «has an earlier appointment» if returning after longer matters.
+        var to = DateOnly.FromDateTime(before.UtcDateTime).AddDays(1);
+        for (var i = 0; i < 12; i++, to = to.AddDays(-31))
+        {
+            var page = await ReadAsync<JsonElement>(tenantId, $"v1/agenda/patients/{patientId:D}?from={to.AddDays(-30):yyyy-MM-dd}&to={to:yyyy-MM-dd}", ct);
+            if (page.GetProperty("rows").EnumerateArray().Any(row => row.GetProperty("status").GetString()?.StartsWith("cancelled") != true && row.GetProperty("scheduledStart").GetDateTimeOffset() < before)) return "follow-up";
+        }
+        return "first-visit";
+    }
+
     /// <summary>Only ever the patient-scoped agenda: the whole day's agenda carries every other patient (MR-12).</summary>
     public async Task<JsonElement> GetPatientAppointmentsAsync(Guid tenantId, Guid patientId,
         string phone, DateOnly day, CancellationToken ct = default)
@@ -87,7 +105,7 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
     {
         await GetVerifiedPatientAsync(tenantId, input.PatientId, senderPhone, ct);
         ValidateAppointment(input.ClinicianId, input.StartsAt, input.DurationMinutes);
-        if (input.VisitKind is not ("first-visit" or "follow-up" or "procedure" or "results" or "paperwork" or "same-day-urgent"))
+        if (!VisitKinds.Contains(input.VisitKind))
             throw new ArgumentException("Unknown hospital visit kind.");
         // Hospital deliberately accepts attributed overlaps. The caller must surface Overlaps,
         // never blindly retry this POST after a timeout (hospital has no idempotency contract).

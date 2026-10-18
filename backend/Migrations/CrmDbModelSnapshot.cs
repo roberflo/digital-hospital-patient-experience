@@ -740,6 +740,51 @@ namespace Recepcion.Api.Migrations
                     b.ToTable("Opportunities");
                 });
 
+            modelBuilder.Entity("Recepcion.PendingAction", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Body")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("ConsumedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("ConversationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid?>("PromptMessageId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "ConversationId", "Kind", "ExpiresAt");
+
+                    b.ToTable("PendingActions");
+                });
+
             modelBuilder.Entity("Recepcion.Receipt", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1082,6 +1127,22 @@ namespace Recepcion.Api.Migrations
                         .HasForeignKey("TenantId", "ConversationId")
                         .HasPrincipalKey("TenantId", "Id")
                         .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("Recepcion.PendingAction", b =>
+                {
+                    b.HasOne("Recepcion.Tenant", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Recepcion.Conversation", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ConversationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Recepcion.Receipt", b =>

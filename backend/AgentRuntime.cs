@@ -28,6 +28,9 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
     // State of the turn in progress; the runtime is resolved once per job.
     Conversation conv = null!; Contact contact = null!; Channel channel = null!; Job job = null!; long revision;
     TimeZoneInfo zone = TimeZoneInfo.Utc; readonly StringBuilder grounding = new(); string? proposal, summary, second; bool withHour; int calls; readonly List<Choice> slots = []; List<(HospitalProfessional Doctor, HospitalSlot Slot, DateTimeOffset Local)> dayFree = []; Guid? readDoctor; List<Message> session = []; readonly Dictionary<Guid, string> doctors = []; bool askEmergency, symptoms, emergencyAsked, emergencyLine,foreignId, refill, startIntake, forOther; DateOnly? firstDay; string? offer; string?[] known = []; bool stopped; ExceptionDispatchInfo? fault; Guid? unverified; string heard = ""; Attention attention = Attention.Recommended;
+    // What the agent waits on lives in PendingActions, each matched to the message that asked (MR-40). Held this turn, stamped when that message goes out.
+    static readonly TimeSpan ProposalLife = TimeSpan.FromMinutes(15), IntakeLife = TimeSpan.FromMinutes(30), QuestionLife = TimeSpan.FromHours(24);
+    readonly List<PendingAction> held = [];
     public async Task Run(Job job, CancellationToken ct)
     {
         activeJobId = job.Id; this.job = job;
@@ -44,7 +47,11 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         session = AgentMemory.Session(history);
         var latest = history.LastOrDefault(x => x.Sender == "patient"); if (latest is null || job.Key != "agent:" + latest.ExternalId) return;
         heard = string.Join("\n", history.Where(x => x.Sender == "patient").TakeLast(3).Select(x => x.Body));
-        var registering = history.Count > 1 && history[^2].Sender != "patient" && history[^2].Body.Contains("contacto de emergencia", StringComparison.OrdinalIgnoreCase);
+        // The message the patient is answering, when the agent wrote it: what the agent waits on is matched to it, never to its text.
+        var prompt = history.Count > 1 && history[^2].Sender == "agent" ? history[^2].Id : (Guid?)null;
+        // The form just asked for the emergency contact, so «Emergencia: …» labels that field.
+        var registering = prompt is not null && await db.PendingActions.Where(x => x.ConversationId == conv.Id && x.Kind == "intake" && x.ConsumedAt == null && x.PromptMessageId == prompt).Select(x => x.Body).FirstOrDefaultAsync(ct) is { } asking
+            && JsonSerializer.Deserialize<Intake>(asking, Json)!.AsksEmergencyContact;
         if (waitingSince is { } since)
         {
             // An emergency always gets the number. A tap of a registered patient is still served below, with no model.
@@ -61,9 +68,10 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             return;
         }
         // The patient chose a person: with the button, or by saying yes to the offer just made. The team gets the reason the agent offered it for.
-        if (latest.Body.Trim() is "PERSONA" || (history.Count > 1 && history[^2].Sender != "patient" && history[^2].Body.Contains(AgentGuard.PersonQuestion) && AgentGuard.Affirms(latest.Body)))
+        var offered = await Open("question").Where(x => x.Code == "person").OrderByDescending(x => x.CreatedAt).FirstOrDefaultAsync(ct);
+        if (latest.Body.Trim() is "PERSONA" || (offered is not null && offered.PromptMessageId == prompt && AgentGuard.Affirms(latest.Body)))
         {
-            var why = await db.Activities.Where(x => x.ConversationId == conv.Id && x.Kind == "handoff_offer" && x.CreatedAt > DateTimeOffset.UtcNow.AddHours(-24)).OrderByDescending(x => x.CreatedAt).Select(x => x.Body).FirstOrDefaultAsync(ct);
+            var why = offered?.Body; if (offered is not null) await Consume(offered, ct);
             await Handoff(conv, why ?? "El paciente pidió hablar con una persona.", ct, offerDoctor: true); return;
         }
         if (latest.Body.Trim() is "MENU") { await conversations.Send(conv.Id, "Claro, aquí sigo.\n¿En qué te ayudo?", "agent", "agent:" + job.Id, ct: ct, choices: MenuNow); return; }
@@ -73,9 +81,11 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         // What the agent asks follows what the hospital has set up. With no emergency number there is nothing to send the patient to:
         // the question is not asked and the nearest appointment is the answer. A patient who says «emergencia» still goes at once.
         emergencyLine = tenant.EmergencyPhone is { Length: > 0 };
-        emergencyAsked = history.Any(x => x.Sender != "patient" && x.Body.Contains(AgentGuard.EmergencyQuestion));
+        // Asked in this conversation: the question went out and is still open, or it was answered.
+        emergencyAsked = await db.PendingActions.AnyAsync(x => x.ConversationId == conv.Id && x.Kind == "question" && x.Code == "emergency" && x.PromptMessageId != null && (x.ConsumedAt != null || x.ExpiresAt > DateTimeOffset.UtcNow), ct);
         var asked = emergencyAsked || !emergencyLine;
-        if (history.Count > 1 && history[^2].Sender != "patient" && history[^2].Body.Contains(AgentGuard.EmergencyQuestion) && AgentGuard.Affirms(latest.Body)) { await Handoff(conv, "El paciente indica que es una emergencia.", ct, urgent: true); return; }
+        if (prompt is not null && AgentGuard.Affirms(latest.Body) && await Open("question").FirstOrDefaultAsync(x => x.Code == "emergency" && x.PromptMessageId == prompt, ct) is { } answered)
+        { await Consume(answered, ct); await Handoff(conv, "El paciente indica que es una emergencia.", ct, urgent: true); return; }
         if (ReminderRules.ConsentCommand(latest.Body) is {} consent)
         {
             await conversations.Send(conv.Id, consent=="on" ? "Registré tu autorización de recordatorios. Cuando tu expediente esté vinculado y el servicio activo, recibirás avisos a las 9:00 del día anterior y una hora antes. Puedes escribir BAJA para desactivarlos." : "Desactivé tus recordatorios de citas por WhatsApp.", "agent", "consent:"+job.Id, ct:ct);return;
@@ -89,20 +99,19 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         var now = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, zone);
         // «Sí» right after a proposal is the confirmation: one pending proposal, made in the message the patient is answering.
         // With anything the agent said after the card (the list of «Otro horario», the menu) «sí» answers that, never the card above it.
-        if (AgentGuard.Affirms(latest.Body) && history.Count > 1 && history[^2].Sender != "patient")
+        if (AgentGuard.Affirms(latest.Body) && prompt is not null && !history.Any(x => x.Sender != "patient" && x.CreatedAt > history[^2].CreatedAt))
         {
-            var pending = await db.Activities.Where(x => x.ConversationId == conv.Id && x.Kind.StartsWith("proposal:") && x.CreatedAt > DateTimeOffset.UtcNow.AddMinutes(-15)).Select(x => new { x.Kind, x.CreatedAt }).ToListAsync(ct);
-            if (pending.Count == 1 && pending[0].CreatedAt <= history[^2].CreatedAt.AddSeconds(5) && !history.Any(x => x.Sender != "patient" && x.CreatedAt > history[^2].CreatedAt)
-                && !history.Any(x => x.Sender != "patient" && x.CreatedAt > pending[0].CreatedAt && x.CreatedAt < history[^2].CreatedAt)) { await Confirm(conv, contact, pending[0].Kind[9..], job, ct); return; }
+            var pending = await Open("proposal").Select(x => new { x.Code, x.PromptMessageId }).ToListAsync(ct);
+            if (pending is [{ } card] && card.PromptMessageId == prompt) { await Confirm(conv, contact, card.Code, job, ct); return; }
         }
         // A registration form in progress takes the next message as its answer, unless it is a question, a way out, a menu command, another hour tapped,
         // thirty minutes old, or no longer needed. A form that is not answered is deleted, and the hour chosen with it: working state, not history.
-        if (await db.Activities.Where(x => x.ConversationId == conv.Id && x.Kind == "intake").OrderByDescending(x => x.CreatedAt).ToListAsync(ct) is { Count: > 0 } forms)
+        if (await db.PendingActions.Where(x => x.ConversationId == conv.Id && x.Kind == "intake" && x.ConsumedAt == null).OrderByDescending(x => x.CreatedAt).ToListAsync(ct) is { Count: > 0 } forms)
         {
             // ponytail: an hour tapped in the middle of the form starts it over with the new hour and the answers given are lost; keeping them needs new wording for the patient.
-            var answers = forms[0].CreatedAt > DateTimeOffset.UtcNow.AddMinutes(-30) && AgentGuard.SlotChoice(latest.Body) is null && AgentGuard.GuideChoice(latest.Body) is null && contact.PatientId is null && !latest.Body.Contains('?') && !latest.Body.Trim().Equals("salir", StringComparison.OrdinalIgnoreCase) && !Menu.Options.Any(option => option.Id == latest.Body.Trim());
+            var answers = forms[0].ExpiresAt > DateTimeOffset.UtcNow && AgentGuard.SlotChoice(latest.Body) is null && AgentGuard.GuideChoice(latest.Body) is null && contact.PatientId is null && !latest.Body.Contains('?') && !latest.Body.Trim().Equals("salir", StringComparison.OrdinalIgnoreCase) && !Menu.Options.Any(option => option.Id == latest.Body.Trim());
             // ponytail: an expired form goes when the patient writes again, not by the clock; a sweep in AgentWorker if that is ever needed (plan P-2).
-            db.Activities.RemoveRange(answers ? forms.Skip(1) : forms);
+            db.PendingActions.RemoveRange(answers ? forms.Skip(1) : forms);
             if (answers) { await IntakeStep(forms[0], latest.Body, ct); return; }
             await db.SaveChangesAsync(ct);
         }
@@ -261,10 +270,10 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             if (filled.Complete) { await ProposeRegistration(filled.GivenNames!, filled.FamilyNames!, filled.BirthDate!, filled.Sex!, filled.EmergencyName!, filled.EmergencyRelationship!, filled.EmergencyPhone!, ct); content = summary!; }
             else
             {
-                db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "intake", Actor = "Agente", ActorRole = "agent_ai", Body = JsonSerializer.Serialize(filled, Json) }); await db.SaveChangesAsync(ct);
+                Hold("intake", "", JsonSerializer.Serialize(filled, Json), IntakeLife); await db.SaveChangesAsync(ct);
                 using var hold = await conversations.Lock(conv.Id, ct);
                 if (!await Active(conv.Id, revision, ct)) return;
-                await conversations.Send(conv.Id, question, "agent", "agent:" + job.Id, ct: ct, choices: options); return;
+                await Reply(question, ct, options); return;
             }
         }
         // The Confirmar button carries the code; only a card too long to carry buttons would have to spell it out.
@@ -283,7 +292,9 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             if (!await Active(conv.Id, revision, ct)) return;
             var options = ask ? WithEmergency(narrow.Choices) : narrow.Choices;
             var body = content.TrimEnd() + "\n\n" + narrow.Text + (ask ? Urgent(options, tenant.EmergencyPhone) : "");
-            await conversations.Send(conv.Id, body.Length > 4000 ? body[..4000] : body, "agent", "agent:" + job.Id, ct: ct, choices: options); return;
+            body = body.Length > 4000 ? body[..4000] : body;
+            if (body.Contains(AgentGuard.EmergencyQuestion)) Hold("question", "emergency", "", QuestionLife);
+            await Reply(body, ct, options); return;
         }
         // What the patient can tap: the confirmation of a proposal first, else the free slots just read, else the answer to the emergency question.
         var choices = proposal is not null ? Confirmation()
@@ -294,7 +305,27 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         else if (ask && !content.Contains("emergencia?", StringComparison.OrdinalIgnoreCase)) content += urgent + (slots.Count > 0 ? " Si lo es, elige *Emergencia* en la lista." : "");
         using var lease = await conversations.Lock(conv.Id, ct);
         if (!await Active(conv.Id, revision, ct)) return;
-        await conversations.Send(conv.Id, content.Length > 4000 ? content[..4000] : content, "agent", "agent:" + job.Id, ct: ct, choices: choices);
+        content = content.Length > 4000 ? content[..4000] : content;
+        // Asked here for nothing free soon or for symptoms, by the server or, once asked, repeated by the model: «sí» answers this message.
+        if (content.Contains(AgentGuard.EmergencyQuestion)) Hold("question", "emergency", "", QuestionLife);
+        await Reply(content, ct, choices);
+    }
+    /// <summary>Something the agent now waits on in this conversation; it is matched to the next message the agent sends (<see cref="Reply"/>).</summary>
+    PendingAction Hold(string kind, string code, string body, TimeSpan life)
+    {
+        var pending = new PendingAction { TenantId = scope.Id, ConversationId = conv.Id, Kind = kind, Code = code, Body = body, ExpiresAt = DateTimeOffset.UtcNow + life };
+        db.PendingActions.Add(pending); held.Add(pending); return pending;
+    }
+    /// <summary>What this conversation still waits on, of one kind: not consumed and not expired.</summary>
+    IQueryable<PendingAction> Open(string kind) => db.PendingActions.Where(x => x.ConversationId == conv.Id && x.Kind == kind && x.ConsumedAt == null && x.ExpiresAt > DateTimeOffset.UtcNow);
+    /// <summary>Used once: what it held goes with it, and that is saved before anything is done with it (INV-6).</summary>
+    async Task Consume(PendingAction pending, CancellationToken ct) { pending.ConsumedAt = DateTimeOffset.UtcNow; pending.Body = ""; await db.SaveChangesAsync(ct); }
+    /// <summary>The agent's message of this turn. What was held for it is now waiting on this message.</summary>
+    async Task<Message> Reply(string body, CancellationToken ct, Choices? choices = null)
+    {
+        var sent = await conversations.Send(conv.Id, body, "agent", "agent:" + job.Id, ct: ct, choices: choices);
+        if (held.Count > 0) { foreach (var pending in held) pending.PromptMessageId = sent.Id; held.Clear(); await db.SaveChangesAsync(CancellationToken.None); }
+        return sent;
     }
     /// <summary>What the agent does without the model leaves the same trail in the CRM as a tool the model called.</summary>
     void Trace(string action, bool ok = true) => db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "agent_tool", Actor = "Agente", ActorRole = "agent_ai", Body = $"Herramienta: {action}. Resultado: {(ok ? "completado" : "requiere revisión")}." });
@@ -347,8 +378,9 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
     /// never shown in the chat.</summary>
     async Task OfferPerson(string reason, string message, CancellationToken ct)
     {
-        db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "handoff_offer", Actor = "Agente", ActorRole = "agent_ai", Body = reason }); await db.SaveChangesAsync(ct);
-        await conversations.Send(conv.Id, message + "\n\n" + AgentGuard.PersonQuestion, "agent", "agent:" + job.Id, ct: ct, choices: new([new("PERSONA", "Hablar con persona"), new("MENU", "Seguir aquí")]));
+        // The reason goes with the question: a «sí» to it hands off with what the team needs to know.
+        db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "handoff_offer", Actor = "Agente", ActorRole = "agent_ai", Body = reason }); Hold("question", "person", reason, QuestionLife); await db.SaveChangesAsync(ct);
+        await Reply(message + "\n\n" + AgentGuard.PersonQuestion, ct, new([new("PERSONA", "Hablar con persona"), new("MENU", "Seguir aquí")]));
     }
     // The card with a registration and its appointment has two ways back, and both are commands served without the model:
     // the data («Corregir datos») or the hour («Otro horario» is the menu's «Agendar cita»: the list again, and the tap reissues the card).
@@ -374,39 +406,39 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
                 if (await Cards(ct) is [var card] && Registration(card) is { } data)
                 {
                     string Field(string name) => data.GetProperty(name).GetString()!;
-                    db.Activities.Remove(card);
+                    db.PendingActions.Remove(card);
                     await ProposeRegistration(Field("givenNames"), Field("familyNames"), Field("birthDate"), Field("sex"), Field("emergencyName"), Field("emergencyRelationship"), Field("emergencyPhone"), ct, raw); Trace("propose_registration");
-                    await conversations.Send(conv.Id, summary!, "agent", "agent:" + job.Id, ct: ct, choices: Confirmation()); return;
+                    await Reply(summary!, ct, Confirmation()); return;
                 }
                 var (state, prompt, _) = Intake.Start(raw, When(start)); Trace("start_registration");
-                db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "intake", Actor = "Agente", ActorRole = "agent_ai", Body = JsonSerializer.Serialize(state, Json) }); await db.SaveChangesAsync(ct);
-                await conversations.Send(conv.Id, prompt, "agent", "agent:" + job.Id, ct: ct); return;
+                Hold("intake", "", JsonSerializer.Serialize(state, Json), IntakeLife); await db.SaveChangesAsync(ct);
+                await Reply(prompt, ct); return;
             }
             // What the patient said this appointment is for when the agent looked up these hours, if anything (the hours a proposal keeps: 15 minutes).
-            var said = await db.Activities.Where(x => x.ConversationId == conv.Id && x.Kind == "visit_kind" && x.CreatedAt > DateTimeOffset.UtcNow.AddMinutes(-15)).OrderByDescending(x => x.CreatedAt).Select(x => x.Body).FirstOrDefaultAsync(ct);
+            var said = await Open("visit_kind").OrderByDescending(x => x.CreatedAt).Select(x => x.Code).FirstOrDefaultAsync(ct);
             await Propose("create", slot.Doctor.ToString(), null, slot.StartsAt, slot.Minutes, ct, slot.Name, said); Trace("propose_action");
         }
         catch (ArgumentException) { await conversations.Send(conv.Id, "Disculpa, ese horario ya no está disponible.\nDime qué día prefieres y vuelvo a consultar la agenda.", "agent", "agent:" + job.Id, ct: ct); return; }
-        await conversations.Send(conv.Id, summary!, "agent", "agent:" + job.Id, ct: ct, choices: Confirmation());
+        await Reply(summary!, ct, Confirmation());
     }
     /// <summary>The proposals of this conversation that can still be confirmed.</summary>
-    Task<List<Activity>> Cards(CancellationToken ct) => db.Activities.Where(x => x.ConversationId == conv.Id && x.Kind.StartsWith("proposal:") && x.CreatedAt > DateTimeOffset.UtcNow.AddMinutes(-15)).ToListAsync(ct);
+    Task<List<PendingAction>> Cards(CancellationToken ct) => Open("proposal").ToListAsync(ct);
     /// <summary>The data of a registration card, when the proposal is one.</summary>
-    static JsonElement? Registration(Activity card) => JsonSerializer.Deserialize<JsonElement>(card.Body) is var p && p.GetProperty("action").GetString() == "register" ? p : null;
+    static JsonElement? Registration(PendingAction card) => JsonSerializer.Deserialize<JsonElement>(card.Body) is var p && p.GetProperty("action").GetString() == "register" ? p : null;
 
     /// <summary>«Corregir datos» on the card with a registration and its appointment: the card stops existing, with its data, and the form starts over keeping the hour.
     /// The registration card without an hour keeps its own button, which goes to the agent.</summary>
     async Task Correct(string code, CancellationToken ct)
     {
-        if ((await Cards(ct)).FirstOrDefault(x => x.Kind == "proposal:" + code) is not { } card || Registration(card) is not { } p || !p.TryGetProperty("startsAt", out var chosen) || contact.PatientId is not null)
+        if ((await Cards(ct)).FirstOrDefault(x => x.Code == code) is not { } card || Registration(card) is not { } p || !p.TryGetProperty("startsAt", out var chosen) || contact.PatientId is not null)
         { await conversations.Send(conv.Id, "Esa confirmación ya venció o no existe.\nDime qué necesitas y lo preparo de nuevo.", "agent", "agent:" + job.Id, ct: ct); return; }
-        db.Activities.Remove(card);
+        db.PendingActions.Remove(card);
         if (Future(chosen.GetString()) is not { } start) { await db.SaveChangesAsync(ct); await conversations.Send(conv.Id, "Disculpa, ese horario ya no está disponible.\nDime qué día prefieres y vuelvo a consultar la agenda.", "agent", "agent:" + job.Id, ct: ct); return; }
         // The same text a tap on the list carries, so the form keeps the hour exactly as if it had just been tapped.
         var raw = $"CITA {TimeZoneInfo.ConvertTime(start, zone):yyyy-MM-ddTHH:mm:sszzz} {p.GetProperty("doctorId").GetString()} {p.GetProperty("durationMinutes").GetInt32()} {(p.TryGetProperty("doctorName", out var name) ? name.GetString() : "")}".Trim();
         var (state, prompt, _) = Intake.Start(raw, When(start)); Trace("start_registration");
-        db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "intake", Actor = "Agente", ActorRole = "agent_ai", Body = JsonSerializer.Serialize(state, Json) }); await db.SaveChangesAsync(ct);
-        await conversations.Send(conv.Id, prompt, "agent", "agent:" + job.Id, ct: ct);
+        Hold("intake", "", JsonSerializer.Serialize(state, Json), IntakeLife); await db.SaveChangesAsync(ct);
+        await Reply(prompt, ct);
     }
     // Only the closing message is for the patient; text the model wrote next to a tool call is not.
     /// <summary>The instructions without the hospital's guide and the patient's memory: those two may be repeated to the patient, the rules may not.</summary>
@@ -496,7 +528,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         AIFunctionFactory.Create(async ([Description("YYYY-MM-DD")] string date, string? doctorId = null, [Description("Sólo si el paciente dijo que la cita es para esto: procedure, results o paperwork, como en propose_action. Para una consulta no lo pongas")] string? kind = null, CancellationToken ct = default) =>
         {
             // The patient usually taps one of these hours, and a tapped hour is proposed without the model: what the appointment is for is kept here for it.
-            if (kind is "procedure" or "results" or "paperwork") { db.Activities.Add(new Activity { TenantId = scope.Id, ContactId = contact.Id, ConversationId = conv.Id, Kind = "visit_kind", Actor = "Agente", ActorRole = "agent_ai", Body = kind }); await db.SaveChangesAsync(ct); }
+            if (kind is "procedure" or "results" or "paperwork") { Hold("visit_kind", kind, "", ProposalLife); await db.SaveChangesAsync(ct); }
             return await Availability(date, doctorId, ct, labelled: true);
         }, "hospital_availability", "Consultar horarios libres desde una fecha: devuelve los de esa fecha o, si no tiene, los del primer día siguiente con agenda"),
         AIFunctionFactory.Create(async ([Description("YYYY-MM-DD")] string date, CancellationToken ct) => 
@@ -644,11 +676,12 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         if (await NextQuestion("?", "?", ct) is { } question)
         {
             var options = ask ? WithEmergency(question.Choices) : question.Choices;
-            await conversations.Send(conv.Id, lead + $"Hay espacio el *{Weekdays[(int)day.DayOfWeek]} {day.Day} de {Months[day.Month - 1]}*.\n\n" + question.Text + (ask ? Urgent(options, emergencyPhone) : ""), "agent", "agent:" + job.Id, ct: ct, choices: options); return;
+            await Reply(lead + $"Hay espacio el *{Weekdays[(int)day.DayOfWeek]} {day.Day} de {Months[day.Month - 1]}*.\n\n" + question.Text + (ask ? Urgent(options, emergencyPhone) : ""), ct, options); return;
         }
         var text = lead + $"Hay espacio el *{Weekdays[(int)day.DayOfWeek]} {day.Day} de {Months[day.Month - 1]}*.\nToca *Ver horarios* para elegir, o dime qué otro día prefieres." + emergency;
         var list = new Choices(slots, "Ver horarios");
-        await conversations.Send(conv.Id, text, "agent", "agent:" + job.Id, ct: ct, choices: ask ? WithEmergency(list) : list);
+        if (ask) Hold("question", "emergency", "", QuestionLife);
+        await Reply(text, ct, ask ? WithEmergency(list) : list);
     }
 
     /// <summary>The emergency as one more thing to tap beside the options already offered. A WhatsApp list holds ten rows.</summary>
@@ -770,22 +803,23 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             withHour = true; booking = $"*Cita:* {When(start)}{(chosen.Name.Length > 0 ? $"\n*Con:* {chosen.Name}" : "")}\n\n¿Confirmo tu registro y tu cita?";
         }
         var code = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(3));
-        db.Activities.Add(new Activity { TenantId = scope.Id, ContactId = contact.Id, ConversationId = conv.Id, Kind = "proposal:" + code, Actor = "Agente", ActorRole = "agent_ai", Body = payload.ToJsonString(Json) }); await db.SaveChangesAsync(ct);
+        Hold("proposal", code, payload.ToJsonString(Json), ProposalLife); await db.SaveChangesAsync(ct);
         summary = $"Revisa tus datos:\n\n*{payload["givenNames"]} {payload["familyNames"]}*\nNacimiento: {born.Day} de {Months[born.Month - 1]} de {born.Year}\nSexo: {(sex == "female" ? "femenino" : "masculino")}\nContacto de emergencia: {payload["emergencyName"]} ({payload["emergencyRelationship"]}), {payload["emergencyPhone"]}\n\n{(booking.Length > 0 ? booking : "¿Están correctos?")}";
         proposal = code; second = "Corregir datos"; return Result(new { confirmationRequired = true, instruction = "El sistema ya envía al paciente sus datos con el botón Confirmar. No escribas nada más." });
     }
 
     /// <summary>One answer of the registration form. The finished form becomes the same proposal the agent would make, and keeps no data behind.</summary>
-    async Task IntakeStep(Activity form, string answer, CancellationToken ct)
+    async Task IntakeStep(PendingAction form, string answer, CancellationToken ct)
     {
         var (next, prompt, options) = JsonSerializer.Deserialize<Intake>(form.Body, Json)!.Answer(answer, DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, zone).DateTime));
-        if (next.Minor || next.Complete) db.Activities.Remove(form); else { form.Body = JsonSerializer.Serialize(next, Json); form.CreatedAt = DateTimeOffset.UtcNow; }
+        // The form is working state: finished, it goes with its data. Answered, it waits on the next question, thirty minutes more.
+        if (next.Minor || next.Complete) db.PendingActions.Remove(form); else { form.Body = JsonSerializer.Serialize(next, Json); form.ExpiresAt = DateTimeOffset.UtcNow + IntakeLife; held.Add(form); }
         if (next.Complete) Trace("propose_registration");
         await db.SaveChangesAsync(ct);
         if (next.Minor) { await OfferPerson("Registro por WhatsApp de una persona menor de 18 años: requiere tutor legal en recepción.", "Para registrar a una persona menor de 18 años hace falta su tutor,\ny eso se hace con recepción.", ct); return; }
-        if (!next.Complete) { await conversations.Send(conv.Id, prompt, "agent", "agent:" + job.Id, ct: ct, choices: options); return; }
+        if (!next.Complete) { await Reply(prompt, ct, options); return; }
         await ProposeRegistration(next.GivenNames!, next.FamilyNames!, next.BirthDate!, next.Sex!, next.EmergencyName!, next.EmergencyRelationship!, next.EmergencyPhone!, ct, next.Slot);
-        await conversations.Send(conv.Id, summary!, "agent", "agent:" + job.Id, ct: ct, choices: Confirmation());
+        await Reply(summary!, ct, Confirmation());
     }
     /// <summary>The patient's booked appointments from now on, as Hospital has them. Cancelled ones are not appointments any more.</summary>
     async Task<List<(Guid Id, DateTimeOffset Start, string Doctor)>> Upcoming(CancellationToken ct)
@@ -833,7 +867,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             }
             await (choice.Verb == "CANCELAR" ? Propose("cancel", null, choice.Appointment.ToString(), null, null, ct) : Propose("reschedule", choice.Doctor?.ToString(), choice.Appointment.ToString(), choice.StartsAt, choice.Minutes, ct, choice.Name));
             Trace("propose_action");
-            await conversations.Send(conv.Id, summary!, "agent", "agent:" + job.Id, ct: ct, choices: Confirmation());
+            await Reply(summary!, ct, Confirmation());
         }
         catch (ArgumentException) { await conversations.Send(conv.Id, "Disculpa, ese horario ya no está disponible.\nToca *Mis citas* para intentarlo de nuevo.", "agent", "agent:" + job.Id, ct: ct, choices: MenuNow); }
         catch (Exception ex) when (ex is HttpRequestException or HospitalIntegrationException) { await OfferPerson("No se pudo gestionar la cita del paciente en Hospital.", "Disculpa, no pude consultar tu cita en este momento.", ct); }
@@ -885,7 +919,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         if (action == "create" && kind is not null) payload["kind"] = kind;
         var purpose = action != "create" ? null : kind switch { "procedure" => "Procedimiento", "results" => "Entrega de resultados", "paperwork" => "Trámite", _ => null };
         summary = (summary ?? "Cancelar tu cita") + (who is null ? "" : $"\n*Con:* {who}") + (purpose is null ? "" : $"\n*Motivo:* {purpose}") + "\n\n" + (action switch { "cancel" => "¿La cancelo?", "reschedule" => "¿La cambio?", _ => "¿La confirmo?" });
-        db.Activities.Add(new Activity { TenantId = scope.Id, ContactId = contact.Id, ConversationId = conv.Id, Kind = "proposal:" + code, Actor = "Agente", ActorRole = "agent_ai", Body = payload.ToJsonString() }); await db.SaveChangesAsync(ct);
+        Hold("proposal", code, payload.ToJsonString(), ProposalLife); await db.SaveChangesAsync(ct);
         proposal = code; second = action == "cancel" ? "No cancelar" : "Otro horario"; return Result(new { confirmationRequired = true, instruction = "El sistema ya envía al paciente la propuesta con su botón. No escribas nada más.", details = payload });
     }
     async Task<JsonElement> SendPrescription(Guid? requested, CancellationToken ct)
@@ -908,12 +942,16 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
     async Task Confirm(Conversation conv, Contact contact, string code, Job job, CancellationToken ct)
     {
         using var lease = await conversations.Lock(conv.Id, ct); await db.Entry(conv).ReloadAsync(ct); if (!await Active(conv.Id,conv.Revision,ct)) return;
-        var proposal = await db.Activities.Where(x => x.ConversationId == conv.Id && x.Kind == "proposal:" + code && x.CreatedAt > DateTimeOffset.UtcNow.AddMinutes(-15)).OrderByDescending(x => x.CreatedAt).FirstOrDefaultAsync(ct);
+        var proposal = await Open("proposal").Where(x => x.Code == code).OrderByDescending(x => x.CreatedAt).FirstOrDefaultAsync(ct);
         if (proposal is null) { await conversations.Send(conv.Id, "Esa confirmación ya venció o no existe.\nDime qué necesitas y lo preparo de nuevo.", "agent", "confirm:" + job.Id, ct: ct); return; }
         using var doc = JsonDocument.Parse(proposal.Body); var p = doc.RootElement; var action = p.GetProperty("action").GetString();
         if (action != "register") RequirePatient(contact);
-        // Consume before the external write; never replay uncertain operations. A registration proposal holds personal data only until it is used.
-        proposal.Kind = "proposal_used:" + code; if (action == "register") proposal.Body = """{"action":"register"}"""; await db.SaveChangesAsync(ct);
+        // Consume before the external write; never replay uncertain operations (INV-6). The proposal keeps none of its data once used,
+        // and the history says a confirmation was processed, and of what.
+        db.Activities.Add(new Activity { TenantId = scope.Id, ContactId = contact.Id, ConversationId = conv.Id, Kind = "proposal_used:" + code, Actor = "Agente", ActorRole = "agent_ai", Body = new JsonObject { ["action"] = action }.ToJsonString() });
+        await Consume(proposal, ct);
+        // MR-41: what Hospital will key this confirmation's writes by; one proposal, one operation.
+        var idempotency = "agent:" + proposal.Id;
         // A registration made after tapping an hour carries the appointment in the same proposal: one decision, one Confirmar.
         var registered = action == "register"; var booking = action is "create" or "reschedule" || (registered && p.TryGetProperty("startsAt", out _)); string? wanted = null;
         // Whether a write to Hospital has started: only from then on can the operation have happened without us knowing.
@@ -945,6 +983,10 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
                 await conversations.Send(conv.Id, $"Esa cita ya pasó, así que no se puede {(action == "cancel" ? "cancelar" : "cambiar")}.\n¿Quieres agendar una nueva?", "agent", "confirm:" + job.Id, ct: ct, choices: new([new("AGENDAR", "Agendar cita"), new("MENU", "Seguir aquí")]));
                 return;
             }
+            // What the patient said the appointment is for, when the proposal carries it; else a first visit when Hospital has no earlier appointment of
+            // theirs (MR-42). Someone registered by this very confirmation has none, so Hospital is not asked. Only a read: nothing is written yet.
+            var visit = action != "create" ? null : p.TryGetProperty("kind", out var kind) && kind.GetString() is { } said ? said
+                : registered ? "first-visit" : await FirstOrFollowUp(start, ct);
             written = true;
             if (action == "cancel") await hospital.CancelAppointmentAsync(scope.Id, contact.PatientId!.Value, contact.Phone, p.GetProperty("appointmentId").GetGuid(), ct);
             else
@@ -952,8 +994,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
                 if (action == "reschedule") await hospital.RescheduleAppointmentAsync(scope.Id, contact.PatientId!.Value, contact.Phone, p.GetProperty("appointmentId").GetGuid(), doctor, start, duration, ct);
                 else
                 {
-                    // What the patient said the appointment is for, when the proposal carries it; else first visit or follow-up, by whether this conversation registered them.
-                    var created = await hospital.CreateAppointmentAsync(scope.Id, contact.Phone, new HospitalAppointmentCreate(contact.PatientId!.Value, doctor, start, duration, p.TryGetProperty("kind", out var visit) && visit.GetString() is { } said ? said : await db.Activities.AnyAsync(x => x.ContactId == contact.Id && x.Kind == "patient_registered", ct) ? "first-visit" : "follow-up"), ct);
+                    var created = await hospital.CreateAppointmentAsync(scope.Id, contact.Phone, new HospitalAppointmentCreate(contact.PatientId!.Value, doctor, start, duration, visit!), ct);
                     // Hospital's overlap probe counts cancelled appointments too, so a slot the agenda shows free can answer «overlaps».
                     // The agenda's own count decides: only another active appointment in the slot is a real overlap for a person to sort out.
                     // An answer with no appointment in it is not a booking: the team checks Hospital (MR-5).
@@ -995,6 +1036,12 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         contact.PatientId = patient; contact.Name = $"{Field("givenNames")} {Field("familyNames")}"; // who the person said they are, confirmed by them
         db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "patient_registered", Actor = "Agente", ActorRole = "agent_ai", Body = $"Paciente registrado en Hospital por WhatsApp, con confirmación del paciente. Referencia Hospital: {patient}." }); await db.SaveChangesAsync(ct);
         return true;
+    }
+    /// <summary>An auxiliary read: when Hospital cannot say, the appointment is still booked, as the follow-up it was always booked as before MR-42.</summary>
+    async Task<string> FirstOrFollowUp(DateTimeOffset start, CancellationToken ct)
+    {
+        try { return await hospital.FirstOrFollowUpAsync(scope.Id, contact.PatientId!.Value, contact.Phone, start, ct); }
+        catch (Exception ex) when (ex is HttpRequestException or HospitalIntegrationException or KeyNotFoundException or InvalidOperationException or FormatException or JsonException) { return "follow-up"; }
     }
     static void RequirePatient(Contact c) { if (c.PatientId is null) throw new ArgumentException("Recepción debe vincular el expediente del paciente"); }
     /// <param name="offerDoctor">The patient asked for a person or a doctor: the doctors the hospital lets patients write to are offered too.</param>

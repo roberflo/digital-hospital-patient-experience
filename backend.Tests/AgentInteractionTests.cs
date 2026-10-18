@@ -44,7 +44,7 @@ public sealed class AgentInteractionTests : IAsyncLifetime
         await h.Link();
         await h.Runtime(h.Model(AgentHarness.ToolCall("propose_action", new { action = "cancel", appointmentId = Guid.NewGuid() }), AgentHarness.Reply("Puedo cancelar tu cita.")), h.Sender(), h.Hospital()).Run(h.Job, CancellationToken.None);
 
-        var code = (await h.Db.Activities.SingleAsync(a => a.ConversationId == h.Conversation.Id && a.Kind.StartsWith("proposal:"))).Kind[9..];
+        var code = Assert.Single(await h.Pending("proposal")).Code;
         var buttons = Buttons(Assert.Single(h.Interactive)).ToList();
         Assert.Equal(("CONFIRMAR " + code, "Confirmar"), buttons[0]);
         Assert.DoesNotContain("CONFIRMAR", Assert.Single(h.Sent)); // the button carries it; typing the code or answering «sí» still works (AgentVoiceTests)
@@ -68,14 +68,14 @@ public sealed class AgentInteractionTests : IAsyncLifetime
         h.Interactive.Clear(); h.Sent.Clear(); await h.Say("patient", tapped);
         await h.Runtime(new AgentHarness.Fake(_ => throw new InvalidOperationException("The model must not be consulted")), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
 
-        var proposal = await h.Db.Activities.SingleAsync(a => a.ConversationId == h.Conversation.Id && a.Kind.StartsWith("proposal:"));
+        var proposal = Assert.Single(await h.Pending("proposal"));
         using var stored = JsonDocument.Parse(proposal.Body);
         Assert.Equal("create", stored.RootElement.GetProperty("action").GetString());
         Assert.Equal(doctor, stored.RootElement.GetProperty("doctorId").GetGuid());
         Assert.Equal(start, stored.RootElement.GetProperty("startsAt").GetDateTimeOffset());
         var sent = Assert.Single(h.Sent);
         Assert.Contains("a las 09:00", sent); Assert.Contains("Dra. Sintética Rivas", sent);
-        Assert.Equal("CONFIRMAR " + proposal.Kind[9..], Buttons(Assert.Single(h.Interactive)).First().Id);
+        Assert.Equal("CONFIRMAR " + proposal.Code, Buttons(Assert.Single(h.Interactive)).First().Id);
         Assert.Empty(h.HospitalWrites); // still nothing booked: the patient has to confirm
     }
 
@@ -88,7 +88,7 @@ public sealed class AgentInteractionTests : IAsyncLifetime
 
         await h.Runtime(new AgentHarness.Fake(_ => throw new InvalidOperationException("The model must not be consulted")), h.Sender(), h.Hospital()).Run(h.Job, CancellationToken.None);
 
-        Assert.Empty(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id && a.Kind.StartsWith("proposal:")).ToListAsync());
+        Assert.Empty(await h.Pending("proposal"));
         Assert.Contains("ya no está disponible", Assert.Single(h.Sent));
     }
 
@@ -148,7 +148,7 @@ public sealed class AgentInteractionTests : IAsyncLifetime
         });
         await h.Say("patient", $"CITA {start.ToOffset(TimeSpan.FromHours(-6)):yyyy-MM-ddTHH:mm:sszzz} {doctor} 30 Dra. Sintética Rivas");
         await h.Runtime(h.Model(AgentHarness.Reply("No debe consultarse")), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
-        var code = (await h.Db.Activities.SingleAsync(a => a.ConversationId == h.Conversation.Id && a.Kind.StartsWith("proposal:"))).Kind[9..];
+        var code = Assert.Single(await h.Pending("proposal")).Code;
         h.Sent.Clear(); h.Interactive.Clear(); await h.Say("patient", "CONFIRMAR " + code);
 
         await h.Runtime(h.Model(AgentHarness.Reply("No debe consultarse")), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
@@ -176,7 +176,7 @@ public sealed class AgentInteractionTests : IAsyncLifetime
         });
         await h.Say("patient", $"CITA {start.ToOffset(TimeSpan.FromHours(-6)):yyyy-MM-ddTHH:mm:sszzz} {doctor} 30 Dra. Sintética Rivas");
         await h.Runtime(h.Model(AgentHarness.Reply("No debe consultarse")), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
-        var code = (await h.Db.Activities.SingleAsync(a => a.ConversationId == h.Conversation.Id && a.Kind.StartsWith("proposal:"))).Kind[9..];
+        var code = Assert.Single(await h.Pending("proposal")).Code;
         h.Sent.Clear(); await h.Say("patient", "CONFIRMAR " + code);
 
         await h.Runtime(h.Model(AgentHarness.Reply("No debe consultarse")), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
@@ -239,7 +239,7 @@ public sealed class AgentInteractionTests : IAsyncLifetime
         Assert.Equal("list", list.GetProperty("type").GetString());
         Assert.StartsWith("CITA ", list.GetProperty("action").GetProperty("sections")[0].GetProperty("rows")[0].GetProperty("id").GetString());
         Assert.StartsWith("Hay espacio el *", Assert.Single(h.Sent)); AgentSlotFirstTests.ClaimsNoHour(h.Sent[0]); // T-12 on the list itself
-        Assert.Empty(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id && a.Kind == "intake").ToListAsync());
+        Assert.Empty(await h.Pending("intake"));
         Assert.Empty(h.HospitalWrites);
     }
 
@@ -256,7 +256,7 @@ public sealed class AgentInteractionTests : IAsyncLifetime
         Assert.Equal("agent", (await h.Fresh()).Status);
         var trail = await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync();
         Assert.Contains(trail, a => a.Kind == "handoff_offer"); // the patient is asked, with a button, whether to go to a person
-        Assert.DoesNotContain(trail, a => a.Kind == "intake");
+        Assert.Empty(await h.Pending("intake"));
         Assert.Contains(down ? "no pude consultar la agenda" : "No hay horarios publicados", Assert.Single(h.Sent));
     }
 

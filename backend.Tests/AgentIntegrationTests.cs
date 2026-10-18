@@ -138,7 +138,8 @@ public sealed partial class AgentIntegrationTests:IAsyncLifetime {
     public async Task KapsoRejectionFailsAndOutageStaysUncertainNeitherRetried(HttpStatusCode code,string expected){var k=new Fake(_=>Task.FromResult(new HttpResponseMessage(code)));var service=Service(k);var key="kapso-"+(int)code;var first=await service.Send(conversation.Id,"Texto sintético","human",key);var again=await service.Send(conversation.Id,"Texto sintético","human",key);Assert.Equal(1,k.Calls);Assert.Equal(first.Id,again.Id);Assert.Equal(expected,(await db.Messages.AsNoTracking().SingleAsync(x=>x.Id==first.Id)).Status);Assert.Equal("human",conversation.Status);}
     [Fact]public async Task HandoffToolPausesAndAcknowledgesPatient(){
         // Urgent is the patient's word: the question was asked earlier in this conversation.
-        db.Add(new Message{TenantId=scope.Id,ConversationId=conversation.Id,ExternalId="asked-"+scope.Id,Body=AgentGuard.EmergencyQuestion,Sender="agent",CreatedAt=DateTimeOffset.UtcNow.AddMinutes(-5)});await db.SaveChangesAsync();
+        var asked=new Message{TenantId=scope.Id,ConversationId=conversation.Id,ExternalId="asked-"+scope.Id,Body=AgentGuard.EmergencyQuestion,Sender="agent",CreatedAt=DateTimeOffset.UtcNow.AddMinutes(-5)};db.Add(asked);
+        db.Add(new PendingAction{TenantId=scope.Id,ConversationId=conversation.Id,Kind="question",Code="emergency",PromptMessageId=asked.Id,ExpiresAt=DateTimeOffset.UtcNow.AddHours(24)});await db.SaveChangesAsync(); // as AgentRuntime records the question (MR-40)
         var tool=new { id="call1",type="function",function=new {name="handoff",arguments="{\"reason\":\"Recepción debe ayudar\",\"urgent\":true}"}};
         var ai=new Fake(_=>Task.FromResult(Json(new {choices=new[]{new {message=new {role="assistant",content=(string?)null,tool_calls=new[]{tool}}}}})));
         var k=Sending();await Runtime(ai,k).Run(job,CancellationToken.None);
@@ -352,10 +353,10 @@ public sealed partial class AgentIntegrationTests:IAsyncLifetime {
         var rounds=0;var ai=new Fake(_=>Task.FromResult(++rounds==1?Json(new{choices=new[]{new{message=modelMessage}}}):Reply("Confirma la propuesta con el código indicado.")));
         var sender=Sending();var runtime=new AgentRuntime(new HttpClient(ai),cfg,db,scope,hospital,Service(sender),new KapsoClient(new HttpClient(sender),cfg));
         await runtime.Run(job,CancellationToken.None);Assert.Empty(writes);
-        var proposal=await db.Activities.SingleAsync(a=>a.Kind.StartsWith("proposal:"));var code=proposal.Kind[9..];
+        var proposal=await db.PendingActions.SingleAsync(a=>a.Kind=="proposal");var code=proposal.Code;
         var incoming=new Message{TenantId=scope.Id,ConversationId=conversation.Id,Sender="patient",Body="CONFIRMAR "+code,ExternalId="confirmation-"+Guid.NewGuid()};db.Add(incoming);await db.SaveChangesAsync();
         await runtime.Run(new Job{TenantId=scope.Id,ConversationId=conversation.Id,Key="agent:"+incoming.ExternalId},CancellationToken.None);
-        Assert.Single(writes);Assert.Equal(action=="create"?"/v1/agenda":$"/v1/agenda/{appointment}/{action}",writes[0]);Assert.StartsWith("proposal_used:",proposal.Kind);
+        Assert.Single(writes);Assert.Equal(action=="create"?"/v1/agenda":$"/v1/agenda/{appointment}/{action}",writes[0]);Assert.NotNull(proposal.ConsumedAt);
     }
     [Theory][InlineData("link")][InlineData("wrong_phone")][InlineData("wrong_reference")][InlineData("wrong_patient")][InlineData("doctor")][InlineData("ambiguous")][InlineData("no_purchase")][InlineData("purchase")][InlineData("shared_phone")]
     public async Task CommercialConversionRequiresHospitalEvidence(string scenario)

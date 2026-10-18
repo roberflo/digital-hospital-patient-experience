@@ -87,7 +87,7 @@ public sealed class AgentPersonChoiceTests : IAsyncLifetime
     [Fact]
     public async Task UrgentHandoffIsImmediateOnceThePatientWasAsked()
     {
-        await h.Say("agent", "Siento que te sientas así.\n\n¿Es una emergencia?"); await h.Say("patient", "Me duele muchísimo, no aguanto");
+        await h.Asked("emergency", "Siento que te sientas así.\n\n¿Es una emergencia?"); await h.Say("patient", "Me duele muchísimo, no aguanto");
 
         await h.Runtime(h.Model(AgentHarness.ToolCall("handoff", new { reason = "Dolor de pecho", urgent = true }), AgentHarness.Reply("Ok")), h.Sender()).Run(h.Job, CancellationToken.None);
 
