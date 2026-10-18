@@ -160,6 +160,22 @@ public sealed class AgentPendingActionsTests : IAsyncLifetime
         Assert.Contains("contacto de emergencia", h.Sent[^1]); Assert.Single(await h.Pending("intake")); // the form goes on: it asks for the name again
     }
 
+    /// <summary>MR-35 + MR-40: the model asked for the emergency contact in its own words; the question is recorded as it goes out, so
+    /// «Emergencia: …» in the answer labels that field whatever the message says later. The same words from the team do not.</summary>
+    [Theory]
+    [InlineData(true, "agent")]
+    [InlineData(false, "human")]
+    public async Task TheModelsQuestionForTheEmergencyContactLabelsTheAnswer(bool byTheAgent, string status)
+    {
+        var question = "Gracias. ¿Quién es tu contacto de emergencia? Nombre, parentesco y teléfono.";
+        if (byTheAgent) { await Say("Quiero registrarme", h.Model(AgentHarness.Reply(question))); Assert.Single(await h.Pending("question"), q => q.Code == "emergency-contact"); await RewriteLastAgentMessage(); }
+        else await h.Say("human", question);
+
+        await Say("Emergencia: María López", h.Model(AgentHarness.Reply("Gracias. ¿Me das su teléfono?")));
+
+        Assert.Equal(status, (await h.Fresh()).Status);
+    }
+
     /// <summary>INV-6: the proposal is consumed, and its data dropped, before anything is written to Hospital.</summary>
     [Fact]
     public async Task AProposalIsConsumedBeforeTheWriteAndKeepsNothing()

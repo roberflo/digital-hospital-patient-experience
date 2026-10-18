@@ -48,13 +48,13 @@ public static class CrmEndpoints
             }
             SetContact(row, b, c); Audit(db, t, u, "contact.updated", id); await db.SaveChangesAsync(); return Results.Ok(row);
         });
-        api.MapPost("/contacts/{id:guid}/patient", async (Guid id, PatientLinkInput b, CrmDb db, TenantScope t, CurrentUser u, CommercialService commercial) =>
+        api.MapPost("/contacts/{id:guid}/patient", async (Guid id, PatientLinkInput b, HttpContext ctx, CrmDb db, TenantScope t, CurrentUser u, CommercialService commercial) =>
         {
             var row = await db.Contacts.SingleOrDefaultAsync(x => x.Id == id); if (row is null) return Results.NotFound();
-            await commercial.LinkPatient(row,b.PatientId,u); Audit(db, t, u, "patient.linked", id); await db.SaveChangesAsync(); return Results.Ok(row);
+            await commercial.AsUser(Identity.Bearer(ctx)).LinkPatient(row,b.PatientId,u); Audit(db, t, u, "patient.linked", id); await db.SaveChangesAsync(); return Results.Ok(row);
         });
         // Legacy clients receive an explicit instruction; master records live only in Hospital.
-        api.MapGet("/companies",async(HospitalClient h,TenantScope t)=>(await h.Companies(t.Id,null,1)).Items);
+        api.MapGet("/companies",async(HttpContext ctx,HospitalClient h,TenantScope t)=>(await h.AsUser(Identity.Bearer(ctx)).Companies(t.Id,null,1)).Items);
         api.MapPost("/companies",()=>Results.Conflict(new{title="Administra empresas y convenios desde Hospital."}));
         api.MapPut("/companies/{id:guid}",()=>Results.Conflict(new{title="Administra empresas y convenios desde Hospital."}));
         api.MapGet("/opportunities", async (CrmDb db) => await db.Opportunities.OrderByDescending(x => x.UpdatedAt).Take(500).ToListAsync());

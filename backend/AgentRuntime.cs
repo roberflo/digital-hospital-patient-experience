@@ -47,28 +47,38 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         session = AgentMemory.Session(history);
         var latest = history.LastOrDefault(x => x.Sender == "patient"); if (latest is null || job.Key != "agent:" + latest.ExternalId) return;
         heard = string.Join("\n", history.Where(x => x.Sender == "patient").TakeLast(3).Select(x => x.Body));
-        // The message the patient is answering, when the agent wrote it: what the agent waits on is matched to it, never to its text.
+        // The message the patient is answering, when the agent wrote it: what the agent waits on is matched to it, never to its text (MR-40).
         var prompt = history.Count > 1 && history[^2].Sender == "agent" ? history[^2].Id : (Guid?)null;
-        // The form just asked for the emergency contact, so «Emergencia: …» labels that field.
-        var registering = prompt is not null && await db.PendingActions.Where(x => x.ConversationId == conv.Id && x.Kind == "intake" && x.ConsumedAt == null && x.PromptMessageId == prompt).Select(x => x.Body).FirstOrDefaultAsync(ct) is { } asking
-            && JsonSerializer.Deserialize<Intake>(asking, Json)!.AsksEmergencyContact;
+        // The turn: the patient's messages since the agent or the team last spoke. Older ones were already answered: reading them again would
+        // hand off every later message. While the turn answers the form's question for the emergency contact, «Emergencia: …» labels that field:
+        // the form that asked is the PendingAction stamped with the agent's message before the turn, never that message's text.
+        var turn = history.AsEnumerable().Reverse().TakeWhile(x => x.Sender == "patient").Take(3).Reverse().Select(x => x.Body).ToList();
+        var before = history.Count > turn.Count ? history[^(turn.Count + 1)] : null;
+        // The model may ask for it in its own words too: that question is recorded when it goes out (question:emergency-contact).
+        var registering = before is { Sender: "agent" } && (await db.PendingActions.Where(x => x.ConversationId == conv.Id && x.Kind == "intake" && x.ConsumedAt == null && x.PromptMessageId == before.Id).Select(x => x.Body).FirstOrDefaultAsync(ct) is { } asking
+            && JsonSerializer.Deserialize<Intake>(asking, Json)!.AsksEmergencyContact
+            || await Open("question").AnyAsync(x => x.Code == "emergency-contact" && x.PromptMessageId == before.Id, ct)
+            || await LegacyQuestion(before, ct) == "emergency-contact");
+        // Each message on its own, so a negation in one does not swallow the sign in another; and joined, for a sign split across them
+        // («me duele» + «el pecho») or in a message whose job a newer one coalesced.
+        var alarm = turn.Append(latest.Body).Append(string.Join("\n", turn)).Any(text => AgentGuard.NamesEmergency(text, registering));
         if (waitingSince is { } since)
         {
             // An emergency always gets the number. A tap of a registered patient is still served below, with no model.
             // Anything else is for the person who will answer: the patient is told so once it has been a while.
             var tap = latest.Body.Trim();
-            if (AgentGuard.Inbound(latest.Body, latest.Type, registering) is { } danger && AgentGuard.NamesEmergency(latest.Body, registering)) { await Handoff(conv, danger, ct, true); return; }
+            if (alarm) { await Handoff(conv, AgentGuard.Inbound(latest.Body, latest.Type, registering, alarm)!, ct, true); return; }
             if (contact.PatientId is null || !(tap is "AGENDAR" or "MISCITAS" or "RECETA" || tap.StartsWith("CONFIRMAR ", StringComparison.OrdinalIgnoreCase) || AgentGuard.SlotChoice(tap) is not null || AgentGuard.AppointmentChoice(tap) is not null)) { await StillWaiting(since, tenant.EmergencyPhone, ct); return; }
         }
-        else if (AgentGuard.Inbound(latest.Body, latest.Type, registering) is { } reason)
+        else if (AgentGuard.Inbound(latest.Body, latest.Type, registering, alarm) is { } reason)
         {
             // An emergency, or a patient who asks for a person, goes at once. A file the agent cannot open is the patient's call.
-            if (latest.Type != "text" && latest.Body == "[Archivo recibido]") await OfferPerson(reason, "Gracias por el archivo. Yo no puedo abrirlo, pero el equipo sí.", ct);
-            else await Handoff(conv, reason, ct, AgentGuard.NamesEmergency(latest.Body, registering), offerDoctor: true);
+            if (!alarm && latest.Type != "text" && latest.Body == "[Archivo recibido]") await OfferPerson(reason, "Gracias por el archivo. Yo no puedo abrirlo, pero el equipo sí.", ct);
+            else await Handoff(conv, reason, ct, alarm, offerDoctor: true);
             return;
         }
         // The patient chose a person: with the button, or by saying yes to the offer just made. The team gets the reason the agent offered it for.
-        var legacy = await LegacyQuestion(history, prompt, ct);
+        var legacy = prompt is null ? null : await LegacyQuestion(history[^2], ct);
         var offered = await Open("question").Where(x => x.Code == "person").OrderByDescending(x => x.CreatedAt).FirstOrDefaultAsync(ct);
         if (latest.Body.Trim() is "PERSONA" || (AgentGuard.Affirms(latest.Body) && ((prompt is not null && offered?.PromptMessageId == prompt) || legacy == "person")))
         {
@@ -314,17 +324,21 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         if (content.Contains(AgentGuard.EmergencyQuestion)) Hold("question", "emergency", "", QuestionLife);
         // The model may offer a person itself, in the canonical words (a price with prices off): «sí» answers that too.
         if (content.Contains(AgentGuard.PersonQuestion)) Hold("question", "person", "", QuestionLife);
+        // The model asked for the emergency contact itself: «Emergencia: …» in the answer labels that field (MR-35). Not on a card, which only shows it.
+        if (proposal is null && content.Contains(EmergencyContact, StringComparison.OrdinalIgnoreCase)) Hold("question", "emergency-contact", "", QuestionLife);
         await Reply(content, ct, choices);
     }
     /// <summary>Deploy transition of MR-40: a question the agent sent before PendingActions existed has none. Within its 24 hours, a message the agent
     /// sent before the cut (AGENT_LEGACY_QUESTIONS_BEFORE, ISO; set it to the deploy time) is read by its canonical words, as before.</summary>
     // ponytail: retire this and the setting after 2026-11-17; a day after the deploy nothing can still match it.
-    async Task<string?> LegacyQuestion(List<Message> history, Guid? prompt, CancellationToken ct)
+    async Task<string?> LegacyQuestion(Message? asked, CancellationToken ct)
     {
         var cut = DateTimeOffset.TryParse(config["AGENT_LEGACY_QUESTIONS_BEFORE"], System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var set) ? set : LegacyCut;
-        if (prompt is null || history[^2].CreatedAt >= cut || history[^2].CreatedAt < DateTimeOffset.UtcNow - QuestionLife || await db.PendingActions.AnyAsync(x => x.PromptMessageId == prompt, ct)) return null;
-        return history[^2].Body.Contains(AgentGuard.EmergencyQuestion) ? "emergency" : history[^2].Body.Contains(AgentGuard.PersonQuestion) ? "person" : null;
+        if (asked is not { Sender: "agent" } || asked.CreatedAt >= cut || asked.CreatedAt < DateTimeOffset.UtcNow - QuestionLife || await db.PendingActions.AnyAsync(x => x.PromptMessageId == asked.Id, ct)) return null;
+        return asked.Body.Contains(AgentGuard.EmergencyQuestion) ? "emergency" : asked.Body.Contains(AgentGuard.PersonQuestion) ? "person"
+            : asked.Body.Contains(EmergencyContact, StringComparison.OrdinalIgnoreCase) ? "emergency-contact" : null;
     }
+    const string EmergencyContact = "contacto de emergencia";
     /// <summary>When this change was committed (UTC); the deploy sets the real cut.</summary>
     static readonly DateTimeOffset LegacyCut = new(2026, 10, 18, 1, 30, 0, TimeSpan.Zero);
     /// <summary>Something the agent now waits on in this conversation; it is matched to the next message the agent sends (<see cref="Reply"/>).</summary>

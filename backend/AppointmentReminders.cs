@@ -32,6 +32,17 @@ public static class ReminderRules
 
 public sealed class AppointmentReminderService(CrmDb db,TenantScope scope,HospitalClient hospital,KapsoClient kapso,ConversationService conversations,IConfiguration config)
 {
+    /// <summary>For a sync a person starts (MR-11): Hospital sees their token. The reminder worker never calls this.</summary>
+    public AppointmentReminderService AsUser(string bearer)=>new(db,scope,hospital.AsUser(bearer),kapso,conversations,config);
+    /// <summary>A sync an Administrador starts, on their own token: refused with under two minutes of it left, and bounded to 90 s so it
+    /// ends while the token still works. Past the budget nothing more is read; the worker's next pass completes it.</summary>
+    public async Task SyncAsPerson(DateTimeOffset now, CancellationToken ct, TimeSpan? budget = null)
+    {
+        hospital.RequireUserTokenFor(scope.Id, TimeSpan.FromMinutes(2));
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct); deadline.CancelAfter(budget ?? TimeSpan.FromSeconds(90));
+        try { await Sync(now, deadline.Token); }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { throw new HospitalIntegrationException("hospital.timeout", HttpStatusCode.GatewayTimeout); }
+    }
     /// <param name="contactBudget">How long one contact's Hospital read may take before it counts as a failure (20 s).</param>
     public async Task Sync(DateTimeOffset now, CancellationToken ct = default, TimeSpan? contactBudget = null)
     {
@@ -79,7 +90,8 @@ public sealed class AppointmentReminderService(CrmDb db,TenantScope scope,Hospit
                 await db.SaveChangesAsync(ct);
             }
             // A contact that times out is one failure; only the sync's own deadline stops the others.
-            catch(Exception ex) when(ex is HospitalIntegrationException or HttpRequestException or ArgumentException or JsonException || ex is OperationCanceledException && !ct.IsCancellationRequested)
+            // Hospital refusing the person who started the sync is not one contact's failure: it is theirs to know.
+            catch(Exception ex) when(ex is HospitalIntegrationException{Code:not("hospital.user_forbidden" or "hospital.user_token_rejected")} or HttpRequestException or ArgumentException or JsonException || ex is OperationCanceledException && !ct.IsCancellationRequested)
             { failures++; } // No stale Hospital snapshot is used to authorize sending.
         }
         tenant.ReminderLastSyncAt=now;tenant.ReminderSyncError=failures>0?$"No se pudo verificar la agenda de {failures} contacto(s). Se volverá a consultar Hospital.":null;

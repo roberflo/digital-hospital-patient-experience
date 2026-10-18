@@ -15,6 +15,20 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
+    /// <summary>A copy that speaks to Hospital as the signed-in person (MR-11): their own Keycloak token, so Hospital's permissions and
+    /// audit name them. Never cached and never refreshed here; the agent, which never calls this, keeps the service account.</summary>
+    public HospitalClient AsUser(string bearer) => new(http, configuration, connections, log) { userBearer = bearer, correlation = correlation };
+    string? userBearer;
+    /// <summary>Refuses up front work that would outlive the person's token: midway it would fail request after request. No-op on the service account, which renews itself.</summary>
+    public void RequireUserTokenFor(Guid tenantId, TimeSpan needed)
+    {
+        if (userBearer is null) return;
+        long expires;
+        try { expires = ValidateTokenTenant(userBearer, tenantId); }
+        catch (HospitalIntegrationException) { throw new HospitalIntegrationException("hospital.user_token_rejected", HttpStatusCode.Forbidden); }
+        if (DateTimeOffset.FromUnixTimeSeconds(expires) - DateTimeOffset.UtcNow < needed) throw new HospitalIntegrationException("hospital.user_session_expiring", HttpStatusCode.Conflict);
+    }
+
     public bool IsConfigured(Guid tenantId) =>
         !string.IsNullOrWhiteSpace(Tenant(tenantId)["BaseUrl"]);
 
@@ -243,8 +257,10 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
             || baseUri.Scheme is not ("https" or "http") || !string.IsNullOrEmpty(baseUri.UserInfo)
             || !string.IsNullOrEmpty(baseUri.Query) || !string.IsNullOrEmpty(baseUri.Fragment))
             throw new HospitalIntegrationException("hospital.not_configured", HttpStatusCode.ServiceUnavailable);
-        var token = await GetTokenAsync(tenantId, tenant, ct);
-        ValidateTokenTenant(token, tenantId);
+        var token = userBearer ?? await GetTokenAsync(tenantId, tenant, ct);
+        // A person's token that is not this hospital's, or about to expire, is theirs to renew: a 403, never a 401 that loops the login.
+        try { ValidateTokenTenant(token, tenantId); }
+        catch (HospitalIntegrationException) when (userBearer is not null) { throw new HospitalIntegrationException("hospital.user_token_rejected", HttpStatusCode.Forbidden); }
         using var request = new HttpRequestMessage(method, new Uri(baseUri, path));
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         request.Headers.Add("X-Correlation-Id", (correlation ?? Guid.NewGuid()).ToString("D"));
@@ -258,6 +274,11 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
         {
             var status = response.StatusCode;
             var code = $"hospital.http_{(int)status}";
+            if (userBearer is not null && status is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+            {
+                response.Dispose();
+                throw new HospitalIntegrationException(status == HttpStatusCode.Forbidden ? "hospital.user_forbidden" : "hospital.user_token_rejected", HttpStatusCode.Forbidden);
+            }
             // A token Hospital no longer accepts (revoked, rotated keys) is dropped; the next request asks for a new one, this one is not retried.
             // Only the entry holding the rejected token: one another request has just stored stays.
             if (status == HttpStatusCode.Unauthorized) foreach (var entry in Tokens.Where(e => e.Key.Tenant == tenantId && e.Value.Token == token)) Tokens.TryRemove(entry);
@@ -365,6 +386,9 @@ public sealed class HospitalIntegrationException(string code, HttpStatusCode sta
         "hospital.not_configured" => "Tu cuenta del Hospital está reconocida. El administrador debe habilitar la agenda para este hospital desde la configuración de la plataforma.",
         "hospital.credentials_missing" or "hospital.token_request_failed" or "hospital.token_missing" or "hospital.token_tenant_or_expiry_invalid" => "No pudimos acceder a Hospital. Tu cuenta sigue vinculada; pide al administrador que revise la conexión.",
         "hospital.patient_phone_mismatch" => "El teléfono del expediente no coincide con el contacto. Corrige los datos en Hospital antes de vincular.",
+        "hospital.user_forbidden" => "Tu usuario no tiene permiso para esto en Hospital.",
+        "hospital.user_session_expiring" => "Tu sesión está por vencer; recarga y vuelve a intentar.",
+        "hospital.user_token_rejected" => "Hospital no aceptó tu sesión. Recarga la página; si continúa, consulta al administrador.",
         "hospital.http_403" or "hospital.clinical_delivery_not_authorized" => "Tu cuenta no tiene permiso para esta operación en Hospital. Consulta al administrador.",
         "hospital.http_404" or "hospital.prescription_unavailable" or "hospital.appointment_unavailable" => "No encontramos la cita o el documento en Hospital. Actualiza la información y vuelve a intentar.",
         "hospital.http_409" => "La información cambió en Hospital. Actualiza la agenda antes de continuar.",

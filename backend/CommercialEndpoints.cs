@@ -7,29 +7,34 @@ public static class CommercialEndpoints
     {
         var api=app.MapGroup("/api/commercial").RequireAuthorization();
         api.MapGet("/settings",(HospitalClient h,TenantScope t)=>new{hospitalUrl=h.EntryUrl(t.Id,"/es/commercial")});
-        api.MapGet("/companies",async(string? q,int? page,HospitalClient h,TenantScope t)=>await h.Companies(t.Id,Query(q),Page(page)));
-        api.MapGet("/services",async(string? q,int? page,HospitalClient h,TenantScope t)=>await h.Services(t.Id,Query(q),Page(page)));
-        api.MapGet("/contacts/{id:guid}",async(Guid id,int? page,CrmDb db,TenantScope t,HospitalClient h)=>{
+        api.MapGet("/companies",async(string? q,int? page,HttpContext ctx,HospitalClient h,TenantScope t)=>await h.AsUser(Identity.Bearer(ctx)).Companies(t.Id,Query(q),Page(page)));
+        api.MapGet("/services",async(string? q,int? page,HttpContext ctx,HospitalClient h,TenantScope t)=>await h.AsUser(Identity.Bearer(ctx)).Services(t.Id,Query(q),Page(page)));
+        api.MapGet("/contacts/{id:guid}",async(Guid id,int? page,HttpContext ctx,CrmDb db,TenantScope t,HospitalClient h)=>{
+            h=h.AsUser(Identity.Bearer(ctx));
             var contact=await db.Contacts.SingleOrDefaultAsync(c=>c.Id==id);if(contact is null)return Results.NotFound();
             var candidates=await h.Customers(t.Id,contact.Phone);
             HospitalCustomer? customer=null;HospitalCommercialPage<HospitalPurchase>? purchases=null;
             if(contact.HospitalCustomerId is {} cid){customer=await h.Customer(t.Id,cid);HospitalClient.VerifyCustomer(customer,contact);purchases=await h.Purchases(t.Id,cid,Page(page));}
             return Results.Ok(new{contact,customer,candidates=candidates.Items.Where(c=>HospitalClient.NormalizePhone(c.Phone)==contact.Phone&&(string.IsNullOrEmpty(c.ExternalReference)||c.ExternalReference=="recepcion:"+contact.Id)),purchases});
         });
-        api.MapPost("/contacts/{id:guid}/link",async(Guid id,CustomerLink b,CrmDb db,CurrentUser u,CommercialService commercial)=>{
+        api.MapPost("/contacts/{id:guid}/link",async(Guid id,CustomerLink b,HttpContext ctx,CrmDb db,CurrentUser u,CommercialService commercial)=>{
+            commercial=commercial.AsUser(Identity.Bearer(ctx));
             var contact=await db.Contacts.SingleOrDefaultAsync(c=>c.Id==id);if(contact is null)return Results.NotFound();
             var customer=await commercial.Link(contact,b.CustomerId,u);return Results.Ok(new{contact,customer});
         });
-        api.MapPost("/contacts/{id:guid}/sync",async(Guid id,CrmDb db,CurrentUser u,CommercialService commercial)=>{
+        api.MapPost("/contacts/{id:guid}/sync",async(Guid id,HttpContext ctx,CrmDb db,CurrentUser u,CommercialService commercial)=>{
+            commercial=commercial.AsUser(Identity.Bearer(ctx));
             var contact=await db.Contacts.SingleOrDefaultAsync(c=>c.Id==id);if(contact is null)return Results.NotFound();
             CommercialService.RequireOperator(u);await commercial.Sync(contact,u);return Results.Ok(contact);
         });
-        api.MapPost("/opportunities/{id:guid}/quote",async(Guid id,QuoteInput b,CrmDb db,CurrentUser u,CommercialService commercial)=>{
+        api.MapPost("/opportunities/{id:guid}/quote",async(Guid id,QuoteInput b,HttpContext ctx,CrmDb db,CurrentUser u,CommercialService commercial)=>{
+            commercial=commercial.AsUser(Identity.Bearer(ctx));
             var opportunity=await db.Opportunities.SingleOrDefaultAsync(o=>o.Id==id);if(opportunity is null)return Results.NotFound();
             var contact=await db.Contacts.SingleAsync(c=>c.Id==opportunity.ContactId);
             return Results.Ok(await commercial.Quote(opportunity,contact,b.Lines,b.CompanyId,u));
         });
-        api.MapPost("/opportunities/{id:guid}/purchase",async(Guid id,PurchaseConfirmation b,CrmDb db,CurrentUser u,CommercialService commercial)=>{
+        api.MapPost("/opportunities/{id:guid}/purchase",async(Guid id,PurchaseConfirmation b,HttpContext ctx,CrmDb db,CurrentUser u,CommercialService commercial)=>{
+            commercial=commercial.AsUser(Identity.Bearer(ctx));
             var opportunity=await db.Opportunities.SingleOrDefaultAsync(o=>o.Id==id);if(opportunity is null)return Results.NotFound();
             var contact=await db.Contacts.SingleAsync(c=>c.Id==opportunity.ContactId);
             return Results.Ok(await commercial.Purchase(opportunity,contact,b,u));

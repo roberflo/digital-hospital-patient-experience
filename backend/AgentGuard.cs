@@ -17,14 +17,61 @@ public static partial class AgentGuard
 
     /// <summary>Messages a person must answer; the model is never called. Returns the handoff reason.</summary>
     /// <param name="registering">The agent's previous message asked for the emergency contact, so «Emergencia: …» labels that field.</param>
-    public static string? Inbound(string body, string type, bool registering = false) =>
-        NamesEmergency(body, registering) || Person().IsMatch(body) ? "El paciente solicita atención personal o requiere valoración prioritaria."
+    /// <param name="urgent">The turn already names an emergency, read across the patient's messages (AgentRuntime).</param>
+    public static string? Inbound(string body, string type, bool registering = false, bool urgent = false) =>
+        urgent || NamesEmergency(body, registering) || Person().IsMatch(body) ? "El paciente solicita atención personal o requiere valoración prioritaria."
         : type != "text" && body == "[Archivo recibido]" ? "Archivo recibido; requiere revisión humana." : null;
 
     /// <summary>The message names an emergency. The word is read in context: «contacto de emergencia» is a registration
     /// field the agent itself asks for, and «no es una emergencia» answers the agent's own question.</summary>
     public static bool NamesEmergency(string body, bool registering = false) =>
-        Emergency().IsMatch(NotAnEmergency().Replace(EmergencyContact().Replace(registering ? EmergencyLabel().Replace(body, "") : body, ""), ""));
+        Emergency().IsMatch(NotAnEmergency().Replace(EmergencyContact().Replace(registering ? EmergencyLabel().Replace(body, "") : body, ""), "")) || AlarmSign(body);
+
+    /// <summary>MR-35: the alarm signs the owner approved on 2026-10-17 (docs/reception-agent.md, «Señales de alarma»), one pattern per sign.
+    /// Read without accents or case. A sign fires unless it is negated, or passed or resolved and not said to be still going.
+    /// Suicidal words and self-harm fire always.</summary>
+    static bool AlarmSign(string body)
+    {
+        // ponytail: the last 4096 characters of a message; the scan restarts per match, so a longer one would cost quadratic time.
+        // Signs are searched with line breaks as spaces («no puedo⏎respirar»); the breaks, at the same positions, only cut clauses.
+        var text = Spaces().Replace(Plain(body.Length > 4096 ? body[^4096..] : body), m => m.Value.Contains('\n') ? "\n" : " "); var flat = text.Replace('\n', ' ');
+        if (Suicide().IsMatch(flat)) return true;
+        // A recent ingestion is not resolved by time: poisoning skips the past rules, like suicide, but a negation still holds.
+        if (Current(text, flat, Poisoning(), timed: false)) return true;
+        Regex[] signs = [ChestPain(), Breathing(), Unconscious(), Seizure(), Bleeding(), OneSide(), AllergicAirway(), Cardiac(), Collapse()];
+        return signs.Any(sign => Current(text, flat, sign)) || (Allergy().IsMatch(flat) && Current(text, flat, Swelling()));
+    }
+    /// <summary>Any match that is stated now. The scan restarts one character on, so a negated match («no es dolor…») does not hide a later
+    /// one that starts inside it («…el pecho me aprieta»).</summary>
+    static bool Current(string text, string flat, Regex sign, bool timed = true)
+    {
+        for (var m = sign.Match(flat); m.Success; m = m.Index + 1 < flat.Length ? sign.Match(flat, m.Index + 1) : Match.Empty)
+            if (Stated(text, m, timed)) return true;
+        return false;
+    }
+    static bool Stated(string text, Match m, bool timed)
+    {
+        var before = text[..m.Index]; var clause = Clause().Split(before)[^1];
+        // Negated: «no», «sin», «ni» or «tampoco» followed only by pronouns and auxiliaries up to the sign («no me duele», «no tengo dolor»).
+        // «No aguanto el dolor» negates «aguanto», not the pain; «no sé si…» is doubt, and so is «no se me duele», which only reads as «no sé, me duele».
+        var value = text.Substring(m.Index, m.Length);
+        if (Negated().IsMatch(clause) && !(NoSe().IsMatch(clause) && NotReflexive().IsMatch(value))) return false;
+        if (!timed) return true;
+        // Resolved: «no ha vuelto» before it in its clause, or an explicit, affirmative recovery of the patient right after it, in this clause or the
+        // next one («…pero ya estoy bien», «Me desmayé. Ya estoy bien.»). Not a question, not of something else («ya estoy bien de la gripe»),
+        // not of someone else («ya está bien mi hermano»); and «…pero sigue mareado» after it keeps the sign.
+        var after = text[(m.Index + m.Length)..];
+        if (Recovered().IsMatch(clause)) return false;
+        if (Recovers().Match(after) is { Success: true } recovery && !Ongoing().IsMatch(SentenceOf(after[recovery.Length..]))) return false;
+        // Past: a time gone by in the sign's own clause with no verb in the present there («tuvo un infarto hace dos años», but not
+        // «hace dos días que me duele el pecho»), unless the sentence says it is still going («y no se me quita», «hoy», «peor»).
+        var own = clause + value + Clause().Split(after)[0];
+        if (!Past().IsMatch(own) || Present().IsMatch(own)) return true;
+        var start = before.LastIndexOfAny(['.', '!', '?', '\n']) + 1;
+        return Ongoing().IsMatch(text[start..m.Index] + value + SentenceOf(after));
+    }
+    static string SentenceOf(string text) => text.IndexOfAny(['.', '!', '?', '\n']) is var stop and >= 0 ? text[..stop] : text;
+    static string Plain(string text) => new string(text.Normalize(System.Text.NormalizationForm.FormD).Where(c => System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c) != System.Globalization.UnicodeCategory.NonSpacingMark).ToArray()).ToLowerInvariant();
 
     /// <summary>Only a greeting: answered at once with the menu, without the model.</summary>
     public static bool IsGreeting(string body) => Greeting().IsMatch(body);
@@ -113,6 +160,45 @@ public static partial class AgentGuard
 
     [GeneratedRegex(@"(?i)\b(hablar|comunicarme|comunicar|contactar)\b.{0,60}\b(doctor|doctora|médico|medico|humano|persona)\b")] private static partial Regex Person();
     [GeneratedRegex(@"(?i)\b(emergencia|sobredosis|suicidio)\b")] private static partial Regex Emergency();
+    // MR-35, one pattern per sign of the approved list, on text without accents, in lower case and with single spaces; line breaks stay (AlarmSign).
+    // ponytail: a closed list of phrasings, misspellings included; one it does not know is left to the prompt and the evals, the second net.
+    // «Sino el pecho» and «pero el pecho sí» carry the pain said just before in the sentence; a «no» between «pecho» and «duele» negates it.
+    [GeneratedRegex(@"\b(?:dolor(?:cito|es)?|duele|duelen|duela|duelan|doler\w*|dolio|dolia|doliendo|opresion|presion|oprime|oprim\w*|aprieta|apretad[oa]|punzadas?)\b(?:\W+(?!(?:sino|pero|aunque)\b)\w+){0,5}?\W+pecho\b"
+        + @"|\bpecho\b(?:\W+(?!(?:no|ya|sino|pero)\b)\w+){0,3}?\W+(?:duele|doliendo|apretado|oprimido|aprieta|oprime)\b|(?<=\b(?:duele|duelen|dolor)\b[^.!?\n]{0,60})\b(?:sino|pero) (?:en )?el pecho\b(?! no\b)")] private static partial Regex ChestPain();
+    [GeneratedRegex(@"\b(?:no|tampoco|ni) (?:\w+ ){0,2}?(?:respiro\b(?! bien)|respir(?!o\b)\w*)|\bsin poder respirar\b|\bcuesta (?:\w+ )?respirar\b|\bdificultad (?:\w+ )?(?:para )?respirar\b|\bfalt[ae] (?:el )?aire\b|\bno (?:me|le|te|nos) entra (?:el )?aire\b|\bah?og\w*|\basfixi\w*")] private static partial Regex Breathing();
+    [GeneratedRegex(@"\bdesma(?:y|ll)\w*|\bdesvanec\w*|\bperd\w* (?:el )?(?:conocimiento|sentido)\b|\bperd\w* (?:la )?conciencia\b|\binconsciente\b|\bno (?:me |le )?reacciona\b|\bse (?:me |le )?priv[oa]\w*"
+        + @"|\bno (?:se )?(?:ha |han )?despert\w*|\bno despierta\b|\bno (?:lo |la |le )?(?:puedo|podemos|puede|pude|pudimos) despertar\w*|\bno quiere despertar\w*|\bno responde\b(?! (?:a|al|el|la|los|las|mis|sus|mensajes?|llamadas?|whatsapp)\b)")] private static partial Regex Unconscious();
+    [GeneratedRegex(@"\bconvul[sc]\w*|\bataques? (?:epileptic\w*|de epilepsia)\b|\b(?:le|me|te|les|nos) (?:dio|dan|da|dieron|vino|vienen|esta dando|estan dando) (?:un |unos )?ataques?\b(?! (?:de (?:risa|tos|panico|ansiedad|nervios|celos|asma|tos)|al corazon|cardiac\w*)\b)|\bespuma (?:por|de|en) la boca\b")] private static partial Regex Seizure();
+    [GeneratedRegex(@"\bh?emorragi\w*|\bdesangr\w*|\bsangr\w*(?:\W+\w+){0,5}?\W+(?:mucho|muchisimo|musho|bastante|abundante\w*|chorros?|sin parar|no (?:\w+ ){0,2}?(?:para|paro|detiene|deja|corta|quita))\b|\b(?:mucha|muchisima|bastante|abundante) sangre\b|\bno (?:me |le |se )?(?:ha )?(?:para|parado|deja|dejado|detiene|detenido)\w* de sangr\w*")] private static partial Regex Bleeding();
+    // Weakness or numbness of one side (with tingling of one arm, added by the owner), a drooping face, or not able to speak.
+    // «No puedo hablar» is a busy patient when the same sentence names work, the phone, a meeting; said of someone else it always fires.
+    [GeneratedRegex(@"\b(?:debil\w*|adormec\w*|dormid[oa]|durmio|duerme|entumid\w*|entumec\w*|parali\w*|sin fuerza|hormigue\w*)\b(?:\W+\w+){0,5}?\W+(?:(?:lado|mitad)\b|medio cuerpo\b|media cara\b|(?:brazo|pierna|mano) (?:izquierd|derech)\w*)"
+        + @"|\b(?:brazo|pierna|mano) (?:izquierd|derech)\w* (?:\w+ )?(?:debil\w*|adormec\w*|dormid[oa]|entumid\w*|entumec\w*|parali\w*|sin fuerza)"
+        + @"|\bno (?:\w+ )?(?:puedo|puede|podia|pudo) mover (?:\w+ ){0,3}?(?:(?:lado|mitad)\b|medio cuerpo\b|(?:brazo|pierna|mano) (?:izquierd|derech)\w*)|\bno (?:me |le )?(?:siento|siente) (?:\w+ ){0,3}?(?:(?:lado|mitad)\b|medio cuerpo\b|(?:brazo|pierna|mano) (?:izquierd|derech)\w*)"
+        + @"|\bcara (?:\w+ )?(?:caid|torcid|chuec|ladead|desviad)\w*|\b(?:cayo|torcio|ladeo) (?:la |media )?(?:cara|boca)\b|\bboca (?:\w+ )?(?:torcid|chuec|caid|ladead)\w*|\bboca\b(?:\W+\w+){0,2}?\W+de lado\b"
+        + @"|\bno (?:\w+ )?(?:puede|podia|pudo|logra) hablar\b(?! con\b)|\bno (?:\w+ )?(?:puedo|logro) hablar\b(?! con\b)(?!(?:\W+\w+){0,6}?\W+(?:trabajo|telefono|llamada|llamar|ocupad[oa]|reunion|clase|manejando)\b)|\bhabla\w* (?:\w+ )?(?:raro|enredad\w*|trabad\w*|arrastrad\w*)|\blengua trabada\b")] private static partial Regex OneSide();
+    [GeneratedRegex(@"\bsobre ?dosis\b|\bintox\w*|\bintosic\w*|\benvenen\w*|\b(?:tom|trag|beb|ingir|ingier)\w* (?:\w+ ){0,4}?(?:veneno|cloro|lejia|insecticida|pesticida|plaguicida|raticida|herbicida|gramoxone|paraquat|creolina|matarratas|gasolina|kerosene|querosene)\b"
+        + @"|\b(?:tom|trag|ingir|ingier)\w* (?:\w+ ){0,2}?(?:como |casi |unas |mas de )?(?:\d{2,}|diez|once|doce|quince|veinte|treinta|cuarenta|cincuenta|cien|un monton|muchas|demasiadas|todas las|tod[oa] (?:el|la) \w+|media caja|medio (?:frasco|bote|blister)|(?:un|una|el|la) (?:frasco|caja|bote|blister|puno)(?: (?:entero|entera|completo|completa))?) (?:de )?(?:\w+ )?(?:pastillas|pildoras|tabletas|medicinas|medicamentos|capsulas)\b"
+        + @"|\bse (?:comio|comieron) (?:\w+ ){0,3}?(?:pastillas|pildoras|tabletas|medicinas|medicamentos|capsulas)\b")] private static partial Regex Poisoning();
+    [GeneratedRegex(@"\banafila\w*|\bcerrando la garganta\b|\bse (?:me |le )?cierra la garganta\b|\bgarganta (?:se (?:me |le )?)?(?:cerrada|cierra|cerrando)\b")] private static partial Regex AllergicAirway();
+    // Added by the owner on 2026-10-17, with the medical synonyms the coordinator counted as the same signs. «Derrame» is a stroke unless in an eye or a knee.
+    [GeneratedRegex(@"\bi[nm]fart\w*|\bpre ?infart\w*|\bparo cardi\w*|\bataques? (?:al|del) corazon\b|\bataques? cardiac\w*|\bembolia\w*|\bacv\b|\bictus\b|\bderrames?\b(?! (?:en|de) (?:(?:el|la|los|las|un|una|mi|su) )?(?:ojos?|rodillas?|liquido|petroleo|aceite)\b)")] private static partial Regex Cardiac();
+    // Added by the owner on 2026-10-17: turning blue (not a bruise on a limb: «se le puso morado el dedo»), and a fall with no getting up.
+    [GeneratedRegex(@"\bse (?:me |le )?(?:puso|pone|pusieron|esta poniendo) morad(?:it)?[oa]s?\b(?! (?:el|la|los|las|mi|su|un|una) (?:dedos?|brazos?|piernas?|ojos?|rodillas?|manos?|pies?|unas?|golpe|moreton)\b)|\blabios? morad\w*|\bse ca(?:y|ll)o\b(?:\W+\w+){0,4}?\W+no (?:se )?(?:puede )?levant\w*")] private static partial Regex Collapse();
+    [GeneratedRegex(@"\bsui[cs]id\w*|\b(?:quiero|kiero|quisiera) morir\w*|\bme (?:quiero|kiero) morir\b|\bganas de morir\w*|\b(?:quiero|quisiera|kiero) estar muert[oa]\b|\bquit\w* la vida\b|\bmatarme\b|\bme (?:quiero|kiero|voy a) matar\b|\bme mato\b|\bmejor me muero\b|\bojala (?:y )?me muera\b|\bno (?:quiero|kiero) (?:seguir )?viv\w*|\bno vale la pena (?:seguir )?vivir\b|\bacabar con mi vida\b|\bhacerme dano\b|\bme hago dano\b|\blastimarme\b|\bme estoy lastimando\b|\bautolesi\w*"
+        + @"|\b(?:cortarme|me corte|me corto) (?:las venas|los brazos|las munecas)\b|\bme (?:estoy|quiero|voy a) cort(?:ar\w*|ando)\b(?! (?:el|la|las|los|mi|mis) (?:pelo|cabello|unas|fleco|flequillo|barba|melena)\b)")] private static partial Regex Suicide();
+    // A severe allergy is the reaction plus swelling of the face or throat: «garganta inflamada» alone is a sore throat, a swollen face alone a tooth.
+    [GeneratedRegex(@"\b(?:alerg\w*|reaccion\w*|pico\b|picadura\w*|piquete\w*|ronchas?|anafila\w*)")] private static partial Regex Allergy();
+    [GeneratedRegex(@"\b(?:hinch\w*|inflam\w*)\b(?:\W+\w+){0,4}?\W+(?:cara|garganta|labios?|lengua|ojos|parpados|boca)\b|\b(?:cara|garganta|labios?|lengua|ojos|parpados|boca)\b(?:\W+\w+){0,2}?\W+(?:hinchad|inflamad)\w*")] private static partial Regex Swelling();
+    [GeneratedRegex(@"[.,;:!?\n]|\b(?:y|e|pero|aunque|sino)\b")] private static partial Regex Clause();
+    [GeneratedRegex(@"\b(?:no|sin|ni|tampoco)(?: (?:me|te|le|se|nos|les|lo|la|los|las|he|ha|has|han|hemos|habia|tengo|tiene|tienes|tenia|tuve|tuvo|siento|sentia|hay|esta|estoy|estaba|es|era|fue|un|una|el|ningun|ninguna|nada|de|mucho|mucha)){0,3} ?$")] private static partial Regex Negated();
+    [GeneratedRegex(@"\bno se (?:me|le|te|nos) $")] private static partial Regex NoSe();
+    [GeneratedRegex(@"^(?:duel|dolor|falt|cuest|aprieta|oprim)")] private static partial Regex NotReflexive();
+    [GeneratedRegex(@"\bno (?:me |le |nos )?(?:ha|han) vuelto\b|\bno (?:me |le )?volvi[oa]\b")] private static partial Regex Recovered();
+    [GeneratedRegex(@"^ ?(?:(?:[.,;:!\n]|\b(?:pero|y|e|aunque)\b) ?){0,3}(?:ahora |ahorita )?ya (?:(?:estoy|esta|estamos) bien|(?:me|se) (?:siento|siente) bien|se (?:me |le )paso|me recupere|se recupero)\b(?= ?(?:$|[.,;:!\n]|\b(?:y|pero|gracias|un poco)\b))")] private static partial Regex Recovers();
+    [GeneratedRegex(@"\b(?:ayer|anoche|antier|anteayer)\b|\bhace (?:un|una|unos|unas|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|varios|varias|muchos|muchas|\d+) (?:dias?|semanas?|mes|meses|anos?)\b|\b(?:la semana|el mes|el ano) pasad[oa]\b|\bde (?:nin[oa]|chiquit[oa]|pequen[oa]|joven)\b|\bhace (?:mucho )?tiempo\b|\bel otro dia\b")] private static partial Regex Past();
+    [GeneratedRegex(@"\b(?:duele|duelen|doliendo|tengo|tiene|tienes|siento|siente|estoy|esta|estan|sigue|sigo|puedo|puede|va|voy|aprieta|ahogo|ahoga|falta|cuesta|sangra|sangro|sale|convulsiona|reacciona|despierta|respira|habla|da|dan|entra|duerme)\b")] private static partial Regex Present();
+    [GeneratedRegex(@"\b(?:desde|todavia|aun|sigue|sigo|siguen|continua|ahora|ahorita|hoy|peor|mas|tambien|otra vez|de nuevo)\b|\bno (?:se )?(?:me |le )(?:ha )?quit\w*|\bno (?:ha )?despert\w*|\bno despierta\b")] private static partial Regex Ongoing();
     [GeneratedRegex(@"(?i)\b(?:otra|nueva)\s+receta\b|\bresurt\w*|\bse\s+me\s+(?:acab[oó]|termin[oó])\b|\brec[eé]t[ae]me\b|\brenovar\s+(?:la|mi)\s+receta\b")] private static partial Regex Refill();
     [GeneratedRegex(@"(?i)contactos?\s+de\s+emergencias?")] private static partial Regex EmergencyContact();
     [GeneratedRegex(@"(?i)\bemergencias?\s*:")] private static partial Regex EmergencyLabel();

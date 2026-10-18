@@ -70,7 +70,8 @@ export async function forward(req: NextRequest, { params }: Context, acting = tr
     actingTenant = chosen.tenantId;
   }
   let refreshed = false;
-  if ((token.accessExpires ?? 0) < Date.now() + 15000) {
+  // A minute of a 300 s token: it is forwarded to Hospital, which must still accept it when the request arrives (MR-11).
+  if ((token.accessExpires ?? 0) < Date.now() + 60000) {
     if (!token.refreshToken)
       return NextResponse.json(
         { title: 'Sesión expirada. Inicia sesión de nuevo.' },

@@ -66,10 +66,16 @@ public sealed class VisitKindTests : IAsyncLifetime
         AskedOnceBeforeTheNewAppointment();
     }
 
+    /// <summary>A request of a member of the team, with their own token (MR-11).</summary>
+    HttpContext Staff()
+    {
+        var token = "e30." + Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(new { tenant_id = h.Scope.Id, sub = "staff-1", exp = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeSeconds() })).TrimEnd('=').Replace('+', '-').Replace('/', '_') + ".synthetic";
+        var ctx = new DefaultHttpContext(); ctx.Request.Headers.Authorization = "Bearer " + token; ctx.Request.Headers["Idempotency-Key"] = Guid.NewGuid().ToString(); return ctx;
+    }
     Task<IResult> StaffBooks(AgentHarness.Fake hospital, string? visitKind)
     {
-        var ctx = new DefaultHttpContext(); ctx.Request.Headers["Idempotency-Key"] = Guid.NewGuid().ToString();
-        return HospitalEndpoints.Appointment(new AppointmentInput(h.Contact.Id, "create", null, Doctor, Start, 30, VisitKind: visitKind), ctx, h.Db, h.Client(hospital), h.Scope, new CurrentUser { Subject = "recepcion-" + Guid.NewGuid(), Name = "Recepción Sintética", Role = "agent" });
+        var ctx = Staff();
+        return HospitalEndpoints.ChangeAppointment(new AppointmentInput(h.Contact.Id, "create", null, Doctor, Start, 30, VisitKind: visitKind), ctx, h.Db, h.Client(hospital), h.Scope, new CurrentUser { Subject = "recepcion-" + Guid.NewGuid(), Name = "Recepción Sintética", Role = "agent" });
     }
 
     [Theory]
@@ -105,7 +111,7 @@ public sealed class VisitKindTests : IAsyncLifetime
     [InlineData("404", "follow-up")]
     public async Task TheFormIsOfferedTheKindTheRuleGives(string earlier, string expected)
     {
-        var result = await HospitalEndpoints.VisitKind(h.Contact.Id, Start, h.Db, h.Client(Hospital(earlier)), h.Scope);
+        var result = await HospitalEndpoints.VisitKind(h.Contact.Id, Start, Staff(), h.Db, h.Client(Hospital(earlier)), h.Scope);
 
         Assert.Equal(expected, Assert.IsType<Ok<VisitKindAnswer>>(result).Value!.VisitKind);
         AskedOnceBeforeTheNewAppointment();
