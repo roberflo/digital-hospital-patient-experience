@@ -22,6 +22,7 @@ import { Item, ItemActions, ItemContent, ItemGroup, ItemTitle } from './ui/item'
 import { NativeSelect, NativeSelectOption } from './ui/native-select';
 import { Textarea } from './ui/textarea';
 import { conversationStates, priorities } from './conversation-workspace';
+import { ConfirmAction } from './confirm-action';
 
 export type InboxFilters = {
   state: string;
@@ -130,12 +131,12 @@ export function SavedInboxViews({
                     <ItemTitle>{v.name}</ItemTitle>
                   </ItemContent>
                   <ItemActions>
-                    <Button
-                      size="icon-sm"
-                      variant="ghost"
-                      aria-label={'Eliminar vista ' + v.name}
-                      disabled={busy}
-                      onClick={async () => {
+                    <ConfirmAction
+                      title={`¿Eliminar la vista «${v.name}»?`}
+                      description="Los filtros guardados se pierden; las conversaciones no cambian."
+                      action="Eliminar vista"
+                      destructive
+                      onConfirm={async () => {
                         setBusy(true);
                         try {
                           await api('/inbox-views/' + v.id, 'DELETE');
@@ -148,8 +149,15 @@ export function SavedInboxViews({
                         }
                       }}
                     >
-                      <Trash2 />
-                    </Button>
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        aria-label={'Eliminar vista ' + v.name}
+                        disabled={busy}
+                      >
+                        <Trash2 />
+                      </Button>
+                    </ConfirmAction>
                   </ItemActions>
                 </Item>
               ))}
@@ -395,12 +403,12 @@ export function ConversationMacros({
                         </CollapsibleTrigger>
                       </ItemContent>
                       <ItemActions>
-                        <Button
-                          size="icon-sm"
-                          variant="ghost"
-                          aria-label={'Eliminar macro ' + m.name}
-                          disabled={busy}
-                          onClick={async () => {
+                        <ConfirmAction
+                          title={`¿Eliminar la macro «${m.name}»?`}
+                          description="Tu equipo dejará de verla en Acciones rápidas."
+                          action="Eliminar macro"
+                          destructive
+                          onConfirm={async () => {
                             setBusy(true);
                             try {
                               await api('/macros/' + m.id, 'DELETE');
@@ -412,8 +420,15 @@ export function ConversationMacros({
                             }
                           }}
                         >
-                          <Trash2 />
-                        </Button>
+                          <Button
+                            size="icon-sm"
+                            variant="ghost"
+                            aria-label={'Eliminar macro ' + m.name}
+                            disabled={busy}
+                          >
+                            <Trash2 />
+                          </Button>
+                        </ConfirmAction>
                       </ItemActions>
                     </div>
                     <CollapsibleContent>

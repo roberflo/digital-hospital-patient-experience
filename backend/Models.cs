@@ -228,7 +228,9 @@ public sealed class CrmDb(DbContextOptions<CrmDb> options, TenantScope scope, ID
         b.Entity<Message>().HasIndex(x => new { x.TenantId, x.ExternalId }).IsUnique();
         b.Entity<Message>().HasIndex(x => new { x.TenantId, x.RequestKey }).IsUnique();
         b.Entity<Receipt>().HasIndex(x => new { x.TenantId, x.Key }).IsUnique();
+        b.Entity<Receipt>().HasIndex(x => new { x.TenantId, x.CreatedAt });
         b.Entity<Job>().HasIndex(x => new { x.TenantId, x.Key }).IsUnique();
+        b.Entity<Job>().HasIndex(x => new { x.TenantId, x.Status, x.CreatedAt });
         b.Entity<CalendarLink>().HasIndex(x => new { x.TenantId, x.AppointmentId }).IsUnique();
         b.Entity<Opportunity>().Property(x => x.Value).HasPrecision(14, 2);
         b.Entity<Conversation>().HasOne<Contact>().WithMany().HasForeignKey(x => new { x.TenantId, x.ContactId }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict);
