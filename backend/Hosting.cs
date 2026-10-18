@@ -25,8 +25,8 @@ public static class Hosting
         services.AddRateLimiter(o =>
         {
             o.RejectionStatusCode = 429;
-            // MR-38: the anonymous JWKS. Per caller address, so a flood from outside never starves Keycloak's own fetches.
-            o.AddPolicy("jwks", ctx => RateLimitPartition.GetFixedWindowLimiter(ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown", _ => new FixedWindowRateLimiterOptions { PermitLimit = 60, Window = TimeSpan.FromMinutes(1) }));
+            // MR-38: the anonymous JWKS, 60/min per caller address and hospital (JwksPartition).
+            o.AddPolicy("jwks", ctx => RateLimitPartition.GetFixedWindowLimiter(JwksPartition(ctx), _ => new FixedWindowRateLimiterOptions { PermitLimit = 60, Window = TimeSpan.FromMinutes(1) }));
             o.AddPolicy("assistant", ctx => RateLimitPartition.GetFixedWindowLimiter(ctx.User.FindFirst("sub")?.Value ?? "anonymous", _ => new FixedWindowRateLimiterOptions { PermitLimit = 8, Window = TimeSpan.FromMinutes(1) }));
         });
         services.AddHttpClient<KapsoClient>(c => c.Timeout = TimeSpan.FromSeconds(30)).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
@@ -99,6 +99,9 @@ public static class Hosting
         catch (HttpRequestException) { await Results.Problem(statusCode: 502, title: "No se pudo completar la conexión externa. Revisa el historial antes de reintentar.").ExecuteAsync(ctx); }
         catch (Exception ex) { Log(ctx).LogError("Request failed {Type} {Trace}", ex.GetType().Name, ctx.TraceIdentifier); await Results.Problem(statusCode: 500, title: "No se pudo completar la operación", extensions: new Dictionary<string, object?> { { "traceId", ctx.TraceIdentifier } }).ExecuteAsync(ctx); }
     }
+    /// <summary>The `jwks` limiter's partition: caller address AND hospital, so neither a flood from outside nor one hospital's
+    /// traffic spends Keycloak's quota for another hospital.</summary>
+    public static string JwksPartition(HttpContext ctx) => (ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown") + "|" + ctx.Request.RouteValues["tenant"];
     static ILogger Log(HttpContext ctx) => ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("Recepcion.Api");
     public static void MapRecepcionApi(this WebApplication app)
     {

@@ -115,6 +115,7 @@ public class HospitalConnectionTests
     static string ServiceToken(Guid tenant) => "x."+Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new{tenant_id=tenant,exp=DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds()}))).TrimEnd('=').Replace('+','-').Replace('/','_')+".x";
     static byte[] B64(string value){value=value.Replace('-','+').Replace('_','/');return Convert.FromBase64String(value.PadRight((value.Length+3)/4*4,'='));}
     static JsonElement Keys(Guid tenant,CrmDb db,IConfiguration config) => JsonSerializer.SerializeToElement(HospitalConnectionEndpoints.Jwks(tenant,new HospitalConnectionStore(db,config))).GetProperty("keys");
+    static JsonElement KeysAt(Guid tenant,CrmDb db,IConfiguration config,DateTimeOffset now) => JsonSerializer.SerializeToElement(new HospitalConnectionStore(db,config).PublicKeys(tenant,now));
     /// <summary>Every token request the client makes, as form fields; Hospital's API answers 200 to everything else.</summary>
     sealed class Keycloak(Func<Dictionary<string,string>,HttpResponseMessage> token):HttpMessageHandler
     {
@@ -188,6 +189,47 @@ public class HospitalConnectionTests
         var afterTwo=Keys(a,db,config); Assert.Equal(2,afterTwo.GetArrayLength());
         Assert.Throws<InvalidOperationException>(()=>Assertion(keycloak.TokenRequests[0],a,afterTwo)); // two rotations ago: gone
         Assertion(keycloak.TokenRequests[2],a,afterTwo);
+    }
+    // I-A: rotating revokes a leaked key. Only the PUBLIC half of the previous key is kept, and it is published
+    // only for the grace Keycloak needs to re-read the JWKS; after it the old key verifies nothing.
+    [Fact] public async Task RotatingRevokesThePreviousKeyAfterTheGrace()
+    {
+        var (db,a,_)=await TwoHospitals(); await using var __=db; var config=Installation();
+        using(await new HospitalConnectionStore(db,config).SigningKeyAsync(a)){}
+        var old=new HospitalConnectionStore(db,config).Section(a)["SigningKey"]!;
+        var oldKid=Keys(a,db,config)[0].GetProperty("kid").GetString();
+        var rotatedAt=DateTimeOffset.UtcNow;
+        using(await new HospitalConnectionStore(db,config).SigningKeyAsync(a,rotate:true)){}
+        Assert.DoesNotContain(new HospitalConnectionStore(db,config).Section(a).GetChildren(),x=>x.Value==old); // the old private half is gone
+        var during=KeysAt(a,db,config,rotatedAt.AddSeconds(30));
+        Assert.Equal(2,during.GetArrayLength()); Assert.Contains(during.EnumerateArray(),k=>k.GetProperty("kid").GetString()==oldKid);
+        var after=KeysAt(a,db,config,rotatedAt.Add(HospitalConnectionStore.RotationGrace).AddSeconds(5));
+        Assert.Equal(1,after.GetArrayLength()); Assert.DoesNotContain(after.EnumerateArray(),k=>k.GetProperty("kid").GetString()==oldKid);
+        Assert.Equal(TimeSpan.FromMinutes(2),HospitalConnectionStore.RotationGrace);
+    }
+    // A row written by the first version of this branch (PreviousSigningKey = a private key, no date) still reads,
+    // and that key is not published: there is no rotation date to bound its grace.
+    [Fact] public async Task ALegacyPreviousPrivateKeyStillReadsAndIsNotPublished()
+    {
+        var (db,a,_)=await TwoHospitals(); await using var __=db; var config=Installation();
+        using var current=System.Security.Cryptography.ECDsa.Create(System.Security.Cryptography.ECCurve.NamedCurves.nistP256);
+        using var legacy=System.Security.Cryptography.ECDsa.Create(System.Security.Cryptography.ECCurve.NamedCurves.nistP256);
+        var tenant=await db.Tenants.SingleAsync(x=>x.Id==a);
+        tenant.HospitalConnection=JsonSerializer.Serialize(new Dictionary<string,string?>{["SigningKey"]=Convert.ToBase64String(current.ExportPkcs8PrivateKey()),["PreviousSigningKey"]=Convert.ToBase64String(legacy.ExportPkcs8PrivateKey())});
+        await db.SaveChangesAsync();
+        var keys=Keys(a,db,config);
+        Assert.Equal(1,keys.GetArrayLength()); Assert.Equal(HospitalConnectionStore.Jwk(current)["kid"],keys[0].GetProperty("kid").GetString());
+        using(await new HospitalConnectionStore(db,config).SigningKeyAsync(a,rotate:true)){}
+        Assert.Null(new HospitalConnectionStore(db,config).Section(a)["PreviousSigningKey"]);
+    }
+    // N-1: one hospital's JWKS traffic never spends another's quota.
+    [Fact] public void TheJwksLimitIsPerCallerAndHospital()
+    {
+        Microsoft.AspNetCore.Http.DefaultHttpContext Call(string ip,Guid tenant){var c=new Microsoft.AspNetCore.Http.DefaultHttpContext();c.Connection.RemoteIpAddress=IPAddress.Parse(ip);c.Request.RouteValues["tenant"]=tenant.ToString();return c;}
+        var a=Guid.NewGuid(); var b=Guid.NewGuid();
+        Assert.Equal(Hosting.JwksPartition(Call("10.0.0.5",a)),Hosting.JwksPartition(Call("10.0.0.5",a)));
+        Assert.NotEqual(Hosting.JwksPartition(Call("10.0.0.5",a)),Hosting.JwksPartition(Call("10.0.0.5",b)));
+        Assert.NotEqual(Hosting.JwksPartition(Call("10.0.0.5",a)),Hosting.JwksPartition(Call("10.0.0.6",a)));
     }
     [Fact] public async Task TheFirstKeyOfAHospitalIsCreatedOnceUnderConcurrentFirstUse()
     {

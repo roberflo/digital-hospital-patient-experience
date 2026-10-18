@@ -23,7 +23,7 @@ public sealed class HospitalConnectionStore(CrmDb db, IConfiguration config)
     // half lives only in the encrypted HospitalConnection; Keycloak reads the public half from /hospital-jwks/<tenant>.
     // Created on first need, before the first token request makes Keycloak fetch it. Null for a hospital with no row.
     // Creating and rotating take the tenant's advisory lock (the one Save takes) and re-read under it, so concurrent
-    // first uses agree on one key. A rotation keeps the previous public key published for one more rotation.
+    // first uses agree on one key. A rotation keeps only the PUBLIC half of the previous key, published for RotationGrace.
     public async Task<ECDsa?> SigningKeyAsync(Guid tenant, bool rotate = false, CancellationToken ct = default)
     {
         if (!rotate && Section(tenant)["SigningKey"] is { Length: > 0 } cached) return Import(cached);
@@ -34,7 +34,13 @@ public sealed class HospitalConnectionStore(CrmDb db, IConfiguration config)
         var stored = values.GetValueOrDefault("SigningKey");
         if (!rotate && stored is { Length: > 0 }) { cache.Remove(tenant); return Import(stored); }
         var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
-        if (stored is { Length: > 0 }) values["PreviousSigningKey"] = stored;
+        values.Remove("PreviousSigningKey"); // the first version of this branch kept the old private key: dropped on the next rotation
+        if (stored is { Length: > 0 })
+        {
+            using var old = Import(stored);
+            values["PreviousPublicKey"] = Convert.ToBase64String(old.ExportSubjectPublicKeyInfo());
+            values["RotatedAt"] = DateTimeOffset.UtcNow.ToString("O");
+        }
         values["SigningKey"] = Convert.ToBase64String(key.ExportPkcs8PrivateKey());
         var json = JsonSerializer.Serialize(values);
         // Outside the request's change tracker: a token request never flushes what the handler has pending.
@@ -53,9 +59,19 @@ public sealed class HospitalConnectionStore(CrmDb db, IConfiguration config)
     }
     static ECDsa Import(string pkcs8) { var key = ECDsa.Create(); key.ImportPkcs8PrivateKey(Convert.FromBase64String(pkcs8), out _); return key; }
     /// <summary>What /hospital-jwks/<tenant> publishes: the current public key and the one before it, or nothing. Never creates one.</summary>
-    public Dictionary<string,string>[] PublicKeys(Guid tenant) =>
-        new[] { Section(tenant)["SigningKey"], Section(tenant)["PreviousSigningKey"] }.OfType<string>().Where(x => x.Length > 0)
-            .Select(x => { using var key = Import(x); return Jwk(key); }).ToArray();
+    /// <summary>How long the previous public key stays published after a rotation: Keycloak re-reads a JWKS at most every ~10 s,
+    /// so this covers it, and a leaked key stops verifying anything this long after the rotation.</summary>
+    public static readonly TimeSpan RotationGrace = TimeSpan.FromMinutes(2);
+    /// <summary>What /hospital-jwks/<tenant> publishes: the current public key, plus the previous one during RotationGrace. Never creates one.
+    /// A legacy PreviousSigningKey (no rotation date) is never published.</summary>
+    public Dictionary<string,string>[] PublicKeys(Guid tenant, DateTimeOffset now)
+    {
+        var section = Section(tenant); var keys = new List<Dictionary<string,string>>();
+        if (section["SigningKey"] is { Length: > 0 } current) { using var key = Import(current); keys.Add(Jwk(key)); }
+        if (section["PreviousPublicKey"] is { Length: > 0 } previous && DateTimeOffset.TryParse(section["RotatedAt"], out var rotated) && now - rotated < RotationGrace)
+        { using var key = ECDsa.Create(); key.ImportSubjectPublicKeyInfo(Convert.FromBase64String(previous), out _); keys.Add(Jwk(key)); }
+        return keys.ToArray();
+    }
     // What makes a hospital connect by signing in: one installation-wide Hospital API and the
     // service account Hospital's realm job declares for every tenant, `recepcion-service-<tenant>`, which
     // authenticates with this hospital's own key (SigningKeyAsync). Nobody types a UUID, a URL or a secret.

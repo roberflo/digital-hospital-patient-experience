@@ -28,7 +28,7 @@ public static class HospitalConnectionEndpoints
     }
     // MR-38: Keycloak's view of `recepcion-service-<tenant>`'s key. Anonymous and outside /api (Keycloak has no
     // session here); public halves only, and the same empty set for a hospital that has no key or does not exist.
-    public static object Jwks(Guid tenant, HospitalConnectionStore store) => new { keys = store.PublicKeys(tenant) };
+    public static object Jwks(Guid tenant, HospitalConnectionStore store) => new { keys = store.PublicKeys(tenant, DateTimeOffset.UtcNow) };
     public static async Task<IResult> RotateKey(CurrentUser u, TenantScope t, CrmDb db, HospitalConnectionStore store, CancellationToken ct)
     {
             u.RequireAdmin();
@@ -67,7 +67,7 @@ public static class HospitalConnectionEndpoints
             // The hospital's signing keys survive a re-connection: Keycloak keeps trusting the published ones (MR-38).
             // Read after the check, which may have just created the first one.
             if (await db.Tenants.AsNoTracking().Where(x=>x.Id==t.Id).Select(x=>x.HospitalConnection).SingleAsync(ct) is { } current)
-                foreach (var kept in JsonSerializer.Deserialize<Dictionary<string,string?>>(current)!.Where(x=>x.Key is "SigningKey" or "PreviousSigningKey")) values[kept.Key] = kept.Value;
+                foreach (var kept in JsonSerializer.Deserialize<Dictionary<string,string?>>(current)!.Where(x=>x.Key is "SigningKey" or "PreviousPublicKey" or "RotatedAt")) values[kept.Key] = kept.Value;
             tenant.HospitalConnection = JsonSerializer.Serialize(values);
             CrmEndpoints.Audit(db,t,u,"hospital.connected",t.Id);
             await db.SaveChangesAsync(ct);
