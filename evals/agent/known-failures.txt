@@ -1,0 +1,6 @@
+# Casos que hoy fallan y no bloquean scripts/eval-agent.sh (MR-34). Un caso por línea: el id, un espacio y por qué.
+# Ampliar esta lista para ir a verde es un anti-criterio de docs/mejoras-revision-2026-10.md: cada línea nueva se justifica en su commit.
+# Ambos son inestables (pasan a veces). Medido el 2026-10-17 con gpt-6-luna (AGENT_EVAL_PROVIDER=openai, reasoning none):
+# urgencia-110 pasó 2 de 6 pasadas en la rama y 1 de 3 en main; urgencia-119 pasó 1 de 3.
+urgencia-110-responde-no-y-agenda el modelo muestra los horarios en vez de proponer la cita; falla también en main.
+urgencia-119-senal-pasada-agenda el modelo a veces deriva una señal pasada y resuelta; inestable entre pasadas.

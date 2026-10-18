@@ -164,7 +164,7 @@ public sealed class AgentLiveJourney(ITestOutputHelper output)
         var suffix = new string(Enumerable.Range(0, 6).Select(_ => (char)('a' + Random.Shared.Next(26))).ToArray());
         var (h, turn, _) = await Conversation(tenant, settings, "off", "Hola, necesito una cita para que me entreguen mis resultados de laboratorio. ¿Qué horarios tienen?");
         await using var __ = h;
-        var registered = await hospital.RegisterPatientAsync(tenant, new("Ana Sintética", "Resultados " + char.ToUpperInvariant(suffix[0]) + suffix[1..], new DateOnly(1990, 3, 12), "female", h.Contact.Phone, "Carlos Sintético", "hermano", "70000001"));
+        var registered = await hospital.RegisterPatientAsync(tenant, new("Ana Sintética", "Resultados " + char.ToUpperInvariant(suffix[0]) + suffix[1..], new DateOnly(1990, 3, 12), "female", h.Contact.Phone, "Carlos Sintético", "hermano", "70000001"), "live:" + Guid.NewGuid());
         var patient = Assert.NotNull(registered.PatientId); h.Contact.PatientId = patient; await h.Db.SaveChangesAsync();
 
         // What tapping does: the first option of whatever the agent sent (doctor, morning or afternoon, an hour, Confirmar), as the webhook stores it.
@@ -245,7 +245,7 @@ public sealed class AgentLiveJourney(ITestOutputHelper output)
         using var hospitalHttp = new SocketsHttpHandler(); var hospital = new HospitalClient(new HttpClient(hospitalHttp), config);
         var noModel = new AgentHarness.Fake(_ => throw new InvalidOperationException("The model must not be consulted"));
 
-        var registered = await hospital.RegisterPatientAsync(tenant, new("Ana Sintética", "Toque " + char.ToUpperInvariant(suffix[0]) + suffix[1..], new DateOnly(1990, 3, 12), "female", h.Contact.Phone, "Carlos Sintético", "hermano", "70000001"));
+        var registered = await hospital.RegisterPatientAsync(tenant, new("Ana Sintética", "Toque " + char.ToUpperInvariant(suffix[0]) + suffix[1..], new DateOnly(1990, 3, 12), "female", h.Contact.Phone, "Carlos Sintético", "hermano", "70000001"), "live:" + Guid.NewGuid());
         var patient = Assert.NotNull(registered.PatientId); h.Contact.PatientId = patient; await h.Db.SaveChangesAsync();
 
         // The same row the agent's list would carry for the hospital's first free hour.

@@ -9,6 +9,8 @@ public sealed partial record Intake(int Step, string? GivenNames = null, string?
     public bool Complete => Step > Steps;
     /// <summary>Under 18: Hospital requires a legal guardian, which reception handles in person.</summary>
     public bool Minor => Step < 0;
+    /// <summary>The question asked now is about the emergency contact: «Emergencia: …» in the answer labels that field, it is not an emergency.</summary>
+    public bool AsksEmergencyContact => Step is 5 or 6 or 7;
     static readonly string[] Months = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
 
     public static (Intake State, string Prompt, Choices? Choices) Start() => Ask(new Intake(1), "Con gusto. Para darte cita necesito registrarte: son 7 datos cortos.\n\n");

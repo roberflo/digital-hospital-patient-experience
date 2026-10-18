@@ -8,16 +8,17 @@ public sealed partial class HospitalClient
     /// <summary>Registers an adult through Hospital's own <c>POST v1/patients</c>, so its
     /// validation, duplicate detection and audit apply. Never forces past a duplicate: a
     /// candidate comes back as <c>Created = false</c> and a person decides.</summary>
-    public async Task<HospitalRegistration> RegisterPatientAsync(Guid tenantId, HospitalPatientRegistration input, CancellationToken ct = default)
+    public async Task<HospitalRegistration> RegisterPatientAsync(Guid tenantId, HospitalPatientRegistration input, string idempotencyKey, CancellationToken ct = default)
     {
+        IdempotencyKey(idempotencyKey);
         if (NormalizePhone(input.Phone) is null) throw new HospitalIntegrationException("hospital.patient_phone_mismatch", HttpStatusCode.BadRequest);
-        // Hospital has no idempotency contract for registration: never retry this POST after a timeout.
+        // Keyed (MR-41): sent again with the same key, Hospital answers the original registration instead of a second record. Nothing here retries it.
         using var response = await SendAsync(tenantId, HttpMethod.Post, "v1/patients", new
         {
             input.GivenNames, input.FamilyNames, birthDate = input.BirthDate.ToString("yyyy-MM-dd"), input.Sex,
             emergencyContacts = new[] { new { fullName = input.EmergencyName, relationship = input.EmergencyRelationship, phone = input.EmergencyPhone } },
             forceCreateDespiteDuplicate = false, input.Phone
-        }, ct);
+        }, ct, idempotencyKey);
         return await ParseAsync<HospitalRegistration>(response, ct);
     }
     /// <summary>Names the caller for Hospital's audit trail, which stores the request's User-Agent as <c>origin_agent</c>.

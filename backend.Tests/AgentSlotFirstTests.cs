@@ -34,7 +34,7 @@ public sealed class AgentSlotFirstTests : IAsyncLifetime
     });
     async Task<string> Say(string text, HttpMessageHandler? model = null) { await h.Say("patient", text); await h.Runtime(model ?? NoModel, h.Sender(), Hospital()).Run(h.Job, CancellationToken.None); return h.Sent[^1]; }
     Task<List<Activity>> Trail() => h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).OrderBy(a => a.CreatedAt).ToListAsync();
-    async Task<Activity> Form() => Assert.Single(await Trail(), a => a.Kind == "intake");
+    async Task<PendingAction> Form() => Assert.Single(await h.Pending("intake"));
     /// <summary>T-12, INV-T-2: before Confirmar nothing tells the patient the hour is already theirs, in any tense («apartada», «te aparté», «reservamos»).
     /// «Para apartar el…» is what the hour is for, not a claim.</summary>
     internal static void ClaimsNoHour(string message) => Assert.DoesNotMatch(@"(?i)\b(apart|reserv|agend)(ad[ao]s?|é|amos|aste)\b", message);
@@ -49,7 +49,7 @@ public sealed class AgentSlotFirstTests : IAsyncLifetime
 
         Assert.Contains(Stamp(Start), (await Form()).Body); // the hour is kept with the form, and only there
         Assert.StartsWith("Para apartar el *", asked); Assert.Contains("a las 09:00", asked); Assert.Contains("son 7 datos cortos", asked); Assert.Contains("¿Cuál es tu nombre?", asked);
-        Assert.DoesNotContain(await Trail(), a => a.Kind.StartsWith("proposal:"));
+        Assert.Empty(await h.Pending("proposal"));
         Assert.Empty(seen); // INV-T-1: choosing an hour asks nothing of Hospital
     }
 
@@ -63,7 +63,7 @@ public sealed class AgentSlotFirstTests : IAsyncLifetime
         var reply = await Say(message);
 
         Assert.Contains("ya no está disponible", Assert.Single(h.Sent)); Assert.Equal(reply, h.Sent[0]);
-        Assert.DoesNotContain(await Trail(), a => a.Kind == "intake" || a.Kind.StartsWith("proposal:"));
+        Assert.Empty(await h.Pending("intake")); Assert.Empty(await h.Pending("proposal"));
         Assert.Empty(seen);
     }
 
@@ -77,7 +77,7 @@ public sealed class AgentSlotFirstTests : IAsyncLifetime
         await Say(message, h.Model(AgentHarness.Reply("No tengo ese dato; ¿te paso con recepción?")));
 
         var trail = await Trail();
-        Assert.DoesNotContain(trail, a => a.Kind == "intake");
+        Assert.Empty(await h.Pending("intake"));
         Assert.All(trail, a => Assert.DoesNotContain(Stamp(Start), a.Body)); // INV-T-5: no activity keeps the hour
         Assert.Empty(seen); // and nothing was ever asked of Hospital for it
     }
@@ -86,12 +86,12 @@ public sealed class AgentSlotFirstTests : IAsyncLifetime
     public async Task AfterThirtyMinutesTheChosenHourIsGone()
     {
         await TapAnHour();
-        var form = await Form(); form.CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-31); await h.Db.SaveChangesAsync();
+        var form = await Form(); form.ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(-1); await h.Db.SaveChangesAsync(); // thirty minutes have passed
         var model = h.Model(AgentHarness.Reply("No tengo ese dato; ¿te paso con recepción?"));
 
         await Say("Ana Sintética", model);
 
-        Assert.DoesNotContain(await Trail(), a => a.Kind == "intake");
+        Assert.Empty(await h.Pending("intake"));
         Assert.Equal(1, model.Calls); // the form is over: a name alone is an ordinary message again
     }
 
@@ -106,9 +106,9 @@ public sealed class AgentSlotFirstTests : IAsyncLifetime
         Assert.Equal(["Confirmar", "Corregir datos", "Otro horario"], AgentHarness.Options(h.Interactive[^1]).Select(option => option.Title));
         Assert.All(h.Sent, ReadsLikeAChat);
         var trail = await Trail();
-        using var stored = JsonDocument.Parse(Assert.Single(trail, a => a.Kind.StartsWith("proposal:")).Body); // one card for one decision
+        using var stored = JsonDocument.Parse(Assert.Single(await h.Pending("proposal")).Body); // one card for one decision
         Assert.Equal(("register", Start, Doctor, 30), (stored.RootElement.GetProperty("action").GetString(), stored.RootElement.GetProperty("startsAt").GetDateTimeOffset(), stored.RootElement.GetProperty("doctorId").GetGuid(), stored.RootElement.GetProperty("durationMinutes").GetInt32()));
-        Assert.DoesNotContain(trail, a => a.Kind == "intake"); // the hour left the form with the data
+        Assert.Empty(await h.Pending("intake")); // the hour left the form with the data
         Assert.Empty(seen); // nothing reaches Hospital before the patient confirms
         Assert.All(h.Sent, ClaimsNoHour); // T-12, INV-T-2: nothing says the hour is already taken for them
     }
@@ -122,18 +122,18 @@ public sealed class AgentSlotFirstTests : IAsyncLifetime
         var card = await Say(Answers[6]);
 
         Assert.DoesNotContain("*Cita:*", card); Assert.EndsWith("¿Están correctos?", card);
-        Assert.DoesNotContain("startsAt", Assert.Single(await Trail(), a => a.Kind.StartsWith("proposal:")).Body);
+        Assert.DoesNotContain("startsAt", Assert.Single(await h.Pending("proposal")).Body);
     }
 
     /// <summary>Hour tapped, seven answers, one card: its code. Nothing has reached Hospital yet.</summary>
-    async Task<Activity> Card() { await TapAnHour(); foreach (var answer in Answers) await Say(answer); Assert.Empty(seen); return Assert.Single(await Trail(), a => a.Kind.StartsWith("proposal:")); }
+    async Task<PendingAction> Card() { await TapAnHour(); foreach (var answer in Answers) await Say(answer); Assert.Empty(seen); return Assert.Single(await h.Pending("proposal")); }
     int Posts(string path) => seen.Count(x => x == "POST " + path);
     static string Day => $"{Start.ToOffset(TimeSpan.FromHours(-6)).Day} de ";
 
     [Fact]
     public async Task ConfirmingChecksTheHourRegistersLinksAndBooksInThatOrder()
     {
-        var code = (await Card()).Kind[9..];
+        var code = (await Card()).Code;
 
         var done = await Say("CONFIRMAR " + code);
 
@@ -163,7 +163,7 @@ public sealed class AgentSlotFirstTests : IAsyncLifetime
     [Fact]
     public async Task AnHourTakenAtConfirmingStillRegistersAndOffersOthers()
     {
-        var code = (await Card()).Kind[9..]; takenBy = 1; // someone else took the hour while the form was being filled
+        var code = (await Card()).Code; takenBy = 1; // someone else took the hour while the form was being filled
 
         var reply = await Say("CONFIRMAR " + code);
 
@@ -178,7 +178,7 @@ public sealed class AgentSlotFirstTests : IAsyncLifetime
         var card = await Card(); var day = Start.ToString("yyyy-MM-dd");
         Assert.Contains(day, card.Body); card.Body = card.Body.Replace(day, "2020-01-01"); await h.Db.SaveChangesAsync();
 
-        var reply = await Say("CONFIRMAR " + card.Kind[9..]);
+        var reply = await Say("CONFIRMAR " + card.Code);
 
         await RegisteredWithoutAnAppointmentAndOfferedOtherHours(reply);
     }
@@ -186,7 +186,7 @@ public sealed class AgentSlotFirstTests : IAsyncLifetime
     [Fact]
     public async Task APossibleDuplicateBooksNothingAndTellsTheTeamTheHourWanted()
     {
-        var code = (await Card()).Kind[9..]; duplicate = true;
+        var code = (await Card()).Code; duplicate = true;
 
         await Say("CONFIRMAR " + code);
 
@@ -202,7 +202,7 @@ public sealed class AgentSlotFirstTests : IAsyncLifetime
     [Fact]
     public async Task WhenBookingFailsAfterRegisteringAPersonTakesOverAndNothingIsRetried()
     {
-        var code = (await Card()).Kind[9..]; agenda = HttpStatusCode.InternalServerError;
+        var code = (await Card()).Code; agenda = HttpStatusCode.InternalServerError;
 
         await Say("CONFIRMAR " + code);
 
@@ -219,7 +219,7 @@ public sealed class AgentSlotFirstTests : IAsyncLifetime
     [Fact]
     public async Task WhenTheNewRecordCannotBeVerifiedNothingIsBookedAndTheTeamReadsWhichRecord()
     {
-        var code = (await Card()).Kind[9..]; verify = HttpStatusCode.InternalServerError;
+        var code = (await Card()).Code; verify = HttpStatusCode.InternalServerError;
 
         await Say("CONFIRMAR " + code);
 
@@ -237,7 +237,7 @@ public sealed class AgentSlotFirstTests : IAsyncLifetime
         var card = await Card();
         Assert.Contains("\"durationMinutes\":30", card.Body); card.Body = card.Body.Replace("\"durationMinutes\":30", "\"durationMinutes\":3"); await h.Db.SaveChangesAsync();
 
-        await Say("CONFIRMAR " + card.Kind[9..]);
+        await Say("CONFIRMAR " + card.Code);
 
         Assert.Equal("human", (await h.Fresh()).Status); // told a person takes over, not left in silence with a failed job
         Assert.DoesNotContain(seen, request => request.StartsWith("POST "));
@@ -249,14 +249,14 @@ public sealed class AgentSlotFirstTests : IAsyncLifetime
     [InlineData("ok, el viernes")]
     public async Task YesAfterAskingForAnotherHourConfirmsNothing(string answer)
     {
-        var code = (await Card()).Kind[9..]; soon = true; // a free hour today: the list asks nothing about an emergency, so «sí» can only be about the appointment
+        var code = (await Card()).Code; soon = true; // a free hour today: the list asks nothing about an emergency, so «sí» can only be about the appointment
         await Say("AGENDAR"); // «Otro horario»: the hour on the card was turned down
         Assert.StartsWith("Hay espacio el *", h.Sent[^1]); Assert.DoesNotContain(AgentGuard.EmergencyQuestion, h.Sent[^1]); ClaimsNoHour(h.Sent[^1]); var before = h.Sent.Count;
 
         await Say(answer, h.Model(AgentHarness.Reply("¿Qué día prefieres?")));
 
         Assert.DoesNotContain(seen, request => request.StartsWith("POST ")); // «sí» answers the list, not the card above it
-        Assert.Equal("proposal:" + code, Assert.Single(await Trail(), a => a.Kind.StartsWith("proposal")).Kind); // the card was not consumed
+        Assert.Equal(code, Assert.Single(await h.Pending("proposal")).Code); Assert.DoesNotContain(await Trail(), a => a.Kind.StartsWith("proposal")); // the card was not consumed
         Assert.True(h.Sent.Count > before, "The patient was left without an answer");
     }
 
@@ -265,14 +265,14 @@ public sealed class AgentSlotFirstTests : IAsyncLifetime
     {
         h.Contact.PatientId = Patient; await h.Db.SaveChangesAsync();
         await Say(Tap(Start)); Assert.EndsWith("¿La confirmo?", h.Sent[^1]);
-        var code = Assert.Single(await Trail(), a => a.Kind.StartsWith("proposal:")).Kind;
+        var code = Assert.Single(await h.Pending("proposal")).Code;
         soon = true; await Say("AGENDAR"); // an agent message between the card and the «sí»
         Assert.StartsWith("Hay espacio el *", h.Sent[^1]); Assert.DoesNotContain(AgentGuard.EmergencyQuestion, h.Sent[^1]); var before = h.Sent.Count;
 
         await Say("Sí", h.Model(AgentHarness.Reply("¿Qué día prefieres?")));
 
         Assert.DoesNotContain(seen, request => request.StartsWith("POST "));
-        Assert.Equal(code, Assert.Single(await Trail(), a => a.Kind.StartsWith("proposal")).Kind);
+        Assert.Equal(code, Assert.Single(await h.Pending("proposal")).Code); Assert.DoesNotContain(await Trail(), a => a.Kind.StartsWith("proposal"));
         Assert.True(h.Sent.Count > before, "The patient was left without an answer");
     }
 
@@ -285,7 +285,7 @@ public sealed class AgentSlotFirstTests : IAsyncLifetime
 
         Assert.StartsWith("Hay espacio el *", reply); Assert.Equal("list", h.Interactive[^1].GetProperty("type").GetString());
         var trail = await Trail();
-        Assert.DoesNotContain(trail, a => a.Kind == "intake");
+        Assert.Empty(await h.Pending("intake"));
         Assert.All(trail, a => Assert.DoesNotContain("AGENDAR", a.Body)); // the command was never kept as a name
         Assert.All(h.Sent, text => Assert.DoesNotContain("AGENDAR", text));
     }
@@ -295,7 +295,7 @@ public sealed class AgentSlotFirstTests : IAsyncLifetime
     [Fact]
     public async Task CorrectingTheDataRestartsTheFormAndKeepsTheHour()
     {
-        var code = (await Card()).Kind[9..];
+        var code = (await Card()).Code;
         Assert.Equal(["CONFIRMAR " + code, "CORREGIR " + code, "AGENDAR"], AgentHarness.Options(h.Interactive[^1]).Select(option => option.Id));
 
         var asked = await Say("CORREGIR " + code);
@@ -303,6 +303,7 @@ public sealed class AgentSlotFirstTests : IAsyncLifetime
         using (var form = JsonDocument.Parse((await Form()).Body)) Assert.Equal((1, Tap(Start), JsonValueKind.Null), (form.RootElement.GetProperty("step").GetInt32(), form.RootElement.GetProperty("slot").GetString(), form.RootElement.GetProperty("givenNames").ValueKind));
         Assert.StartsWith("Para apartar el *", asked); Assert.Contains("a las 09:00", asked); Assert.Contains("¿Cuál es tu nombre?", asked); ReadsLikeAChat(asked); ClaimsNoHour(asked);
         Assert.All(await Trail(), a => { Assert.False(a.Kind.StartsWith("proposal")); Assert.DoesNotContain("Sintética López", a.Body); }); // the card is gone with its data, and it was never confirmed
+        Assert.Empty(await h.Pending("proposal")); Assert.All(await h.Db.PendingActions.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => Assert.DoesNotContain("Sintética López", a.Body));
         Assert.Empty(seen);
         Assert.Contains(Expired, await Say("CONFIRMAR " + code));
         Assert.Empty(seen);
@@ -311,7 +312,7 @@ public sealed class AgentSlotFirstTests : IAsyncLifetime
     [Fact]
     public async Task AnotherHourReissuesTheCardWithTheSameData()
     {
-        var code = (await Card()).Kind[9..];
+        var code = (await Card()).Code;
 
         ClaimsNoHour(await Say("AGENDAR")); // «Otro horario»
         Assert.Equal("list", h.Interactive[^1].GetProperty("type").GetString());
@@ -320,11 +321,11 @@ public sealed class AgentSlotFirstTests : IAsyncLifetime
         Assert.Contains("*Ana Sintética López Prueba*\nNacimiento: 12 de marzo de 1990\nSexo: femenino\nContacto de emergencia: Carlos Sintético (Hermano), 70000001", card);
         Assert.Contains("a las 10:00\n*Con:* Dra. Sintética Rivas", card); Assert.EndsWith("¿Confirmo tu registro y tu cita?", card); ReadsLikeAChat(card); ClaimsNoHour(card);
         var trail = await Trail();
-        var reissued = Assert.Single(trail, a => a.Kind.StartsWith("proposal")); // one card, and the old one was never confirmed
-        Assert.NotEqual(code, reissued.Kind[9..]);
+        var reissued = Assert.Single(await h.Pending("proposal")); Assert.DoesNotContain(trail, a => a.Kind.StartsWith("proposal")); // one card, and the old one was never confirmed
+        Assert.NotEqual(code, reissued.Code);
         using (var stored = JsonDocument.Parse(reissued.Body)) Assert.Equal(Start.AddHours(1), stored.RootElement.GetProperty("startsAt").GetDateTimeOffset());
-        Assert.Equal("CONFIRMAR " + reissued.Kind[9..], AgentHarness.Options(h.Interactive[^1])[0].Id);
-        Assert.DoesNotContain(trail, a => a.Kind == "intake");
+        Assert.Equal("CONFIRMAR " + reissued.Code, AgentHarness.Options(h.Interactive[^1])[0].Id);
+        Assert.Empty(await h.Pending("intake"));
         Assert.Contains(Expired, await Say("CONFIRMAR " + code));
         Assert.All(seen, request => Assert.Equal("GET /v1/agenda/booking-options", request)); // the agenda was read; nothing was written
     }
@@ -343,7 +344,7 @@ public sealed class AgentSlotFirstTests : IAsyncLifetime
         await h.Runtime(model, h.Sender(), Hospital()).Run(h.Job, CancellationToken.None);
 
         Assert.Contains("toque un horario de la lista", asked[1]); Assert.Contains("No derives", asked[1]);
-        Assert.DoesNotContain(await Trail(), a => a.Kind.StartsWith("proposal") || a.Kind.StartsWith("handoff"));
+        Assert.DoesNotContain(await Trail(), a => a.Kind.StartsWith("proposal") || a.Kind.StartsWith("handoff")); Assert.Empty(await h.Pending("proposal"));
         Assert.Empty(seen); Assert.Equal("agent", (await h.Fresh()).Status);
     }
 }

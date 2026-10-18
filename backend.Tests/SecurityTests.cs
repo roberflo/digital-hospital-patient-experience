@@ -122,6 +122,21 @@ public sealed class SecurityTests {
         Assert.Contains(KeyFiles(keys),xml=>xml.Contains("EncryptedKey"));
         Assert.Equal("synthetic",after.GetRequiredService<IDataProtectionProvider>().CreateProtector("mr37").Unprotect(payload));
     }
+    /// <summary>MR-40 transition: a cut the API cannot read stops the start, naming the variable; read silently as the default it would
+    /// leave every question the old version sent unanswered, or answer ones it never asked.</summary>
+    [Theory]
+    [InlineData("mañana a las 9", false)]
+    [InlineData("2026-10-18T09:00:00", false)] // no zone: the server's would be guessed
+    [InlineData("2026-10-18T09:00:00-06:00", true)]
+    [InlineData("2026-10-18T15:00:00Z", true)]
+    [InlineData(null, true)]
+    public void AnUnreadableLegacyCutRefusesToStart(string? cut, bool starts)
+    {
+        var config=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{["ConnectionStrings:Database"]="Host=never-opened",["KEY_DIRECTORY"]=Directory.CreateTempSubdirectory("keys-").FullName,["AGENT_LEGACY_QUESTIONS_BEFORE"]=cut}).Build();
+        var start=()=>new ServiceCollection().AddLogging().AddRecepcionServices(config,true);
+        if(starts){start();return;}
+        Assert.Contains("AGENT_LEGACY_QUESTIONS_BEFORE",Assert.Throws<InvalidOperationException>(start).Message);
+    }
     [Fact] public void ProductionWithoutCertificateRefusesToStart() // MR-37 (d)
     {
         IHostEnvironment Env(string name)=>new Microsoft.Extensions.Hosting.Internal.HostingEnvironment{EnvironmentName=name};

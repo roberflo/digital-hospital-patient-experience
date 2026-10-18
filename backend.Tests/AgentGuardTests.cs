@@ -107,7 +107,7 @@ public sealed class AgentGuardTests : IAsyncLifetime
 
         await h.Runtime(model, h.Sender(), h.Hospital()).Run(h.Job, CancellationToken.None);
 
-        var code = (await h.Db.Activities.SingleAsync(a => a.Kind.StartsWith("proposal:"))).Kind[9..];
+        var code = Assert.Single(await h.Pending("proposal")).Code;
         Assert.Equal("CONFIRMAR " + code, h.Interactive[^1].GetProperty("action").GetProperty("buttons")[0].GetProperty("reply").GetProperty("id").GetString());
         Assert.Empty(h.HospitalWrites);
     }
@@ -155,7 +155,7 @@ public sealed class AgentGuardTests : IAsyncLifetime
 
         await h.Runtime(model, h.Sender(), h.Hospital()).Run(h.Job, CancellationToken.None);
 
-        Assert.Empty(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id && a.Kind.StartsWith("proposal:")).ToListAsync());
+        Assert.Empty(await h.Pending("proposal"));
     }
 
     [Fact]
@@ -189,7 +189,7 @@ public sealed class AgentGuardTests : IAsyncLifetime
     public async Task NoSlotWithinEightHoursAsksWhetherItIsAnEmergency(int? hoursToFirstSlot, bool alreadyAsked, int askedDaysAhead, bool asks)
     {
         var tenant = await h.Db.Tenants.SingleAsync(t => t.Id == h.Scope.Id); tenant.EmergencyPhone = "2200 0000"; await h.Db.SaveChangesAsync();
-        if (alreadyAsked) { await h.Say("agent", "No tengo horarios en las próximas 8 horas. ¿Es una emergencia?"); await h.Say("patient", "No, ¿qué hay mañana?"); }
+        if (alreadyAsked) { await h.Asked("emergency", "No tengo horarios en las próximas 8 horas. ¿Es una emergencia?"); await h.Say("patient", "No, ¿qué hay mañana?"); }
         var slots = hoursToFirstSlot is { } hours ? new[] { new { slotId = "a", startsAt = DateTimeOffset.UtcNow.AddHours(hours), durationMinutes = 30, takenBy = 0, offered = true } } : [];
         var hospital = h.Hospital(availability: new { clinicalDayFrom = "", clinicalDayTo = "", maxDaysPerQuery = 31, rollState = "open", professionals = new[] { new { clinicianId = Guid.NewGuid(), clinicianName = "Dra. Sintética", placeName = "", defaultDurationMinutes = 30, days = new[] { new { clinicalDay = "", state = "open", takenSlotCount = 0, utcOffset = "-06:00", slots } } } } });
         var model = h.Model(AgentHarness.ToolCall("hospital_availability", new { date = DateTime.UtcNow.AddHours(-6).AddDays(askedDaysAhead).ToString("yyyy-MM-dd") }), AgentHarness.Reply("Esto es lo que encontré."));
@@ -208,7 +208,7 @@ public sealed class AgentGuardTests : IAsyncLifetime
     [InlineData("si, por favor")]
     public async Task AnsweringThatItIsAnEmergencyHandsOffWithoutTheModel(string answer)
     {
-        await h.Say("agent", "No tengo horarios en las próximas 8 horas. ¿Es una emergencia?"); await h.Say("patient", answer);
+        await h.Asked("emergency", "No tengo horarios en las próximas 8 horas. ¿Es una emergencia?"); await h.Say("patient", answer);
         var model = new AgentHarness.Fake(_ => throw new InvalidOperationException("The model must not be consulted"));
 
         await h.Runtime(model, h.Sender()).Run(h.Job, CancellationToken.None);
@@ -629,7 +629,7 @@ public sealed class AgentGuardTests : IAsyncLifetime
     public async Task AnsweringTheEmergencyContactInTwoMessagesIsNotAnEmergency()
     {
         // «Emergencia: …» labels the field the agent asked for, also when the answer comes in more than one message.
-        await h.Say("agent", "Último dato: ¿quién es tu contacto de emergencia? Nombre, parentesco y teléfono.");
+        await h.Asked("emergency-contact", "Último dato: ¿quién es tu contacto de emergencia? Nombre, parentesco y teléfono."); // as the runtime records it (MR-40)
         await h.Say("patient", "Emergencia: María López"); await h.Say("patient", "es mi mamá");
 
         await h.Runtime(h.Model(AgentHarness.Reply("Gracias. ¿Me das su teléfono?")), h.Sender()).Run(h.Job, CancellationToken.None);
@@ -637,6 +637,22 @@ public sealed class AgentGuardTests : IAsyncLifetime
         Assert.Equal("agent", (await h.Fresh()).Status);
         Assert.DoesNotContain(h.Sent, text => text.StartsWith("Si es una emergencia"));
         Assert.DoesNotContain(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => a.Kind == "handoff");
+    }
+
+    [Fact]
+    public async Task AnAlarmSignInTheEmergencyContactAnswerIsStillAnEmergency()
+    {
+        // The label is dropped, the sign is not: «Emergencia: no puedo respirar» answers nothing, it goes to the emergency number (N2).
+        (await h.Db.Tenants.SingleAsync(t => t.Id == h.Scope.Id)).EmergencyPhone = "2200 0000"; await h.Db.SaveChangesAsync();
+        await h.Asked("emergency-contact", "Último dato: ¿quién es tu contacto de emergencia? Nombre, parentesco y teléfono.");
+        await h.Say("patient", "Emergencia: no puedo respirar");
+        var model = h.Model(AgentHarness.Reply("Gracias. ¿Me das su teléfono?"));
+
+        await h.Runtime(model, h.Sender()).Run(h.Job, CancellationToken.None);
+
+        Assert.Equal(0, model.Calls);
+        Assert.Equal("human", (await h.Fresh()).Status);
+        Assert.StartsWith("Si es una emergencia, llama ya al *2200 0000*", Assert.Single(h.Sent));
     }
 
     [Fact]
@@ -791,7 +807,7 @@ public sealed class AgentGuardTests : IAsyncLifetime
 
         await h.Runtime(model, h.Sender(), h.Hospital()).Run(h.Job, CancellationToken.None);
 
-        Assert.Single(await h.Db.Activities.Where(a => a.Kind.StartsWith("proposal:")).ToListAsync());
+        Assert.Single(await h.Pending("proposal"));
     }
 
     [Fact]
@@ -984,12 +1000,23 @@ public sealed class AgentHarness(Guid? tenant = null, string phone = "5037000000
         await Db.SaveChangesAsync(); await Say("patient", message);
     }
     /// <summary>Appends a message; the job always answers the newest patient message.</summary>
-    public async Task Say(string sender, string body, DateTimeOffset? at = null)
+    public async Task<Message> Say(string sender, string body, DateTimeOffset? at = null)
     {
         await Task.Delay(3); // messages are ordered by their timestamp, which the database keeps to the microsecond
         var message = new Message { TenantId = Scope.Id, ConversationId = Conversation.Id, ExternalId = "m-" + Guid.NewGuid(), Body = body, Sender = sender }; Db.Add(message);
         if (at is not null) message.CreatedAt = at.Value;
         if (sender == "patient") { Job = new() { TenantId = Scope.Id, ConversationId = Conversation.Id, Key = "agent:" + message.ExternalId }; Db.Add(Job); }
+        await Db.SaveChangesAsync(); return message;
+    }
+    /// <summary>The agent's working state of this conversation of one kind still open to the patient: not consumed (MR-40).</summary>
+    public Task<List<PendingAction>> Pending(string kind) => Db.PendingActions.Where(x => x.ConversationId == Conversation.Id && x.Kind == kind && x.ConsumedAt == null).OrderBy(x => x.CreatedAt).ToListAsync();
+    /// <summary>The agent asked <paramref name="question"/> (emergency, person) with <paramref name="text"/> and waits for the answer, as AgentRuntime records it.</summary>
+    public Task Asked(string question, string text, DateTimeOffset? at = null) => Asked([question], text, at);
+    /// <summary>One message that asks several questions at once (the emergency and a person), each recorded as the runtime does.</summary>
+    public async Task Asked(IReadOnlyCollection<string> questions, string text, DateTimeOffset? at = null)
+    {
+        var prompt = await Say("agent", text, at);
+        foreach (var question in questions) Db.PendingActions.Add(new PendingAction { TenantId = Scope.Id, ConversationId = Conversation.Id, Kind = "question", Code = question, PromptMessageId = prompt.Id, ExpiresAt = DateTimeOffset.UtcNow.AddHours(24) });
         await Db.SaveChangesAsync();
     }
     public async Task Link() { Contact.PatientId = Guid.NewGuid(); await Db.SaveChangesAsync(); }
@@ -997,13 +1024,19 @@ public sealed class AgentHarness(Guid? tenant = null, string phone = "5037000000
     public CrmDb NewDb(TenantScope scope) => new(options, scope, protection);
     public async Task<Conversation> Fresh() { await using var other = new CrmDb(options, Scope, protection); return await other.Conversations.AsNoTracking().SingleAsync(x => x.Id == Conversation.Id); }
 
+    /// <summary>The Hospital client this tenant's runtime gets, for what the team does through the endpoints.</summary>
+    public HospitalClient Client(HttpMessageHandler hospital) => new(new HttpClient(hospital), Config());
     public AgentRuntime Runtime(HttpMessageHandler model, Fake sender, HttpMessageHandler? hospital = null, Dictionary<string, string?>? extra = null)
+    {
+        var config = Config(extra);
+        var kapso = new KapsoClient(new HttpClient(sender), config);
+        return new(new HttpClient(model), config, Db, Scope, new HospitalClient(new HttpClient(hospital ?? new Fake(_ => throw new InvalidOperationException("Unexpected hospital request"))), config), new ConversationService(Db, Scope, kapso), kapso);
+    }
+    IConfiguration Config(Dictionary<string, string?>? extra = null)
     {
         var token = "e30." + Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(new { tenant_id = Scope.Id, exp = DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds() })).TrimEnd('=').Replace('+', '-').Replace('/', '_') + ".synthetic";
         var prefix = $"Hospital:Tenants:{Scope.Id}:";
-        var config = new ConfigurationBuilder().AddInMemoryCollection(settings).AddInMemoryCollection(new Dictionary<string, string?> { [prefix + "BaseUrl"] = "https://hospital.example.invalid/", [prefix + "AccessToken"] = token, [prefix + "AllowClinicalDelivery"] = "true", [prefix + "UseReceptionBridge"] = "true" }).AddInMemoryCollection(extra ?? []).Build();
-        var kapso = new KapsoClient(new HttpClient(sender), config);
-        return new(new HttpClient(model), config, Db, Scope, new HospitalClient(new HttpClient(hospital ?? new Fake(_ => throw new InvalidOperationException("Unexpected hospital request"))), config), new ConversationService(Db, Scope, kapso), kapso);
+        return new ConfigurationBuilder().AddInMemoryCollection(settings).AddInMemoryCollection(new Dictionary<string, string?> { [prefix + "BaseUrl"] = "https://hospital.example.invalid/", [prefix + "AccessToken"] = token, [prefix + "AllowClinicalDelivery"] = "true", [prefix + "UseReceptionBridge"] = "true" }).AddInMemoryCollection(extra ?? []).Build();
     }
     /// <summary>Replays the given model responses in order, then repeats the last one.</summary>
     public Fake Model(params HttpResponseMessage[] turns) { var bodies = turns.Select(t => t.Content.ReadAsStringAsync().Result).ToArray(); var i = 0; return new(_ => Task.FromResult(Raw(bodies[Math.Min(i++, bodies.Length - 1)]))); }
@@ -1034,7 +1067,7 @@ public sealed class AgentHarness(Guid? tenant = null, string phone = "5037000000
         if (path == "/v1/clinic/clinician-disciplines") { DisciplineReads++; if (disciplines is not null) return Task.FromResult(Json(new { clinicians = disciplines })); }
         if (path is "/v1/commercial/services" or "/v1/commercial/companies") { var items = (path.EndsWith("services") ? services : companies) ?? []; return Task.FromResult(Json(new { items, total = items.Length, page = 1, pageSize = 100 })); }
         if (path.StartsWith("/v1/patients/")) return Task.FromResult(Json(new { patientId = Contact.PatientId, givenNames = "Paciente", familyNames = "Sintético", phone = Contact.Phone }));
-        if (path.StartsWith("/v1/agenda/patients/")) return Task.FromResult(Json(new { rows = appointments ?? [] }));
+        if (path.StartsWith("/v1/agenda/patients/")) return Task.FromResult(Json(new { rows = appointments ?? [], exists = appointments is { Length: > 0 } })); // «exists»: the earlier-appointment read (MR-42)
         if (path == "/v1/agenda/booking-options") return Task.FromResult(Json((availability as Func<Uri, object>)?.Invoke(request.RequestUri) ?? availability ?? new { clinicalDayFrom = "", clinicalDayTo = "", maxDaysPerQuery = 31, rollState = "open", professionals = Array.Empty<object>() }));
         if (path.EndsWith("/prescriptions/list")) return Task.FromResult(Json(new { prescriptionIds = prescription is null ? [] : new[] { JsonSerializer.SerializeToElement(prescription).GetProperty("prescriptionId").GetGuid() }, nextCursor = (string?)null }));
         if (path.EndsWith("/pdf")) { var pdf = new ByteArrayContent("%PDF-synthetic"u8.ToArray()); pdf.Headers.ContentType = new("application/pdf"); return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = pdf }); }

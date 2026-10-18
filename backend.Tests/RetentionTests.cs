@@ -43,6 +43,25 @@ public sealed class RetentionTests : IAsyncLifetime
         Assert.True(await other.Db.Receipts.AsNoTracking().AnyAsync(x => x.Id == otherReceipt.Id));
     }
 
+    /// <summary>MR-40: the agent's working state goes once its life is over, consumed or not; what is still open stays, and so does the other tenant's.</summary>
+    [Fact]
+    public async Task ExpiredPendingActionsAreSweptOnlyForTheTenant()
+    {
+        static async Task<PendingAction> Pending(AgentHarness at, int minutes, bool consumed = false)
+        {
+            var p = new PendingAction { TenantId = at.Scope.Id, ConversationId = at.Conversation.Id, Kind = "question", Code = "emergency", ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(minutes), ConsumedAt = consumed ? DateTimeOffset.UtcNow.AddMinutes(-90) : null };
+            at.Db.Add(p); await at.Db.SaveChangesAsync(); return p;
+        }
+        var expired = await Pending(h, -1); var used = await Pending(h, -1, consumed: true); var open = await Pending(h, 60); var otherExpired = await Pending(other, -1);
+        var sender = h.Sender();
+
+        await AgentWorker.RunTenant(h.Worker(h.Runtime(new AgentHarness.Fake(_ => Task.FromResult(AgentHarness.Reply("Respuesta sintética"))), sender), sender), h.Scope.Id, NullLogger.Instance, CancellationToken.None);
+
+        var left = await h.Db.PendingActions.AsNoTracking().Select(x => x.Id).ToListAsync();
+        Assert.DoesNotContain(expired.Id, left); Assert.DoesNotContain(used.Id, left); Assert.Contains(open.Id, left);
+        Assert.True(await other.Db.PendingActions.AsNoTracking().AnyAsync(x => x.Id == otherExpired.Id));
+    }
+
     /// <summary>Fails every DELETE, the way a sweep past CommandTimeout would.</summary>
     sealed class FailingDeletes : DbCommandInterceptor
     {

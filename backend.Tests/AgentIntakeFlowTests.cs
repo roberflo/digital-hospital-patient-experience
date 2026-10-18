@@ -91,7 +91,7 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
         var noModel = new AgentHarness.Fake(_ => throw new InvalidOperationException("The model must not be consulted"));
         async Task Say(string text) { await h.Say("patient", text); await h.Runtime(noModel, h.Sender()).Run(h.Job, CancellationToken.None); }
         await Say($"CITA {new DateTimeOffset(DateTime.UtcNow.Date.AddDays(3).AddHours(15), TimeSpan.Zero).ToOffset(TimeSpan.FromHours(-6)):yyyy-MM-ddTHH:mm:sszzz} {Guid.NewGuid()} 30 Dra. Sintética Rivas"); // the form opens when an hour is tapped
-        Assert.Single(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id && a.Kind == "intake").ToListAsync());
+        Assert.Single(await h.Pending("intake"));
         foreach (var text in (string[])[.. Answers[..4], "Emergencia: Carlos Sintético"]) await Say(text);
 
         Assert.Equal("agent", (await h.Fresh()).Status);
@@ -116,7 +116,7 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
 
         // Someone who asks to register without choosing an hour: the agent opens the form, and from there on no model is needed.
         await h.Runtime(h.Model(AgentHarness.ToolCall("start_registration", new { }), AgentHarness.Reply("Ok")), h.Sender(), hospital).Run(h.Job, CancellationToken.None); var first = h.Sent[^1];
-        Assert.Single(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id && a.Kind == "intake").ToListAsync());
+        Assert.Single(await h.Pending("intake"));
         Assert.Contains("son 7 datos cortos", first); Assert.Contains("¿Cuál es tu nombre?", first);
         string reply = ""; foreach (var answer in Answers) reply = await Say(answer);
 
@@ -129,7 +129,7 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
         Assert.Contains("ya te registré", registered);
         Assert.Equal("list", h.Interactive[^1].GetProperty("type").GetString()); // the free hours come with the confirmation, unasked
         Assert.Equal("agent", (await h.Fresh()).Status);
-        Assert.DoesNotContain(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id && a.Kind.StartsWith("intake")).ToListAsync(), a => a.Body.Contains("Sintética")); // the finished form keeps no personal data
+        Assert.DoesNotContain(await h.Db.PendingActions.Where(a => a.ConversationId == h.Conversation.Id && a.Kind == "intake").ToListAsync(), a => a.Body.Contains("Sintética")); // the finished form keeps no personal data
     }
 
     [Fact]
@@ -137,7 +137,7 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
     {
         var model = h.Model(AgentHarness.Reply("No tengo ese dato; ¿te paso con recepción?")); // no hours here: this hospital's guide is empty, and an hour nobody published would be withheld
         await h.Say("patient", $"CITA {new DateTimeOffset(DateTime.UtcNow.Date.AddDays(3).AddHours(15), TimeSpan.Zero).ToOffset(TimeSpan.FromHours(-6)):yyyy-MM-ddTHH:mm:sszzz} {Guid.NewGuid()} 30 Dra. Sintética Rivas"); await h.Runtime(model, h.Sender()).Run(h.Job, CancellationToken.None);
-        Assert.Single(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id && a.Kind == "intake").ToListAsync()); // the tapped hour opened the form, with no model
+        Assert.Single(await h.Pending("intake")); // the tapped hour opened the form, with no model
         await h.Say("patient", "¿A qué hora abren los sábados?");
 
         await h.Runtime(model, h.Sender()).Run(h.Job, CancellationToken.None);
@@ -157,13 +157,13 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
         var writes = new List<string>(); var hospital = new AgentHarness.Fake(request => { writes.Add(request.RequestUri!.AbsolutePath); throw new InvalidOperationException("Unexpected hospital request"); });
         async Task Say(string text) { await h.Say("patient", text); await h.Runtime(noModel, h.Sender(), hospital).Run(h.Job, CancellationToken.None); }
         await Say($"CITA {hour} {Guid.NewGuid()} 30 Dra. Sintética Rivas");
-        Assert.Single(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id && a.Kind == "intake").ToListAsync()); // the tap opened the form
+        Assert.Single(await h.Pending("intake")); // the tap opened the form
         foreach (var text in new[] { "Luis Sintético", "Prueba", "03/05/2015" }) await Say(text);
 
         Assert.Equal("agent", (await h.Fresh()).Status);
         var trail = await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync();
         Assert.Contains(trail, a => a.Kind == "handoff_offer"); // the patient is asked, with a button, whether to go to a person
-        Assert.DoesNotContain(trail, a => a.Kind == "intake"); // the form and the hour chosen with it are gone
+        Assert.Empty(await h.Pending("intake")); // the form and the hour chosen with it are gone
         Assert.All(trail, a => Assert.DoesNotContain(hour[..16], a.Body));
         Assert.Empty(writes); // nothing was asked of Hospital, let alone written
     }
@@ -240,7 +240,7 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
         await h.Runtime(h.Model(AgentHarness.ToolCall("start_registration", said), AgentHarness.Reply("Ok")), h.Sender()).Run(h.Job, CancellationToken.None);
 
         Assert.Contains("¿Cuál es tu fecha de nacimiento?", h.Sent[^1]);
-        Assert.Single(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id && a.Kind == "intake").ToListAsync());
+        Assert.Single(await h.Pending("intake"));
         Assert.All(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => { Assert.DoesNotContain("Marta", a.Body); Assert.DoesNotContain("70000002", a.Body); Assert.DoesNotContain("7000 0002", a.Body); });
     }
 
@@ -322,7 +322,7 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
         // Nothing is missing, so there is nothing to ask: the patient gets the card to confirm.
         var card = Assert.Single(h.Sent);
         Assert.Contains("*Irene Sintética Mora Prueba*", card); Assert.EndsWith("¿Están correctos?", card);
-        Assert.Single(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id && a.Kind.StartsWith("proposal:")).ToListAsync());
+        Assert.Single(await h.Pending("proposal"));
     }
 
     [Fact]
@@ -334,7 +334,7 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
 
         Assert.Contains("menor de 18", Assert.Single(h.Sent));
         Assert.Contains(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => a.Kind == "handoff_offer");
-        Assert.DoesNotContain(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => a.Kind == "intake");
+        Assert.Empty(await h.Pending("intake"));
     }
 
     [Fact]
@@ -378,7 +378,7 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
         await h.Runtime(model, h.Sender()).Run(h.Job, CancellationToken.None);
 
         var trail = await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync();
-        Assert.DoesNotContain(trail, a => a.Kind.StartsWith("proposal:") || a.Kind == "intake");
+        Assert.Empty(await h.Pending("proposal")); Assert.Empty(await h.Pending("intake"));
         Assert.DoesNotContain(h.Sent, text => text.Contains("Pedro Sintético"));
     }
 }

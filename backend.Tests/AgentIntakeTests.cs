@@ -34,7 +34,7 @@ public sealed class AgentIntakeTests : IAsyncLifetime
     async Task<string> ProposeAndGetCode(HttpMessageHandler hospital, object arguments)
     {
         await h.Runtime(h.Model(AgentHarness.ToolCall("propose_registration", arguments), AgentHarness.Reply("Revisa tus datos y confirma.")), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
-        return (await h.Db.Activities.SingleAsync(a => a.ConversationId == h.Conversation.Id && a.Kind.StartsWith("proposal:"))).Kind[9..];
+        return Assert.Single(await h.Pending("proposal")).Code;
     }
 
     [Fact]
@@ -62,6 +62,7 @@ public sealed class AgentIntakeTests : IAsyncLifetime
         // The confirmed proposal keeps no personal data behind.
         var used = await h.Db.Activities.SingleAsync(a => a.ConversationId == h.Conversation.Id && a.Kind.StartsWith("proposal_used:"));
         Assert.DoesNotContain("1990", used.Body); Assert.DoesNotContain("Sintética", used.Body);
+        Assert.All(await h.Db.PendingActions.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => { Assert.DoesNotContain("1990", a.Body); Assert.DoesNotContain("Sintética", a.Body); });
         Assert.Contains(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => a.Kind == "patient_registered");
     }
 
@@ -74,11 +75,12 @@ public sealed class AgentIntakeTests : IAsyncLifetime
             var path = request.RequestUri!.AbsolutePath;
             if (path == "/v1/patients") return AgentHarness.Json(new { created = true, patientId = patient, duplicateCandidates = Array.Empty<object>() });
             if (path.StartsWith("/v1/patients/")) return AgentHarness.Json(new { patientId = patient, givenNames = "Ana Sintética", familyNames = "López Prueba", phone = h.Contact.Phone });
+            if (path.StartsWith("/v1/agenda/patients/")) return AgentHarness.Json(new { rows = Array.Empty<object>(), exists = false }); // just registered: Hospital has no appointment of theirs (MR-42)
             if (path == "/v1/agenda/booking-options") return AgentHarness.Json(new { clinicalDayFrom = "", clinicalDayTo = "", maxDaysPerQuery = 31, rollState = "open", professionals = new[] { new { clinicianId = doctor, clinicianName = "Dra. Sintética", placeName = "", defaultDurationMinutes = 30, days = new[] { new { clinicalDay = "", state = "open", takenSlotCount = 0, utcOffset = "-06:00", slots = new[] { new { slotId = "a", startsAt = start, durationMinutes = 30, takenBy = 0, offered = true } } } } } } });
             booking = JsonDocument.Parse(await request.Content!.ReadAsStringAsync()).RootElement.Clone();
             return AgentHarness.Json(new { appointmentId = Guid.NewGuid(), status = "booked", overlaps = false });
         });
-        async Task Confirm() { var code = (await h.Db.Activities.SingleAsync(a => a.ConversationId == h.Conversation.Id && a.Kind.StartsWith("proposal:"))).Kind[9..]; await h.Say("patient", "CONFIRMAR " + code); await h.Runtime(h.Model(AgentHarness.Reply("No debe consultarse el modelo")), h.Sender(), hospital).Run(h.Job, CancellationToken.None); }
+        async Task Confirm() { var code = Assert.Single(await h.Pending("proposal")).Code; await h.Say("patient", "CONFIRMAR " + code); await h.Runtime(h.Model(AgentHarness.Reply("No debe consultarse el modelo")), h.Sender(), hospital).Run(h.Job, CancellationToken.None); }
 
         await h.Runtime(h.Model(AgentHarness.ToolCall("propose_registration", Adult), AgentHarness.Reply("Confirma tu registro.")), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
         await Confirm();
@@ -118,7 +120,7 @@ public sealed class AgentIntakeTests : IAsyncLifetime
 
         await h.Runtime(h.Model(AgentHarness.ToolCall("propose_registration", arguments), AgentHarness.Reply("No pude registrar esos datos.")), h.Sender()).Run(h.Job, CancellationToken.None);
 
-        Assert.Empty(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id && a.Kind.StartsWith("proposal:")).ToListAsync());
+        Assert.Empty(await h.Pending("proposal"));
         Assert.DoesNotContain(h.Sent, text => text.Contains("CONFIRMAR"));
     }
 
@@ -129,7 +131,7 @@ public sealed class AgentIntakeTests : IAsyncLifetime
 
         await h.Runtime(h.Model(AgentHarness.ToolCall("propose_registration", Adult), AgentHarness.Reply("Ya tienes expediente.")), h.Sender(), h.Hospital()).Run(h.Job, CancellationToken.None);
 
-        Assert.Empty(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id && a.Kind.StartsWith("proposal:")).ToListAsync());
+        Assert.Empty(await h.Pending("proposal"));
     }
 
     [Theory]

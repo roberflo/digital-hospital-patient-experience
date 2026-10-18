@@ -91,7 +91,7 @@ public sealed class AgentAppointmentsTests : IAsyncLifetime
         await h.Runtime(h.Model(AgentHarness.ToolCall("propose_action", new { action, appointmentId = appointment, doctorId = doctor, startsAt = In(4, 16), durationMinutes = 30 }), AgentHarness.Reply("Esa cita ya pasó, así que no se puede cambiar ni cancelar.")), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
 
         Assert.Empty(h.HospitalWrites);
-        Assert.DoesNotContain(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => a.Kind.StartsWith("proposal:"));
+        Assert.Empty(await h.Pending("proposal"));
         Assert.DoesNotContain(h.Sent, text => text.Contains("¿La cancelo?") || text.Contains("¿La cambio?"));
     }
 
@@ -142,7 +142,7 @@ public sealed class AgentAppointmentsTests : IAsyncLifetime
         });
         await h.Runtime(h.Model(AgentHarness.ToolCall("propose_action", new { action = "create", doctorId = doctor, startsAt = In(5, 15), durationMinutes = 30 }), AgentHarness.Reply("Listo.")), h.Sender(), unreadable).Run(h.Job, CancellationToken.None);
         await h.Db.Jobs.ExecuteUpdateAsync(s => s.SetProperty(j => j.Status, "done"));
-        await h.Say("patient", "CONFIRMAR " + (await h.Db.Activities.SingleAsync(a => a.Kind.StartsWith("proposal:"))).Kind[9..]);
+        await h.Say("patient", "CONFIRMAR " + Assert.Single(await h.Pending("proposal")).Code);
         var sender = h.Sender();
 
         await AgentWorker.RunTenant(h.Worker(h.Runtime(NoModel, sender, unreadable), sender), h.Scope.Id, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, CancellationToken.None);
@@ -160,9 +160,9 @@ public sealed class AgentAppointmentsTests : IAsyncLifetime
         // Nothing reached Hospital: the team is told so, not asked to reconcile an operation that never happened.
         await h.Link(); var hospital = h.Hospital(availability: Agenda());
         await h.Runtime(h.Model(AgentHarness.ToolCall("propose_action", new { action = "create", doctorId = doctor, startsAt = In(5, 15), durationMinutes = 30 }), AgentHarness.Reply("Listo.")), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
-        var card = await h.Db.Activities.SingleAsync(a => a.Kind.StartsWith("proposal:")); card.Body = """{"action":"create"}"""; await h.Db.SaveChangesAsync();
+        var card = Assert.Single(await h.Pending("proposal")); card.Body = """{"action":"create"}"""; await h.Db.SaveChangesAsync();
         await h.Db.Jobs.ExecuteUpdateAsync(s => s.SetProperty(j => j.Status, "done"));
-        await h.Say("patient", "CONFIRMAR " + card.Kind[9..]); var sender = h.Sender();
+        await h.Say("patient", "CONFIRMAR " + card.Code); var sender = h.Sender();
 
         await AgentWorker.RunTenant(h.Worker(h.Runtime(NoModel, sender, hospital), sender), h.Scope.Id, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, CancellationToken.None);
 
