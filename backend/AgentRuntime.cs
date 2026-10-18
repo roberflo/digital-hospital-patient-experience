@@ -44,11 +44,14 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         session = AgentMemory.Session(history);
         var latest = history.LastOrDefault(x => x.Sender == "patient"); if (latest is null || job.Key != "agent:" + latest.ExternalId) return;
         heard = string.Join("\n", history.Where(x => x.Sender == "patient").TakeLast(3).Select(x => x.Body));
-        var registering = history.Count > 1 && history[^2].Sender != "patient" && history[^2].Body.Contains("contacto de emergencia", StringComparison.OrdinalIgnoreCase);
-        // A sign split across messages («me duele» + «el pecho»), or in a message whose job a newer one coalesced, is read on the patient's
-        // messages since the agent or the team last spoke. Older ones were already answered: joining them would hand off every later message.
-        var turn = string.Join(" ", history.AsEnumerable().Reverse().TakeWhile(x => x.Sender == "patient").Take(3).Reverse().Select(x => x.Body));
-        var alarm = AgentGuard.NamesEmergency(latest.Body, registering) || AgentGuard.NamesEmergency(turn, registering);
+        // The turn: the patient's messages since the agent or the team last spoke. Older ones were already answered: reading them again would
+        // hand off every later message. While the turn answers the agent's question for the emergency contact, «Emergencia: …» labels that field.
+        var turn = history.AsEnumerable().Reverse().TakeWhile(x => x.Sender == "patient").Take(3).Reverse().Select(x => x.Body).ToList();
+        var before = history.Count > turn.Count ? history[^(turn.Count + 1)] : null;
+        var registering = before is not null && before.Sender != "patient" && before.Body.Contains("contacto de emergencia", StringComparison.OrdinalIgnoreCase);
+        // Each message on its own, so a negation in one does not swallow the sign in another; and joined, for a sign split across them
+        // («me duele» + «el pecho») or in a message whose job a newer one coalesced.
+        var alarm = turn.Append(latest.Body).Append(string.Join("\n", turn)).Any(text => AgentGuard.NamesEmergency(text, registering));
         if (waitingSince is { } since)
         {
             // An emergency always gets the number. A tap of a registered patient is still served below, with no model.

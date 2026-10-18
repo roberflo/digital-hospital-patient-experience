@@ -295,7 +295,7 @@ Verificación · 2026-10-13 (segunda entrega):
 
 ## Señales de alarma (MR-35) · 2026-10-17
 
-Lista y reglas aprobadas por el dueño el 2026-10-17, con la revisión adversaria del mismo día. Antes del modelo, `AgentGuard.NamesEmergency` lleva estas señales al número de emergencia y a una persona por el mismo camino que «emergencia», «sobredosis» y «suicidio»: handoff urgente, sin llamar al modelo. Cada señal tiene su propio patrón con nombre en `AgentGuard.cs`, y los patrones se aplican al texto sin tildes, en minúsculas y con espacios simples.
+Lista y reglas aprobadas por el dueño el 2026-10-17, con las dos revisiones adversarias del mismo día. Antes del modelo, `AgentGuard.NamesEmergency` lleva estas señales al número de emergencia y a una persona por el mismo camino que «emergencia», «sobredosis» y «suicidio»: handoff urgente, sin llamar al modelo. Cada señal tiene su propio patrón con nombre en `AgentGuard.cs`. Los patrones se aplican a los primeros 4096 caracteres de cada mensaje, sin tildes, en minúsculas y con espacios simples. Los saltos de línea se conservan y cortan la cláusula. La guarda es la primera red; el modelo y las evals son la segunda, para lo que la lista cerrada de frases no reconoce.
 
 | Señal | Patrón |
 |---|---|
@@ -308,40 +308,51 @@ Lista y reglas aprobadas por el dueño el 2026-10-17, con la revisión adversari
 | 7. Ideación suicida o autolesión | `Suicide` |
 | 8. Intoxicación o sobredosis (también «se tomó 20 pastillas», «toda la caja», «un frasco entero») | `Poisoning` |
 | 9. Reacción alérgica grave con hinchazón de cara o garganta: reacción y hinchazón en el mismo mensaje, o la garganta que se cierra | `Allergy` + `Swelling`, `AllergicAirway` |
-| 10. Infarto, derrame (cerebral, no «en el ojo»), embolia, ataque al corazón | `Cardiac` |
-| 11. «Se puso morado» (no «se le puso morado el dedo») y «se cayó y no se levanta» | `Collapse` |
+| 10. Infarto, derrame (cerebral, no «en el ojo»), embolia, ataque al corazón; como los mismos signos: paro cardiaco, preinfarto, ACV, ictus, trombosis | `Cardiac` |
+| 11. «Se puso morado» y los labios morados (no un moretón en un dedo, brazo, pierna u ojo) y «se cayó y no se levanta» | `Collapse` |
 
 Reglas:
 
 1. **Negada no dispara.** La negación tiene que recaer sobre el verbo de la señal: «no», «sin», «ni» o «tampoco» seguidos solo de pronombres y auxiliares hasta la señal («no me duele el pecho», «no tengo dolor de pecho», «no es un infarto»).
    - «No aguanto / no soporto el dolor de pecho» niega «aguanto», no el dolor, y dispara.
-   - «No sé si…» es duda y dispara.
+   - «No sé si…» es duda y dispara, igual que «no se me duele el pecho», que solo se lee como «no sé, me duele».
+   - Una negación posterior también cuenta: «el pecho no me duele», «el pecho ya no me duele».
+   - «No me duele la cabeza sino el pecho» y «…pero el pecho sí» disparan.
    - Una coincidencia negada no tapa a la siguiente: en «no es dolor, es como que el pecho me aprieta» dispara «el pecho me aprieta».
 2. **Pasada o resuelta no dispara; la atiende el modelo.** Hay tres vías:
    - **Pasada.** La cláusula de la señal trae un tiempo ya ido («ayer», «anoche», «hace dos años», «la semana pasada», «de niño») y ningún verbo en presente. Por eso «tuvo un infarto hace dos años» no dispara y «hace dos días que me duele el pecho» sí.
    - **«No ha vuelto».** Aparece antes de la señal, en su cláusula («no ha vuelto a tener convulsiones»).
-   - **Recuperación en la cláusula siguiente.** Una recuperación abre lo que sigue en la misma cláusula o en la inmediata siguiente, aunque sea otra frase: «…pero ya estoy bien», «Me desmayé. Ya estoy bien.», «ya pasó», «ya se le quitó». Tiene que estar en 1.ª persona o sin otro sujeto. No cuenta como recuperación:
-     - «ya pasó una hora» ni «ya pasó media hora», que son tiempo;
-     - «Mi hermano tuvo covid pero ya está bien», que habla de otra persona.
+   - **Recuperación en la cláusula siguiente.** Una recuperación explícita y afirmativa abre lo que sigue en la misma cláusula o en la inmediata siguiente, aunque sea otra frase: «…pero ya estoy bien», «Me desmayé. Ya estoy bien.». Las formas que cuentan son «ya estoy bien», «ya está bien», «ya me siento bien», «ya se me pasó», «ya me recuperé» y «ya se recuperó», en 1.ª persona o sin sujeto y sin objeto distinto. No cuenta como recuperación:
+     - una pregunta («¿ya está bien?», «ya está bien?»);
+     - la recuperación de otra cosa («ya estoy bien de la gripe», «ya se me quitó la fiebre», «ya pasó el doctor», «ya pasó lo de la tos»);
+     - la de otra persona («ya está bien mi hermano», «Mi hermano tuvo covid pero ya está bien»);
+     - el tiempo («ya pasó una hora»).
+     
+     Lo que siga después de una recuperación también mantiene la señal: «se desmayó, ya se recuperó un poco pero sigue mareado» dispara.
    
    Lo que diga que sigue, en la misma frase, mantiene actual una señal pasada: «desde», «todavía», «sigue», «hoy», «ahora», «peor», «más», «también», «no se me quita», «no despierta». Si en el mensaje hay una señal en presente, dispara aunque otra mención sea pasada («me duele el pecho como cuando me dio el infarto hace un año»). Ante una frase ambigua en presente, dispara.
-3. **Suicidio y autolesión disparan siempre**, aunque estén negados, en pasado o sean coloquiales («me quiero morir de la vergüenza», «hace un año quise quitarme la vida»).
+3. **Suicidio y autolesión disparan siempre**, aunque estén negados, en pasado o sean coloquiales («me quiero morir de la vergüenza», «hace un año quise quitarme la vida»). **Intoxicación y sobredosis** quedan exentas de la regla 2, porque una ingesta reciente no está resuelta («anoche se tomó 20 pastillas» dispara), pero una negación sigue valiendo («no está intoxicado»).
 
 Criterios adicionales:
 
 - **«No puede hablar».** No dispara solo en 1.ª persona y con un contexto claro de ocupación en la misma frase: trabajo, teléfono, llamada, ocupado, reunión, clase o «manejando». Dicho de otra persona dispara siempre («mi papá no puede hablar ahora»). «No puedo hablar con…» es sobre contactar a alguien y no dispara.
-- **Mensajes partidos.** También se lee la unión de los mensajes del paciente desde la última vez que habló el agente o el equipo, hasta tres mensajes («me duele» + «el pecho»). Esa unión también cubre el mensaje cuyo trabajo absorbió uno más nuevo. Los mensajes anteriores ya tuvieron respuesta: unirlos haría derivar todos los mensajes siguientes.
+- **Mensajes partidos.** El turno son los mensajes del paciente desde la última vez que habló el agente o el equipo, hasta tres. Se lee cada mensaje por separado, para que la negación de uno no se coma la señal de otro («no sé» + «me duele el pecho»). También se leen unidos con un salto de línea, para una señal partida («me duele» + «el pecho») o para el mensaje cuyo trabajo absorbió uno más nuevo. Dispara si cualquiera de las lecturas dispara. Los mensajes anteriores al turno ya tuvieron respuesta: leerlos de nuevo haría derivar todos los mensajes siguientes.
+- **Contacto de emergencia.** «Registrando» se decide por el mensaje del agente anterior al turno. Si ese mensaje pidió el contacto de emergencia, «Emergencia: María López» + «es mi mamá» se leen como el dato del registro, no como una urgencia.
 
 | Cómo se prueba | |
 |---|---|
 | Tabla de frases que disparan y que no, con las regresiones de la revisión | `AgentGuardTests.AlarmSignsAreReadBeforeTheModel` |
-| Extremo a extremo por `Run`: número de emergencia, `human`, modelo sin llamar | `AnAlarmSignGetsTheEmergencyNumberAndAPersonWithoutTheModel`, `AnAlarmSignSplitAcrossTheTurnStillGoesToAPerson`, `ASignAnsweredByTheAgentIsNotReadAgainWithTheNextMessage` |
+| Extremo a extremo por `Run`: número de emergencia, `human`, modelo sin llamar | `AnAlarmSignGetsTheEmergencyNumberAndAPersonWithoutTheModel`, `AnAlarmSignSplitAcrossTheTurnStillGoesToAPerson`, `ASignAnsweredByTheAgentIsNotReadAgainWithTheNextMessage`, `EachMessageOfTheTurnIsReadOnItsOwnSoOnesNegationDoesNotHideAnothersSign`, `AnsweringTheEmergencyContactInTwoMessagesIsNotAnEmergency` |
 | Evals que derivan | `urgencia-111` a `116`, `118`, `120` a `124` |
 | Evals que agendan | `urgencia-117` (señal negada) y `urgencia-119` (señal pasada y resuelta) |
 
 Límites:
 
-- La lista de frases es cerrada, con las faltas de ortografía frecuentes; lo que no reconoce queda para el prompt y las evals, como antes.
+- La lista de frases es cerrada, con las faltas de ortografía frecuentes; lo que no reconoce queda para el modelo, que es la segunda red, y para las evals. El dueño decidió el 2026-10-17 hacer una sola pasada más y publicar.
+- Una frase dentro de una sola línea que el salto de línea parte («no puedo⏎respirar») solo se reconoce al leer el turno unido si la señal tolera el salto.
+- Más allá de 4096 caracteres por mensaje no se lee.
+- Falsos positivos aceptados: «me mato trabajando», «tengo que tomar muchas pastillas al día», «el doctor no responde» sin complemento, «se me durmió el brazo derecho» por haber dormido encima.
+- `urgencia-119` (señal pasada y resuelta que pide cita) es variable con `gpt-6-luna`: la guarda nunca deriva, pero el modelo a veces enseña la lista de horarios o llama a `handoff` en vez de proponer.
 - Si el agente habló en medio («me duele» / «¿qué te duele?» / «el pecho»), la guarda no une los mensajes y la decisión queda en el modelo.
 
 ## Límites conocidos

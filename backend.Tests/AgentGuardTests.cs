@@ -461,6 +461,74 @@ public sealed class AgentGuardTests : IAsyncLifetime
     [InlineData("no se puso morado", false)]
     [InlineData("tuvo un derrame hace dos años y quiere control", false)]
     [InlineData("no tengo tos ni fiebre, respiro bien", false)]
+    // Segunda revisión de 8c25ed0 (2026-10-17): recuperación explícita, saltos de línea, formas dentro de la lista, sinónimos médicos
+    [InlineData("No sé\nme duele el pecho\nqué hago", true)]
+    [InlineData("no se me duele el pecho ayuda", true)]
+    [InlineData("se desmayó ya se recuperó un poco pero sigue mareado", true)]
+    [InlineData("Me desmayé. ¿Ya está bien?", true)]
+    [InlineData("me desmayé, ya estoy bien de la gripe", true)]
+    [InlineData("me desmayé y ya se me quitó la fiebre", true)]
+    [InlineData("me desmayé, ya pasó el doctor", true)]
+    [InlineData("me desmayé, ya pasó por la clínica", true)]
+    [InlineData("me desmayé y ya pasó lo de la tos", true)]
+    [InlineData("se desmayó y ya está bien mi hermano", true)]
+    [InlineData("se desmayó, ya está bien?", true)]
+    [InlineData("se puso morado mi bebé", true)]
+    [InlineData("se puso morado el niño", true)]
+    [InlineData("se puso morado el bebe", true)]
+    [InlineData("se puso morado mi papá", true)]
+    [InlineData("se puso morado su hijo", true)]
+    [InlineData("se le puso morado el bebé", true)]
+    [InlineData("se puso moradito el bebe", true)]
+    [InlineData("tiene los labios morados", true)]
+    [InlineData("se le pusieron morados los labios", true)]
+    [InlineData("se calló y no se levanta", true)]
+    [InlineData("se callo y no se levanta", true)]
+    [InlineData("¿es normal que me duela el pecho?", true)]
+    [InlineData("¿es normal que le duela el pecho a mi papá?", true)]
+    [InlineData("será que es grave que me duela el pecho?", true)]
+    [InlineData("¿es normal que me falte el aire?", true)]
+    [InlineData("ya no quiero seguir viviendo", true)]
+    [InlineData("me dan ganas de morirme", true)]
+    [InlineData("quisiera estar muerto", true)]
+    [InlineData("me hago daño", true)]
+    [InlineData("me estoy lastimando", true)]
+    [InlineData("me corto los brazos", true)]
+    [InlineData("no lo puedo despertar", true)]
+    [InlineData("no la puedo despertar", true)]
+    [InlineData("no quiere despertar", true)]
+    [InlineData("no se ha despertado", true)]
+    [InlineData("siento el brazo izquierdo dormido", true)]
+    [InlineData("siento el brazo izquierdo adormecido", true)]
+    [InlineData("se me durmió medio cuerpo", true)]
+    [InlineData("no puedo mover medio cuerpo", true)]
+    [InlineData("se me cierra la garganta", true)]
+    [InlineData("tengo alergia, se me cierra la garganta", true)]
+    [InlineData("me estoy desangrando", true)]
+    [InlineData("se está desangrando", true)]
+    [InlineData("me oprime el pecho", true)]
+    [InlineData("tengo un dolorcito en el pecho", true)]
+    [InlineData("no para de dolerme el pecho", true)]
+    [InlineData("me duele el brazo izquierdo y el pecho", true)]
+    [InlineData("tengo dificultad para respirar", true)]
+    [InlineData("no me duele la cabeza sino el pecho", true)]
+    [InlineData("no me duele la espalda pero el pecho sí", true)]
+    [InlineData("le dio un paro cardiaco", true)]
+    [InlineData("le dio un paro cardíaco", true)]
+    [InlineData("creo que es un preinfarto", true)]
+    [InlineData("le dio un ACV", true)]
+    [InlineData("tuvo un ictus", true)]
+    [InlineData("creo que tiene una trombosis", true)]
+    [InlineData("anoche se tomó 20 pastillas", true)]
+    [InlineData("no ha parado de sangrar", true)]
+    [InlineData("se comió unas pastillas", true)]
+    [InlineData("se tomó media caja de pastillas", true)]
+    [InlineData("el pecho no me duele", false)]
+    [InlineData("el pecho ya no me duele", false)]
+    [InlineData("se le puso morado el dedo", false)]
+    [InlineData("se le puso morado el brazo del golpe", false)]
+    [InlineData("no está intoxicado", false)]
+    [InlineData("ya paró de sangrar", false)]
     // Not on the list: the model and the existing paths decide
     [InlineData("Me duele muchísimo el estómago", false)]
     [InlineData("Tengo dolor de garganta y fiebre desde ayer", false)]
@@ -521,6 +589,34 @@ public sealed class AgentGuardTests : IAsyncLifetime
 
         Assert.Equal("agent", (await h.Fresh()).Status);
         Assert.DoesNotContain(h.Sent, text => text.StartsWith("Si es una emergencia"));
+    }
+
+    [Fact]
+    public async Task EachMessageOfTheTurnIsReadOnItsOwnSoOnesNegationDoesNotHideAnothersSign()
+    {
+        var tenant = await h.Db.Tenants.SingleAsync(t => t.Id == h.Scope.Id); tenant.EmergencyPhone = "2200 0000"; await h.Db.SaveChangesAsync();
+        await h.Say("patient", "no sé"); await h.Say("patient", "me duele el pecho"); await h.Say("patient", "qué hago");
+        var model = h.Model(AgentHarness.Reply("No debe consultarse el modelo"));
+
+        await h.Runtime(model, h.Sender()).Run(h.Job, CancellationToken.None);
+
+        Assert.Equal(0, model.Calls);
+        Assert.Equal("human", (await h.Fresh()).Status);
+        Assert.StartsWith("Si es una emergencia, llama ya al *2200 0000*", Assert.Single(h.Sent));
+    }
+
+    [Fact]
+    public async Task AnsweringTheEmergencyContactInTwoMessagesIsNotAnEmergency()
+    {
+        // «Emergencia: …» labels the field the agent asked for, also when the answer comes in more than one message.
+        await h.Say("agent", "Último dato: ¿quién es tu contacto de emergencia? Nombre, parentesco y teléfono.");
+        await h.Say("patient", "Emergencia: María López"); await h.Say("patient", "es mi mamá");
+
+        await h.Runtime(h.Model(AgentHarness.Reply("Gracias. ¿Me das su teléfono?")), h.Sender()).Run(h.Job, CancellationToken.None);
+
+        Assert.Equal("agent", (await h.Fresh()).Status);
+        Assert.DoesNotContain(h.Sent, text => text.StartsWith("Si es una emergencia"));
+        Assert.DoesNotContain(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => a.Kind == "handoff");
     }
 
     [Fact]
