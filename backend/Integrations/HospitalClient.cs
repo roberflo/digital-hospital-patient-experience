@@ -88,7 +88,8 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
             var answer = await ReadAsync<JsonElement>(tenantId, $"v1/agenda/patients/{patientId:D}/earlier?before={Uri.EscapeDataString(before.ToString("O"))}", ct);
             return answer.GetProperty("exists").GetBoolean() ? "follow-up" : "first-visit";
         }
-        catch (Exception ex) when (!ct.IsCancellationRequested && ex is HttpRequestException or HospitalIntegrationException or TaskCanceledException or JsonException or KeyNotFoundException or InvalidOperationException) { return "follow-up"; }
+        // A person Hospital refused is told so (MR-11); anything else Hospital could not answer is a follow-up (MR-42).
+        catch (Exception ex) when (!ct.IsCancellationRequested && ex is HttpRequestException or HospitalIntegrationException { Code: not ("hospital.user_forbidden" or "hospital.user_token_rejected") } or TaskCanceledException or JsonException or KeyNotFoundException or InvalidOperationException) { return "follow-up"; }
     }
 
     /// <summary>Only ever the patient-scoped agenda: the whole day's agenda carries every other patient (MR-12).</summary>

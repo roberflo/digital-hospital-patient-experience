@@ -44,8 +44,7 @@ public sealed class AgentEvals(ITestOutputHelper output)
         // Seeded histories only: a case's JSON writes the agent's past question as text, which the runtime no longer reads (MR-40). Here, and
         // nowhere else, that canonical text is turned into the PendingAction the runtime would have recorded when it asked; live turns are untouched.
         foreach (var turn in turns.Skip(1))
-            if (turn.From == "agent" && (turn.Text.Contains(AgentGuard.EmergencyQuestion) ? "emergency" : turn.Text.Contains(AgentGuard.PersonQuestion) ? "person"
-                : turn.Text.Contains("contacto de emergencia", StringComparison.OrdinalIgnoreCase) ? "emergency-contact" : null) is { } asked) await h.Asked(asked, turn.Text, turn.At);
+            if (turn.From == "agent" && AgentEvalCases.SeededQuestions(turn.Text) is { Count: > 0 } asked) await h.Asked(asked, turn.Text, turn.At);
             else await h.Say(turn.From, turn.Text, turn.At);
         if (spec.TryGetProperty("memory", out var kept)) { foreach (var fact in kept.EnumerateObject()) h.Db.ContactMemories.Add(new ContactMemory { TenantId = h.Scope.Id, ContactId = h.Contact.Id, Key = fact.Name, Value = fact.Value.GetString()! }); await h.Db.SaveChangesAsync(); }
         if (spec.GetProperty("linked").GetBoolean()) await h.Link();
@@ -158,6 +157,22 @@ public sealed class AgentEvalCases
             return spec;
         }).ToList();
     }
+    /// <summary>The questions AgentRuntime would have recorded when it sent this seeded agent message (MR-40).</summary>
+    // A seeded message is a registration card when it reads as one: the card is the only message the runtime sends that names the contact without asking.
+    public static List<string> SeededQuestions(string text) =>
+        [.. text.Contains(AgentGuard.EmergencyQuestion) ? ["emergency"] : Array.Empty<string>(), .. text.Contains(AgentGuard.PersonQuestion) ? ["person"] : Array.Empty<string>(),
+            .. !text.StartsWith("Revisa tus datos:") && text.Contains("contacto de emergencia", StringComparison.OrdinalIgnoreCase) ? ["emergency-contact"] : Array.Empty<string>()];
+    /// <summary>The seeding records what the runtime records: every question the message asks, and not the emergency contact a registration
+    /// card only shows (AgentRuntime records it only when <c>proposal is null</c>).</summary>
+    [Theory]
+    [InlineData("Hoy no hay horarios. No tengo horarios en las próximas 8 horas. ¿Es una emergencia?", "emergency")]
+    [InlineData("Gracias, Irene. Me falta tu contacto de emergencia: nombre, parentesco y teléfono.", "emergency-contact")]
+    [InlineData("No tengo horarios en las próximas 8 horas. ¿Es una emergencia?\n\n¿Quieres que te pase con una persona?", "emergency,person")]
+    [InlineData("Revisa tus datos:\n\n*Ana Sintética López*\nNacimiento: 12 de marzo de 1990\nSexo: femenino\nContacto de emergencia: Carlos Sintético (hermano), 7000 0001\n\n¿Están correctos?", "")]
+    [InlineData("Con gusto, ¿qué día te queda bien?", "")]
+    public void SeededQuestionsAreTheOnesTheRuntimeRecords(string text, string expected) =>
+        Assert.Equal(expected.Split(',', StringSplitOptions.RemoveEmptyEntries), SeededQuestions(text));
+
     [Fact]
     public void AgentEvalCasesAreValid()
     {
@@ -177,5 +192,23 @@ public sealed class AgentEvalCases
             foreach (var name in new[] { "match", "noMatch" }) if (spec.GetProperty("expect").TryGetProperty(name, out var patterns)) foreach (var pattern in patterns.EnumerateArray()) _ = new Regex(Regex.Replace(pattern.GetString()!, @"\{(day|dom|open|opendom)\+\d+\}", "1"));
         });
         Assert.Equal(Areas.Order(), cases.Select(spec => spec.GetProperty("area").GetString()).Distinct().Order());
+    }
+    /// <summary>MR-34: scripts/eval-agent.sh forgives only the cases in evals/agent/known-failures.txt. Each line names a case that exists and says why.</summary>
+    [Fact]
+    public void KnownFailuresAreCasesWithAReason()
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "evals", "agent", "known-failures.txt"))) root = root.Parent;
+        Assert.NotNull(root);
+        var ids = Load().Select(spec => spec.GetProperty("id").GetString()).ToHashSet();
+        var known = File.ReadAllLines(Path.Combine(root.FullName, "evals", "agent", "known-failures.txt")).Where(line => line.Trim() is { Length: > 0 } text && !text.StartsWith('#')).ToList();
+        Assert.NotEmpty(known);
+        Assert.All(known, line =>
+        {
+            var parts = line.Trim().Split(' ', 2);
+            Assert.Contains(parts[0], ids);
+            Assert.True(parts.Length == 2 && parts[1].Trim().Length > 10, parts[0] + ": say why it is a known failure");
+        });
+        Assert.Equal(known.Count, known.Select(line => line.Trim().Split(' ')[0]).Distinct().Count());
     }
 }

@@ -93,7 +93,8 @@ public sealed class PendingAction : TenantRow
     public Guid ConversationId { get; set; }
     /// <summary>proposal, intake, question or visit_kind.</summary>
     public string Kind { get; set; } = "";
-    /// <summary>The proposal's confirmation code, the question asked (emergency, person) or the visit kind.</summary>
+    /// <summary>The proposal's confirmation code, the question asked (emergency, person, emergency-contact: «Emergencia: …» in the answer labels that
+    /// field, MR-35) or the visit kind.</summary>
     public string Code { get; set; } = "";
     public string Body { get; set; } = "";
     public Guid? PromptMessageId { get; set; }

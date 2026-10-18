@@ -55,7 +55,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         var turn = history.AsEnumerable().Reverse().TakeWhile(x => x.Sender == "patient").Take(3).Reverse().Select(x => x.Body).ToList();
         var before = history.Count > turn.Count ? history[^(turn.Count + 1)] : null;
         // The model may ask for it in its own words too: that question is recorded when it goes out (question:emergency-contact).
-        var registering = before is { Sender: "agent" } && (await db.PendingActions.Where(x => x.ConversationId == conv.Id && x.Kind == "intake" && x.ConsumedAt == null && x.PromptMessageId == before.Id).Select(x => x.Body).FirstOrDefaultAsync(ct) is { } asking
+        var registering = before is { Sender: "agent" } && (await Open("intake").Where(x => x.PromptMessageId == before.Id).Select(x => x.Body).FirstOrDefaultAsync(ct) is { } asking
             && JsonSerializer.Deserialize<Intake>(asking, Json)!.AsksEmergencyContact
             || await Open("question").AnyAsync(x => x.Code == "emergency-contact" && x.PromptMessageId == before.Id, ct)
             || await LegacyQuestion(before, ct) == "emergency-contact");

@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.EntityFrameworkCore;
 using Recepcion;
+using Recepcion.Integrations;
 using Xunit;
 
 /// <summary>MR-42 (decided by the owner 2026-10-17): an appointment is a «first-visit» when the patient has no earlier appointment in Hospital,
@@ -92,6 +93,19 @@ public sealed class VisitKindTests : IAsyncLifetime
 
         Assert.Equal(expected, Booked());
         if (chosen is null) AskedOnceBeforeTheNewAppointment(); else Assert.Empty(reads);
+    }
+
+    /// <summary>Hospital refused the person: that is theirs to see (MR-11), not a «follow-up» booked behind their back (N3).</summary>
+    [Theory]
+    [InlineData("403", "hospital.user_forbidden")]
+    [InlineData("401", "hospital.user_token_rejected")]
+    public async Task AStaffMemberHospitalRefusesIsToldSoNotGivenAFollowUp(string earlier, string code)
+    {
+        Assert.Equal(code, (await Assert.ThrowsAsync<HospitalIntegrationException>(() => HospitalEndpoints.VisitKind(h.Contact.Id, Start, Staff(), h.Db, h.Client(Hospital(earlier)), h.Scope))).Code);
+        Assert.Equal(code, (await Assert.ThrowsAsync<HospitalIntegrationException>(() => StaffBooks(Hospital(earlier), null))).Code);
+
+        Assert.Empty(h.HospitalWrites);
+        Assert.False(await h.Db.Receipts.AnyAsync());
     }
 
     [Theory]

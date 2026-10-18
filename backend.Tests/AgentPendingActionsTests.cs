@@ -160,6 +160,20 @@ public sealed class AgentPendingActionsTests : IAsyncLifetime
         Assert.Contains("contacto de emergencia", h.Sent[^1]); Assert.Single(await h.Pending("intake")); // the form goes on: it asks for the name again
     }
 
+    /// <summary>A form that expired no longer waits on its question: «Emergencia: …» after it is read as the patient wrote it (MR-40, N1).</summary>
+    [Fact]
+    public async Task AnExpiredFormNoLongerLabelsTheEmergencyWord()
+    {
+        await Say(Tap(new DateTimeOffset(DateTime.UtcNow.Date.AddDays(3).AddHours(15), TimeSpan.Zero)));
+        foreach (var answer in Answers[..4]) await Say(answer);
+        Assert.Contains("contacto de emergencia", h.Sent[^1]);
+        var form = Assert.Single(await h.Pending("intake")); form.ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(-1); await h.Db.SaveChangesAsync();
+
+        await Say("Emergencia: Carlos Sintético");
+
+        Assert.Equal("human", (await h.Fresh()).Status);
+    }
+
     /// <summary>MR-35 + MR-40: the model asked for the emergency contact in its own words; the question is recorded as it goes out, so
     /// «Emergencia: …» in the answer labels that field whatever the message says later. The same words from the team do not.</summary>
     [Theory]

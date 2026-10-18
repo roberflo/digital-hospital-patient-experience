@@ -640,6 +640,22 @@ public sealed class AgentGuardTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task AnAlarmSignInTheEmergencyContactAnswerIsStillAnEmergency()
+    {
+        // The label is dropped, the sign is not: «Emergencia: no puedo respirar» answers nothing, it goes to the emergency number (N2).
+        (await h.Db.Tenants.SingleAsync(t => t.Id == h.Scope.Id)).EmergencyPhone = "2200 0000"; await h.Db.SaveChangesAsync();
+        await h.Asked("emergency-contact", "Último dato: ¿quién es tu contacto de emergencia? Nombre, parentesco y teléfono.");
+        await h.Say("patient", "Emergencia: no puedo respirar");
+        var model = h.Model(AgentHarness.Reply("Gracias. ¿Me das su teléfono?"));
+
+        await h.Runtime(model, h.Sender()).Run(h.Job, CancellationToken.None);
+
+        Assert.Equal(0, model.Calls);
+        Assert.Equal("human", (await h.Fresh()).Status);
+        Assert.StartsWith("Si es una emergencia, llama ya al *2200 0000*", Assert.Single(h.Sent));
+    }
+
+    [Fact]
     public async Task EmergencyQuestionIsAskedOnce()
     {
         (await h.Db.Tenants.SingleAsync(t => t.Id == h.Scope.Id)).EmergencyPhone = "2200 0000"; await h.Db.SaveChangesAsync(); // asked only by a hospital that set up its emergency number
@@ -995,10 +1011,13 @@ public sealed class AgentHarness(Guid? tenant = null, string phone = "5037000000
     /// <summary>The agent's working state of this conversation of one kind still open to the patient: not consumed (MR-40).</summary>
     public Task<List<PendingAction>> Pending(string kind) => Db.PendingActions.Where(x => x.ConversationId == Conversation.Id && x.Kind == kind && x.ConsumedAt == null).OrderBy(x => x.CreatedAt).ToListAsync();
     /// <summary>The agent asked <paramref name="question"/> (emergency, person) with <paramref name="text"/> and waits for the answer, as AgentRuntime records it.</summary>
-    public async Task Asked(string question, string text, DateTimeOffset? at = null)
+    public Task Asked(string question, string text, DateTimeOffset? at = null) => Asked([question], text, at);
+    /// <summary>One message that asks several questions at once (the emergency and a person), each recorded as the runtime does.</summary>
+    public async Task Asked(IReadOnlyCollection<string> questions, string text, DateTimeOffset? at = null)
     {
         var prompt = await Say("agent", text, at);
-        Db.PendingActions.Add(new PendingAction { TenantId = Scope.Id, ConversationId = Conversation.Id, Kind = "question", Code = question, PromptMessageId = prompt.Id, ExpiresAt = DateTimeOffset.UtcNow.AddHours(24) }); await Db.SaveChangesAsync();
+        foreach (var question in questions) Db.PendingActions.Add(new PendingAction { TenantId = Scope.Id, ConversationId = Conversation.Id, Kind = "question", Code = question, PromptMessageId = prompt.Id, ExpiresAt = DateTimeOffset.UtcNow.AddHours(24) });
+        await Db.SaveChangesAsync();
     }
     public async Task Link() { Contact.PatientId = Guid.NewGuid(); await Db.SaveChangesAsync(); }
     /// <summary>Another context on the same database and keys, for a host that resolves its own per request.</summary>
