@@ -1,12 +1,13 @@
 # Evidencia de verificación
 
-Fecha de desarrollo: 2026-10-02 (America/El_Salvador). Ejecución local con Docker Desktop; PostgreSQL 17, API .NET 10 y frontend Next.js 16 compilado en Node 22 LTS. Todas las pruebas usan datos sintéticos.
+Fecha de desarrollo: 2026-10-02 (America/El_Salvador); las filas con otra fecha la dicen. Ejecución local con Docker Desktop; PostgreSQL 17, API .NET 10 y frontend Next.js 16 compilado en Node 22 LTS. Todas las pruebas usan datos sintéticos.
 
 | Capa | Resultado ejecutado | Alcance |
 |---|---|---|
 | Build API | pasó | `docker compose build recepcion-api`, publicación Release .NET 10 |
 | Build frontend | pasó | `docker compose build web`, Next standalone + TypeScript |
-| Backend | 56 pasaron, 0 fallos, 0 omitidas | `scripts/test-backend.sh`, PostgreSQL temporal real y proveedores simulados |
+| Backend (2026-10-17) | 1155/1155 pasaron, 0 fallos, 0 omitidas: `Passed!  - Failed:     0, Passed:  1155, Skipped:     0, Total:  1155` | `scripts/test-backend.sh` completo (filtro `Category!=Eval&Category!=Live`), PostgreSQL temporal real y proveedores simulados, rama `mr/rec-d` sobre `1e16e28` |
+| Evals (2026-10-17) | 10/10 pasaron (`Evals: 10/10 pasaron`), sin fallos conocidos | `AGENT_EVAL_FILTER=urgencia-11 AGENT_EVAL_PROVIDER=openai AGENT_EVAL_REASONING=none scripts/eval-agent.sh gpt-6-luna`: 10 de los 135 casos; la pasada completa no se repitió ese día |
 | API | 82 verificaciones pasaron | `python3 tests/api_smoke.py`, API real local |
 | Navegador | 14/14 pasaron en una ejecución completa tras corregir el nombre junto al contador de no leídos | `npm test --prefix frontend`, Chromium escritorio + móvil contra contenedores compilados |
 | Adaptador Hospital | pasó | `tests/hospital-client/HospitalClient.Checks.csproj` ejecutado con SDK 10 |

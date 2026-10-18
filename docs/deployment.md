@@ -152,6 +152,29 @@ Antes, con un `docker` simulado: rechazo de destinos iguales o anidados, de la f
 
 Completar login/renovación con Keycloak real, dos empresas reales aisladas, agenda y bridge clínico con stores reales, PDF de receta firmada, Google OAuth con una cuenta de prueba, coexistencia de un número elegible y prueba controlada de envío/recepción. Validar los horarios de médicos y el flujo operativo con personal del hospital. La agenda Hospital permite solapamientos de forma intencional: el CRM vuelve a consultar disponibilidad y deriva conflictos, pero no puede garantizar bloqueo atómico de slots que Hospital aún no ofrece.
 
-## Conexión guiada al Hospital existente
+## Conexión con el Hospital existente
 
-Usar [hospital-easypanel.md](hospital-easypanel.md) para configurar el acceso compartido una sola vez y conectar cada hospital desde **Mi hospital**. El formulario valida credenciales y tenant antes de guardar la conexión cifrada; evita editar variables por UUID. El alta automática de espacios requiere `HOSPITAL_SELF_ONBOARDING=true` y un Administrador autenticado por Hospital.
+Usar [hospital-easypanel.md](hospital-easypanel.md) para configurar el acceso compartido una sola vez. Cada hospital queda conectado cuando su Administrador inicia sesión con su cuenta de Hospital: la identidad firmada decide el hospital y **Mi hospital** sólo comprueba la agenda (`POST /api/hospital/connection/check`), sin escribir URLs, identificadores ni secretos. El alta automática de espacios requiere `HOSPITAL_SELF_ONBOARDING=true` y un Administrador autenticado por Hospital.
+
+`PUT /api/hospital/connection` (Administrador o dueño de plataforma) sigue existiendo sin interfaz: valida credenciales y tenant contra Hospital antes de guardar una conexión cifrada por hospital, que reemplaza a los valores de instalación. Lo usan `tests/hospital_connection_live.cjs` (comprueba que un destino no permitido se rechaza sin reemplazar la conexión válida) y la matriz de rutas del dueño de plataforma (`PlatformOwnerTests`, `docs/platform-owner.plan.md` REC-2); no se retira mientras ellos la midan.
+
+## Despliegue de la ronda 2026-10
+
+Lo que el operador hace al desplegar la versión con MR-1…MR-42 ([mejoras-revision-2026-10.md](mejoras-revision-2026-10.md)). En este orden:
+
+**Antes**
+
+1. **Hospital primero.** Desplegar Hospital con la lectura `GET v1/agenda/patients/{id}/earlier` (MR-42) y `Idempotency-Key` en `POST v1/agenda` y `POST v1/patients` (MR-41). Con un Hospital anterior Recepción no falla, pero toda cita sale `follow-up` (la lectura da 404). Recepción todavía no envía `Idempotency-Key` (la mitad de MR-41 que le toca está pendiente): cuando la envíe, Hospital ya debe aceptarla.
+2. **Certificado del llavero (MR-37).** Generarlo, montarlo fuera de `/keys` y definir `DATAPROTECTION_CERT_PATH` y `DATAPROTECTION_CERT_PASSWORD` según «Llavero protegido» (arriba). Sin él la API no arranca fuera de Development: es lo buscado. Guardar el `.p12` y su contraseña en el gestor de secretos, aparte de los respaldos.
+3. **Respaldo.** `scripts/backup.sh` antes de migrar (dump y llavero en destinos separados).
+4. **`AGENT_LEGACY_QUESTIONS_BEFORE` (MR-40)** con la hora real del despliegue en ISO-8601 con zona (`2026-10-18T09:00:00-06:00`). Un «sí» a una pregunta que la versión anterior envió antes de esa hora se sigue entendiendo durante 24 h; sin la variable el corte es `2026-10-18T01:30Z`, y las preguntas enviadas entre ese corte y el despliegue real se quedarían sin respuesta reconocida. Se retira después del 2026-11-17.
+5. Opcionales: `AI_TURN_BUDGET_SECONDS` (90) y `AI_ATTEMPT_TIMEOUT_SECONDS` (30), ver «Variables de producción». Sin definirlas rigen los valores por defecto.
+
+**Al desplegar**
+
+6. **Migraciones `JobsStatusIndex` (MR-39) y `PendingActions` (MR-40).** Se aplican al arrancar una réplica con `INITIALIZE_DATABASE=true`; después volver a `false`. `PendingActions` borra una sola vez las filas de estado de `Activity` (`intake`, `visit_kind`, `proposal:%`); `proposal_used:%` y el historial se quedan. Una propuesta sin confirmar o un registro a medias en ese momento se pierden: el paciente vuelve a pedir la cita.
+
+**Después**
+
+7. `/health/ready` y el inicio de sesión; en `/keys` aparece un `key-*.xml` con `encryptedSecret`.
+8. En `/api/jobs`, que no queden trabajos `failed` nuevos; una cita de prueba con un paciente sintético sale `first-visit` o `follow-up` según su historial en Hospital.

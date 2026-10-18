@@ -15,7 +15,7 @@ KC_RECEPCION_WEB_WEB_ORIGINS=https://recepcion.tudominio.com
 KC_RECEPCION_SERVICE_CLIENT_SECRET=<secreto B>
 ```
 
-El job crea el cliente `recepcion-web` y, por cada hospital que tenga usuarios en el realm, su cuenta `recepcion-service-<UUID>` con exactamente los roles **Recepción** y `reception-agent`. Nadie copia UUIDs: Keycloak ya sabe qué hospitales existen. Un hospital nuevo recibe su cuenta en el siguiente despliegue de Hospital.
+El job crea el cliente `recepcion-web` y, por cada hospital que tenga usuarios en el realm, su cuenta `recepcion-service-<UUID>` con exactamente los roles **Recepción** y `reception-agent`. Nadie copia UUIDs: Keycloak ya sabe qué hospitales existen. Un hospital nuevo recibe su cuenta en menos de un minuto, sin desplegar: el servicio `keycloak-service-accounts` de Hospital crea cada 60 s (`KC_SERVICE_ACCOUNTS_INTERVAL_SECONDS`) la cuenta de cada hospital con usuarios que aún no la tiene; el job la repara en cada despliegue.
 
 En la **API de Recepción** (con volumen persistente `/keys`, `ASPNETCORE_ENVIRONMENT=Production` y el certificado del llavero (base64 del `.p12`) montado fuera de `/keys`, ver [deployment.md](deployment.md) «Llavero protegido»; sin él la API no arranca):
 
@@ -76,4 +76,4 @@ No se ha realizado un despliegue remoto en Easypanel como parte de esta implemen
 
 2026-10-03: acceso SSO del Administrador C existente, guardado de conexión comprobada desde la interfaz, búsqueda del paciente sintético del Hospital y rechazo de dirección no permitida sin reemplazar la configuración válida. Pruebas de cifrado y aislamiento de configuración, alta de tenant sólo por administrador del issuer esperado; suite Recepción144/144. Navegador72/72 incluyendo escritorio y móvil. Agenda CRUD real verificado con la conexión guardada.
 
-2026-10-03, simplificación de acceso: Mi hospital comprueba automáticamente la agenda y reutiliza la sesión de Hospital, conservando nombre, hospital y permisos. Retirados los formularios de secretos e identificadores. Google ofrece calendarios por nombre, con validación de escritura y aislamiento por hospital; no se ha autorizado una cuenta real de Google durante estas pruebas. Verificados 145 tests backend, 106 comprobaciones API, 76 pruebas navegador escritorio/móvil y 12 tests servidor. Acceso SSO real y búsqueda del paciente sintético C comprobados por separado.
+2026-10-03, simplificación de acceso: Mi hospital comprueba automáticamente la agenda y reutiliza la sesión de Hospital, conservando nombre, hospital y permisos. Retirados los campos de secretos e identificadores. Google ofrece calendarios por nombre, con validación de escritura y aislamiento por hospital; no se ha autorizado una cuenta real de Google durante estas pruebas. Verificados 145 tests backend, 106 comprobaciones API, 76 pruebas navegador escritorio/móvil y 12 tests servidor. Acceso SSO real y búsqueda del paciente sintético C comprobados por separado.
