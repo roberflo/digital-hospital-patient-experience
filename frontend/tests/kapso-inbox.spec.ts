@@ -153,6 +153,10 @@ test('optimistic send reconciles SSE and ACK without duplicate or regressed chec
       to: base.phone_number,
       text: sent.text.body,
     });
+    // MR-36: the pending message's uuid is the key Recepción deduplicates by.
+    expect(route.request().headers()['idempotency-key']).toMatch(
+      /^[a-f\d]{8}-[a-f\d]{4}-4[a-f\d]{3}-[89ab][a-f\d]{3}-[a-f\d]{12}$/,
+    );
     await page.evaluate(
       (event) => window.dispatchEvent(new CustomEvent('kapso-test-event', { detail: event })),
       {
@@ -178,6 +182,36 @@ test('optimistic send reconciles SSE and ACK without duplicate or regressed chec
     path: `../artifacts/kapso-send-${info.project.name}.png`,
     fullPage: true,
   });
+});
+test('an unconfirmed send reads as unconfirmed, not as failed', async ({ page }) => {
+  await realtime(page);
+  await login(page);
+  await page.route('**/api/conversations?*', (route) =>
+    route.fulfill({ json: { data: [base], manualSendEnabled: true } }),
+  );
+  await page.route('**/api/conversations/*/messages*', (route) =>
+    route.fulfill({ json: { conversation: base, data: [inbound] } }),
+  );
+  await page.route('**/api/messages?*', (route) =>
+    route.fulfill({
+      json: {
+        message: {
+          ...inbound,
+          id: '44444444-4444-4444-8444-444444444444',
+          text: { body: 'Respuesta sin confirmar' },
+          kapso: { direction: 'outbound', status: 'uncertain' },
+        },
+      },
+    }),
+  );
+  await page.goto('/inbox');
+  await page.getByRole('button', { name: 'Abrir conversación con Paciente de prueba' }).click();
+  await page.getByLabel('Mensaje', { exact: true }).fill('Respuesta sin confirmar');
+  await page.getByRole('button', { name: 'Enviar mensaje', exact: true }).click();
+  await expect(
+    page.getByText('Sin confirmar — revisa el historial antes de repetir', { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByLabel('Envío fallido', { exact: true })).toHaveCount(0);
 });
 test('closed 24h window blocks composer even when manual send is configured', async ({ page }) => {
   await realtime(page);
@@ -295,6 +329,56 @@ test('switching hospital number clears the open chat and scopes provider request
   await expect(page.getByRole('heading', { name: 'Paciente de prueba' })).toHaveCount(0);
 });
 
+// Under load the first identity check can be answered only after a send already expired the
+// session. That answer still names who was signed in: the page must not reload and lose the draft.
+test('an identity check answered after the session expired keeps the draft in place', async ({
+  page,
+  context,
+}) => {
+  await realtime(page);
+  await login(page);
+  await page.route('**/api/conversations?*', (route) =>
+    route.fulfill({ json: { data: [base], manualSendEnabled: true } }),
+  );
+  await page.route('**/api/conversations/*/messages*', (route) =>
+    route.fulfill({ json: { conversation: base, data: [inbound] } }),
+  );
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  let holding = true;
+  await page.route('**/api/crm/me', async (route) => {
+    if (!holding) return route.fallback();
+    const response = await route.fetch(); // asked while the session was valid
+    await released;
+    await route.fulfill({ response });
+  });
+  await page.route('**/api/messages?*', async (route) => {
+    await context.clearCookies();
+    return route.fulfill({ status: 401, json: { error: 'Sesión expirada' } });
+  });
+  await page.goto('/inbox');
+  await page.getByRole('button', { name: 'Abrir conversación con Paciente de prueba' }).click();
+  await page.getByLabel('Mensaje', { exact: true }).fill('Borrador WhatsApp sintético');
+  await page.getByRole('button', { name: 'Enviar mensaje', exact: true }).click();
+  const dialog = page.getByRole('dialog').filter({ hasText: 'Tu sesión terminó' });
+  await expect(dialog).toBeVisible();
+  holding = false;
+  const answered = page.waitForResponse('**/api/crm/me');
+  release();
+  await answered;
+  const popup = context.waitForEvent('page');
+  await dialog.getByRole('link', { name: 'Iniciar sesión y continuar' }).click();
+  const auth = await popup;
+  await enter(auth);
+  await expect(auth.getByRole('heading', { name: 'Ya puedes continuar' })).toBeVisible();
+  await expect(dialog).not.toBeVisible();
+  await expect(page).toHaveURL(/\/inbox$/);
+  await expect(page.getByLabel('Mensaje', { exact: true })).toHaveValue(
+    'Borrador WhatsApp sintético',
+  );
+  await page.unrouteAll({ behavior: 'wait' });
+  await auth.close();
+});
 test('expired manual send restores WhatsApp draft and conversation after signing in', async ({
   page,
   context,

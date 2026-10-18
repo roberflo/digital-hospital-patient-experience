@@ -1,5 +1,10 @@
 import { test, expect } from '@playwright/test';
 import { login, openMenu } from './login';
+// A handler still running route.fetch() for the inbox's polling when its test ends fails the next
+// test in the worker with "Test ended": let every handler finish first, as the other specs do.
+test.afterEach(async ({ page }) => {
+  await page.unrouteAll({ behavior: 'wait' });
+});
 async function nav(page: import('@playwright/test').Page, name: string) {
   await openMenu(page);
   await page.getByRole('button', { name, exact: true }).click();
@@ -566,7 +571,12 @@ test('MR-21 saving the guide keeps the agentEnabled the server sent', async ({ p
     0,
   );
   await page.getByLabel('Guía de atención').fill('Guía sintética editada');
-  await page.getByRole('button', { name: 'Guardar cambios', exact: true }).click();
+  // The attention panel below has its own «Guardar cambios»: use the guide's form.
+  await page
+    .locator('form')
+    .filter({ has: page.getByLabel('Guía de atención') })
+    .getByRole('button', { name: 'Guardar cambios', exact: true })
+    .click();
   await expect.poll(() => saved.length).toBe(1);
   expect(saved[0]).toMatchObject({ guide: 'Guía sintética editada', agentEnabled: true });
 });

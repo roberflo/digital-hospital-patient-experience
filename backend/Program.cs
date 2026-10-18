@@ -9,9 +9,11 @@ var config = builder.Configuration;
 var dev = builder.Environment.IsDevelopment();
 if (string.IsNullOrWhiteSpace(config["PHONE_HASH_KEY"]) || config["PHONE_HASH_KEY"]!.Length < 32) throw new InvalidOperationException("PHONE_HASH_KEY must be at least 32 characters");
 if (string.IsNullOrWhiteSpace(config["Auth:Authority"])) throw new InvalidOperationException("Keycloak Authority required");
+Hosting.RequireKeyringCertificate(config, builder.Environment);
 builder.Services.AddRecepcionServices(config, dev);
 builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 20 * 1024 * 1024);
 var app = builder.Build();
+Hosting.ProtectKeyring(app.Services, config);
 app.Use(Hosting.Errors);
 app.UseAuthentication(); app.UseAuthorization();
 app.Use(async (ctx, next) =>

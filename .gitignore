@@ -13,3 +13,5 @@ secrets/
 backups/
 *.tsbuildinfo
 integrations/hospital/staged/
+*.p12
+*.pfx

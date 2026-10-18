@@ -1,12 +1,20 @@
 import { NextRequest } from 'next/server';
-import { authorizeInbox, errorResponse, requireOrigin } from '@/lib/inbox-auth';
-import { InboxError, sendText } from '@/lib/kapso';
+import {
+  authorizeInbox,
+  errorResponse,
+  requireOrigin,
+  sendThroughReception,
+} from '@/lib/inbox-auth';
+import { InboxError } from '@/lib/kapso';
 import { publish, readBody } from '@/lib/events';
 export const runtime = 'nodejs';
 export async function POST(req: NextRequest) {
+  let headers: Headers | undefined;
   try {
     requireOrigin(req);
-    const { number, headers } = await authorizeInbox(req);
+    const authorized = await authorizeInbox(req);
+    const number = authorized.number;
+    headers = authorized.headers;
     let body;
     try {
       body = JSON.parse((await readBody(req, 20000)).toString('utf8'));
@@ -22,7 +30,11 @@ export async function POST(req: NextRequest) {
       body.text.length > 4096
     )
       throw new InboxError(400, 'Escribe un mensaje de hasta 4096 caracteres.');
-    const message = await sendText(body.conversationId, number, body.to, body.text.trim());
+    const message = await sendThroughReception(req, number, headers, {
+      conversationId: body.conversationId,
+      to: body.to,
+      text: body.text.trim(),
+    });
     publish({
       event: 'whatsapp.message.sent',
       phoneNumberId: number,
@@ -31,6 +43,6 @@ export async function POST(req: NextRequest) {
     });
     return Response.json({ message }, { headers });
   } catch (error) {
-    return errorResponse(error);
+    return errorResponse(error, headers);
   }
 }

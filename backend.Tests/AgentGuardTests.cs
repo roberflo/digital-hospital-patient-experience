@@ -672,6 +672,8 @@ public sealed class AgentHarness(Guid? tenant = null, string phone = "5037000000
     public static HttpResponseMessage ToolCall(string name, object arguments) => Json(new { choices = new[] { new { message = new { role = "assistant", content = (string?)null, tool_calls = new[] { new { id = "call-" + Guid.NewGuid().ToString("N"), type = "function", function = new { name, arguments = JsonSerializer.Serialize(arguments) } } } } } } });
     public static HttpResponseMessage Json(object value) => Raw(JsonSerializer.Serialize(value));
     static HttpResponseMessage Raw(string json) => new(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
+    /// <summary>Another context on the same database and tenant, with the given interceptors.</summary>
+    public CrmDb With(params Microsoft.EntityFrameworkCore.Diagnostics.IInterceptor[] interceptors) => new(new DbContextOptionsBuilder<CrmDb>(options).AddInterceptors(interceptors).Options, Scope, protection);
     public async ValueTask DisposeAsync() { if (Db != null) await Db.DisposeAsync(); }
     public sealed class Fake(Func<HttpRequestMessage, Task<HttpResponseMessage>> handler) : HttpMessageHandler { public int Calls; protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) { Calls++; return handler(request); } }
     /// <summary>A provider that never answers what <paramref name="answer"/> leaves null: the request waits until it is cancelled.</summary>
@@ -681,6 +683,6 @@ public sealed class AgentHarness(Guid? tenant = null, string phone = "5037000000
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) { if (answer(request) is { } reply) return reply; await Task.Delay(Timeout.Infinite, ct); throw new InvalidOperationException(); }
     }
     /// <summary>What AgentWorker.RunTenant resolves for this tenant, around the given runtime.</summary>
-    public IServiceProvider Worker(AgentRuntime runtime, Fake sender) => new ServiceCollection().AddSingleton(Scope).AddSingleton(Db).AddSingleton(runtime)
+    public IServiceProvider Worker(AgentRuntime runtime, Fake sender, CrmDb? worker = null) => new ServiceCollection().AddSingleton(Scope).AddSingleton(worker ?? Db).AddSingleton(runtime)
         .AddSingleton(new ConversationService(Db, Scope, new KapsoClient(new HttpClient(sender), new ConfigurationBuilder().AddInMemoryCollection(settings).Build()))).BuildServiceProvider();
 }

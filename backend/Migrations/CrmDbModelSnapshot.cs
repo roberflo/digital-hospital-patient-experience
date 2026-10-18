@@ -581,6 +581,8 @@ namespace Recepcion.Api.Migrations
                     b.HasIndex("TenantId", "Key")
                         .IsUnique();
 
+                    b.HasIndex("TenantId", "Status", "CreatedAt");
+
                     b.ToTable("Jobs");
                 });
 
@@ -757,6 +759,8 @@ namespace Recepcion.Api.Migrations
                     b.HasKey("Id");
 
                     b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "CreatedAt");
 
                     b.HasIndex("TenantId", "Key")
                         .IsUnique();

@@ -7,7 +7,12 @@ export async function GET(req: NextRequest) {
     const { number, headers } = await authorizeInbox(req);
     const result = await listConversations(number, cursor(req.nextUrl.searchParams.get('after')));
     return Response.json(
-      { ...result, manualSendEnabled: process.env.KAPSO_MANUAL_SEND_ENABLED === 'true' },
+      // Same rule as the API's KapsoClient.CanSend(manual: true); the API still decides each send.
+      {
+        ...result,
+        manualSendEnabled:
+          process.env.SEND_ENABLED === 'true' || process.env.KAPSO_MANUAL_SEND_ENABLED === 'true',
+      },
       { headers },
     );
   } catch (error) {

@@ -97,8 +97,9 @@ function Status({ status }: { status?: MessageStatus }) {
       />
     );
   if (status === 'sent') return <Check className="size-3.5" aria-label="Enviado" />;
-  if (status === 'failed')
-    return <TriangleAlert className="size-3.5" aria-label="Envío fallido o sin confirmar" />;
+  if (status === 'failed') return <TriangleAlert className="size-3.5" aria-label="Envío fallido" />;
+  if (status === 'uncertain')
+    return <span>Sin confirmar — revisa el historial antes de repetir</span>;
   return <Clock3 className="size-3.5" aria-label="Pendiente" />;
 }
 class RequestError extends Error {
@@ -425,7 +426,8 @@ function InboxForNumber({ number, selector }: { number: string; selector: React.
     if (!selected || disabledReason || sendingRef.current || !text.trim()) return;
     const current = selected;
     const value = text.trim();
-    const pending = `pending:${crypto.randomUUID()}`;
+    const key = crypto.randomUUID();
+    const pending = `pending:${key}`;
     const optimistic: Message = {
       id: pending,
       timestamp: String(Math.floor(Date.now() / 1000)),
@@ -442,7 +444,7 @@ function InboxForNumber({ number, selector }: { number: string; selector: React.
     try {
       const result = await api<{ message: Message }>(`/api/messages?${numberQuery}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key },
         body: JSON.stringify({ conversationId: current.id, to: current.phone_number, text: value }),
       });
       if (selectedRef.current?.id === current.id)
