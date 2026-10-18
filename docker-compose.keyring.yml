@@ -1,0 +1,12 @@
+# MR-37: mounts the DataProtection keyring certificate outside /keys.
+# docker compose -f docker-compose.yml -f docker-compose.keyring.yml up -d
+# DATAPROTECTION_CERT_FILE is the host path of the .p12 (scripts/dev-keyring-cert.sh); never inside the repository.
+services:
+  recepcion-api:
+    environment:
+      DATAPROTECTION_CERT_PATH: /run/secrets/dataprotection.p12
+      DATAPROTECTION_CERT_PASSWORD: ${DATAPROTECTION_CERT_PASSWORD:?required with docker-compose.keyring.yml}
+    secrets: [dataprotection.p12]
+secrets:
+  dataprotection.p12:
+    file: ${DATAPROTECTION_CERT_FILE:?host path of the keyring certificate (.p12)}

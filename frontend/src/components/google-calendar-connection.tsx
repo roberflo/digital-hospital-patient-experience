@@ -8,6 +8,7 @@ import { Alert, AlertDescription } from './ui/alert';
 import { Button } from './ui/button';
 import { Field, FieldDescription, FieldLabel } from './ui/field';
 import { NativeSelect, NativeSelectOption } from './ui/native-select';
+import { ConfirmAction } from './confirm-action';
 
 export function GoogleCalendarConnection({
   connected,
@@ -122,19 +123,22 @@ export function GoogleCalendarConnection({
               Sincronizar próximos 7 días
             </Button>
           )}
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={busy}
-            onClick={() =>
+          <ConfirmAction
+            title="¿Desconectar Google Calendar?"
+            description="Las citas dejarán de copiarse a Google. La agenda del Hospital no cambia."
+            action="Desconectar"
+            destructive
+            onConfirm={() =>
               perform(async () => {
                 await api('/google', 'DELETE');
                 onChange();
               })
             }
           >
-            Desconectar Google
-          </Button>
+            <Button variant="ghost" size="sm" disabled={busy}>
+              Desconectar Google
+            </Button>
+          </ConfirmAction>
         </>
       )}
     </div>

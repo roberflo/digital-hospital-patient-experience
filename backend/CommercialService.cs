@@ -7,6 +7,8 @@ namespace Recepcion;
 public sealed class CommercialService(CrmDb db,TenantScope scope,HospitalClient hospital,ConversationService locks)
 {
     static readonly JsonSerializerOptions Json=new(JsonSerializerDefaults.Web);
+    /// <summary>For a person's request (MR-11): Hospital sees their token. The commercial sync worker never calls this.</summary>
+    public CommercialService AsUser(string bearer)=>new(db,scope,hospital.AsUser(bearer),locks);
     public static void RequireOperator(CurrentUser user){if(user.Role is not("admin" or "agent"))throw new AccessDeniedException();}
     public async Task<HospitalCustomer> Link(Contact contact,Guid customerId,CurrentUser user,CancellationToken ct=default)
     {
@@ -88,7 +90,9 @@ public sealed class CommercialService(CrmDb db,TenantScope scope,HospitalClient 
         if(payload.GetProperty("paymentReference").GetString()!=reference)throw new ArgumentException("Hay una compra en comprobación. Reintenta con la misma referencia de pago.");
         HospitalPurchase purchase;
         try {purchase=await hospital.Purchase(scope.Id,payload,ct);}
-        catch(HospitalIntegrationException ex) when(ex.Code is "commercial.quote_changed" or "commercial.invalid_purchase" or "commercial.invalid_input" or "commercial.invalid_lines" or "commercial.invalid_phone" or "commercial.not_found" or "commercial.company_unavailable" or "commercial.service_unavailable" or "commercial.customer_company_conflict" or "commercial.customer_link_conflict")
+        catch(HospitalIntegrationException ex) when(ex.Code is "commercial.quote_changed" or "commercial.invalid_purchase" or "commercial.invalid_input" or "commercial.invalid_lines" or "commercial.invalid_phone" or "commercial.not_found" or "commercial.company_unavailable" or "commercial.service_unavailable" or "commercial.customer_company_conflict" or "commercial.customer_link_conflict"
+            // Hospital refused the person, or their token was refused before it was sent: no purchase was made.
+            or "hospital.user_forbidden" or "hospital.user_token_rejected")
         {opportunity.HospitalPurchaseRequest=null;await db.SaveChangesAsync(CancellationToken.None);throw;}
         if(purchase.Status!="completed"||purchase.Id==Guid.Empty||purchase.IdempotencyKey!=opportunity.Id||purchase.Quote.QuoteVersion!=quote.QuoteVersion)
             throw new HospitalIntegrationException("hospital.purchase_unconfirmed",HttpStatusCode.BadGateway);

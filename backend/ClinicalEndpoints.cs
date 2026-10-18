@@ -1,4 +1,3 @@
-using System.Net.Http.Headers;
 using Microsoft.EntityFrameworkCore;
 using Recepcion.Integrations;
 
@@ -30,10 +29,7 @@ public static class ClinicalEndpoints
         RequireDoctor(user, conversation);
         var contact = await db.Contacts.AsNoTracking().SingleAsync(c => c.Id == conversation.ContactId);
         if (contact.PatientId is null) return Results.Conflict(new { title = "Vincula primero el paciente con Hospital." });
-        if (!AuthenticationHeaderValue.TryParse(ctx.Request.Headers.Authorization, out var auth)
-            || !auth.Scheme.Equals("Bearer", StringComparison.OrdinalIgnoreCase) || string.IsNullOrEmpty(auth.Parameter))
-            throw new AccessDeniedException();
-        var result = await hospital.ReadAsync(tenant.Id, user.Subject, auth.Parameter, contact.PatientId.Value,
+        var result = await hospital.ReadAsync(tenant.Id, user.Subject, Identity.Bearer(ctx), contact.PatientId.Value,
             contact.Phone, section, documentId, cursor, ctx.RequestAborted);
         // Recheck assignment/link after the external call; a transfer must revoke future reads.
         var stillAssigned = await db.Conversations.AsNoTracking().AnyAsync(c => c.Id == id && c.AssignedTo == user.Subject && c.Status != "agent");

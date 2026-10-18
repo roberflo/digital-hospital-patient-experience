@@ -16,6 +16,11 @@ public sealed class CurrentUser
 public sealed class AccessDeniedException : Exception;
 public static class Identity
 {
+    /// <summary>The signed-in person's own bearer token, for calls Hospital must attribute to them.</summary>
+    public static string Bearer(HttpContext ctx) =>
+        System.Net.Http.Headers.AuthenticationHeaderValue.TryParse(ctx.Request.Headers.Authorization, out var auth)
+        && auth.Scheme.Equals("Bearer", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(auth.Parameter)
+            ? auth.Parameter : throw new AccessDeniedException();
     /// <summary>The realm roles of a token; a malformed `realm_access` yields none.</summary>
     public static List<string> Roles(ClaimsPrincipal user)
     {

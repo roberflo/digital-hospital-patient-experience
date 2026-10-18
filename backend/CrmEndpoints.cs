@@ -5,27 +5,34 @@ namespace Recepcion;
 public static class CrmEndpoints
 {
     public static void Audit(CrmDb db, TenantScope t, CurrentUser u, string action, Guid id) => db.Audits.Add(new Audit { TenantId = t.Id, Actor = u.Subject, Action = action, Resource = id.ToString() });
+    /// <summary>Contacts by search, by the Hospital patient they are linked to, only those linked to any patient, or by id:
+    /// pickers and cards find a contact on the server instead of in the first page of 100 (MR-17).</summary>
+    public static async Task<List<Contact>> Contacts(CrmDb db, string? q, Guid? patientId, bool? linked, Guid[]? id, int? page)
+    {
+        var offset = (Math.Clamp(page ?? 1, 1, 10000) - 1) * 100;
+        IQueryable<Contact> rows = db.Contacts.AsNoTracking();
+        if (patientId is { } patient) rows = rows.Where(x => x.PatientId == patient);
+        if (linked == true) rows = rows.Where(x => x.PatientId != null);
+        if (id is { Length: > 0 }) { if (id.Length > 100) throw new ArgumentException("Demasiados contactos"); rows = rows.Where(x => id.Contains(x.Id)); }
+        var query = rows.OrderByDescending(x => x.CreatedAt).ThenBy(x => x.Id);
+        if (string.IsNullOrWhiteSpace(q)) return await query.Skip(offset).Take(100).ToListAsync();
+        if (q.Length > 100) throw new ArgumentException("Búsqueda demasiado larga");
+        // Names and phones are encrypted: stream scoped records without truncating the search.
+        var matches = new List<Contact>(); var seen = 0;
+        await foreach (var row in query.AsAsyncEnumerable())
+        {
+            if (!row.Name.Contains(q, StringComparison.OrdinalIgnoreCase) && !row.Phone.Contains(q)) continue;
+            if (seen++ < offset) continue; matches.Add(row); if (matches.Count == 100) break;
+        }
+        return matches;
+    }
     public static void MapCrm(this WebApplication app)
     {
         var api = app.MapGroup("/api").RequireAuthorization();
         api.MapGet("/me", async (CrmDb db, TenantScope t, CurrentUser u) => new { u.Subject, u.Name, u.Role, tenant = await db.Tenants.Where(x => x.Id == t.Id).Select(x => new { x.Id, x.Name, x.TimeZone, x.AgentEnabled }).SingleAsync() });
         api.MapGet("/overview", async (CrmDb db) => new { contacts = await db.Contacts.CountAsync(), conversations = await db.Conversations.CountAsync(x => x.State != "resolved"), human = await db.Conversations.CountAsync(x => x.Status == "human" && x.State == "open"), agent = await db.Conversations.CountAsync(x => x.Status == "agent" && x.State == "open"), opportunities = await db.Opportunities.CountAsync(x => x.Stage != "won" && x.Stage != "lost"), pending = await db.Jobs.CountAsync(x => x.Status == "pending"), failed = await db.Jobs.CountAsync(x => x.Status == "failed" || x.Status == "uncertain") });
         api.MapGet("/agent-metrics", (CrmDb db, int? days, CancellationToken ct) => AgentMetrics.Read(db, days, ct));
-        api.MapGet("/contacts", async (CrmDb db, string? q, int? page) =>
-        {
-            var offset = (Math.Clamp(page ?? 1, 1, 10000) - 1) * 100;
-            var query = db.Contacts.AsNoTracking().OrderByDescending(x => x.CreatedAt).ThenBy(x => x.Id);
-            if (string.IsNullOrWhiteSpace(q)) return await query.Skip(offset).Take(100).ToListAsync();
-            if (q.Length > 100) throw new ArgumentException("Búsqueda demasiado larga");
-            // Names and phones are encrypted: stream scoped records without truncating the search.
-            var matches = new List<Contact>(); var seen = 0;
-            await foreach (var row in query.AsAsyncEnumerable())
-            {
-                if (!row.Name.Contains(q, StringComparison.OrdinalIgnoreCase) && !row.Phone.Contains(q)) continue;
-                if (seen++ < offset) continue; matches.Add(row); if (matches.Count == 100) break;
-            }
-            return matches;
-        });
+        api.MapGet("/contacts", Contacts);
         api.MapPost("/contacts", async (ContactInput b, CrmDb db, TenantScope t, CurrentUser u, IConfiguration c) =>
         {
             var row = new Contact { TenantId = t.Id }; SetContact(row, b, c); db.Add(row); Audit(db, t, u, "contact.created", row.Id); await db.SaveChangesAsync(); return Results.Created($"/api/contacts/{row.Id}", row);
@@ -41,13 +48,13 @@ public static class CrmEndpoints
             }
             SetContact(row, b, c); Audit(db, t, u, "contact.updated", id); await db.SaveChangesAsync(); return Results.Ok(row);
         });
-        api.MapPost("/contacts/{id:guid}/patient", async (Guid id, PatientLinkInput b, CrmDb db, TenantScope t, CurrentUser u, CommercialService commercial) =>
+        api.MapPost("/contacts/{id:guid}/patient", async (Guid id, PatientLinkInput b, HttpContext ctx, CrmDb db, TenantScope t, CurrentUser u, CommercialService commercial) =>
         {
             var row = await db.Contacts.SingleOrDefaultAsync(x => x.Id == id); if (row is null) return Results.NotFound();
-            await commercial.LinkPatient(row,b.PatientId,u); Audit(db, t, u, "patient.linked", id); await db.SaveChangesAsync(); return Results.Ok(row);
+            await commercial.AsUser(Identity.Bearer(ctx)).LinkPatient(row,b.PatientId,u); Audit(db, t, u, "patient.linked", id); await db.SaveChangesAsync(); return Results.Ok(row);
         });
         // Legacy clients receive an explicit instruction; master records live only in Hospital.
-        api.MapGet("/companies",async(HospitalClient h,TenantScope t)=>(await h.Companies(t.Id,null,1)).Items);
+        api.MapGet("/companies",async(HttpContext ctx,HospitalClient h,TenantScope t)=>(await h.AsUser(Identity.Bearer(ctx)).Companies(t.Id,null,1)).Items);
         api.MapPost("/companies",()=>Results.Conflict(new{title="Administra empresas y convenios desde Hospital."}));
         api.MapPut("/companies/{id:guid}",()=>Results.Conflict(new{title="Administra empresas y convenios desde Hospital."}));
         api.MapGet("/opportunities", async (CrmDb db) => await db.Opportunities.OrderByDescending(x => x.UpdatedAt).Take(500).ToListAsync());

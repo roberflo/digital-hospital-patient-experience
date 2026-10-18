@@ -16,7 +16,7 @@ export type Conversation = {
     last_outbound_at?: string | null;
   };
 };
-export type MessageStatus = 'pending' | 'sent' | 'delivered' | 'read' | 'failed';
+export type MessageStatus = 'pending' | 'uncertain' | 'sent' | 'delivered' | 'read' | 'failed';
 export type Message = {
   id: string;
   timestamp: string;
@@ -54,6 +54,7 @@ export function windowOpen(conversation: Conversation, now = Date.now()) {
 export function mergeMessages(previous: Message[], incoming: Message[]) {
   const rank: Record<MessageStatus, number> = {
     pending: 0,
+    uncertain: 0,
     sent: 1,
     delivered: 2,
     read: 3,

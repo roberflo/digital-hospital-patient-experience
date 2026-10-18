@@ -1,6 +1,9 @@
 # Bandeja WhatsApp de Kapso
 
-`/inbox` consulta conversaciones y mensajes directamente a Kapso. La bandeja CRM
+`/inbox` consulta conversaciones y mensajes directamente a Kapso; las respuestas se
+envían a través de la API de Recepción (`POST /api/conversations/{id}/messages`), que
+pausa al agente, deja la actividad y deduplica por la `Idempotency-Key` del cliente.
+Si la conversación de Kapso aún no existe en Recepción, el envío responde 409. La bandeja CRM
 `/?view=inbox` conserva asignación, notas, etiquetas y seguimiento del hospital.
 El enlace “WhatsApp ↗” permite entrar al historial del proveedor. Esta nueva
 bandeja no crea una base de datos de mensajes. Los contadores de no leídos son
@@ -12,11 +15,17 @@ Para desarrollo con `npm run dev`, copiar `frontend/.env.example` a
 `frontend/.env.local`. Para Docker, completar `.env` en la raíz; Compose inyecta
 las variables exclusivamente al servidor:
 
-- `KAPSO_API_KEY`: clave del proyecto (cabecera X-API-Key).
+- `KAPSO_API_KEY`: clave del proyecto (cabecera X-API-Key). La web solo la usa para leer;
+  nunca envía a Kapso.
 - `KAPSO_PHONE_NUMBER_ID`: ID del número conectado.
 - `KAPSO_WEBHOOK_SECRET`: secreto del webhook; conservarlo al crearlo.
 - `KAPSO_MANUAL_SEND_ENABLED=false`: activar explícitamente con `true` cuando se
-  autorice enviar respuestas manuales. No activa el agente automático de .NET.
+  autorice enviar respuestas manuales. Quien decide es la API (`recepcion-api`, vía
+  `.env`); en la web solo habilita el cuadro de texto, con la misma regla que la API
+  (`SEND_ENABLED=true` o esta variable). No activa el agente automático. Un envío
+  rechazado (ventana cerrada, número desactivado o envío en pausa) no pausa al agente
+  ni reasigna la conversación. Un envío sin confirmar se muestra como «Sin confirmar»
+  y no se reintenta.
 - `API_URL`, `AUTH_SECRET`, `NEXTAUTH_URL` y credenciales Keycloak: autenticación
   existente de Recepción. No usar variables `NEXT_PUBLIC_` para credenciales.
 
@@ -143,8 +152,8 @@ pulse Verificar conexión; no requiere un webhook de ciclo de vida del proyecto.
   cuentas y los cambios de rol siguen en el proveedor de identidad del Hospital: su contrato
   `/v1/clinic-users` todavía responde 501 y no se simula una invitación enviada.
 - **WhatsApp · números** (`/whatsapp`) administra conexiones. El acceso secundario
-  **Consultar historial** (`/inbox`) conserva la consulta y el envío manual autorizado de Kapso;
+  **Consultar historial** (`/inbox`) conserva la consulta de Kapso y el envío manual autorizado, que pasa por la API de Recepción;
   su enlace **Asignar y gestionar en bandeja** filtra por teléfono y número del mismo hospital.
   El historial anterior a la recepción de webhooks puede no existir todavía en el CRM.
-  El envío directo de Kapso no aplica asignaciones del CRM; para coordinar el equipo se usa la
-  bandeja CRM. Las compuertas existentes de envío y agente automático no cambian.
+  Un envío desde `/inbox` toma la conversación como la bandeja CRM: la asigna a quien responde y
+  pausa al agente. Las compuertas existentes de envío y agente automático no cambian.

@@ -6,6 +6,15 @@ namespace Recepcion;
 
 public static class WhatsAppEndpoints
 {
+    /// <summary>A reply typed by the staff, from the CRM or /inbox: pauses the agent, leaves the Activity and is idempotent by the client's key.</summary>
+    public static async Task<IResult> SendMessage(Guid id, SendInput b, HttpContext ctx, CrmDb db, TenantScope t, CurrentUser u, ConversationService svc)
+    {
+        var body = Rules.Required(b.Body, 4000); var key = ctx.Request.Headers["Idempotency-Key"].ToString(); ConversationService.RequireKey(key);
+        var conv = await db.Conversations.SingleOrDefaultAsync(x => x.Id == id); if (conv is null) return Results.NotFound();
+        // A refused send must not pause the agent or reassign the conversation (INV-5); a replayed key returns the original as before.
+        using (var teamLease = await svc.Lock(t.Id)) using (var l = await svc.Lock(id)) { await db.Entry(conv).ReloadAsync(); TeamEndpoints.RequireEditable(conv,u); if (!await db.Messages.AnyAsync(x => x.RequestKey == key)) await svc.RequireSendable(conv, manual: true); InboxWorkflow.SetState(conv,"open"); conv.Status = "human"; conv.AssignedTo = u.Subject; conv.Revision++; await db.SaveChangesAsync(); }
+        var msg = await svc.Send(id, body, "human", key, actingSubject: u.Subject, actor: u); CrmEndpoints.Audit(db, t, u, "message.sent", msg.Id); await db.SaveChangesAsync(); return Results.Ok(msg);
+    }
     public static void MapWhatsApp(this WebApplication app)
     {
         var api = app.MapGroup("/api").RequireAuthorization();
@@ -26,21 +35,14 @@ public static class WhatsAppEndpoints
             return conv.Select(x => new { conversation = x, contact = contacts.GetValueOrDefault(x.ContactId), channel = channels.GetValueOrDefault(x.ChannelId),unreadCount=unread.GetValueOrDefault(x.Id) });
         });
         api.MapGet("/conversations/{id:guid}/messages", async (Guid id, CrmDb db) => await db.Conversations.AnyAsync(x => x.Id == id) ? Results.Ok(await db.Messages.Where(x => x.ConversationId == id).OrderByDescending(x => x.CreatedAt).Take(200).OrderBy(x => x.CreatedAt).ToListAsync()) : Results.NotFound());
-        api.MapPost("/conversations/{id:guid}/messages", async (Guid id, SendInput b, HttpContext ctx, CrmDb db, TenantScope t, CurrentUser u, ConversationService svc) =>
-        {
-            var conv = await db.Conversations.SingleOrDefaultAsync(x => x.Id == id); if (conv is null) return Results.NotFound();
-            using (var teamLease = await svc.Lock(t.Id)) using (var l = await svc.Lock(id)) { await db.Entry(conv).ReloadAsync(); TeamEndpoints.RequireEditable(conv,u); InboxWorkflow.SetState(conv,"open"); conv.Status = "human"; conv.AssignedTo = u.Subject; conv.Revision++; await db.SaveChangesAsync(); }
-            var msg = await svc.Send(id, Rules.Required(b.Body, 4000), "human", ctx.Request.Headers["Idempotency-Key"].ToString(), actingSubject: u.Subject, actor: u); CrmEndpoints.Audit(db, t, u, "message.sent", msg.Id); await db.SaveChangesAsync(); return Results.Ok(msg);
-        });
+        api.MapPost("/conversations/{id:guid}/messages", SendMessage);
         api.MapPost("/conversations/{id:guid}/media", async (Guid id, HttpContext ctx, CrmDb db, TenantScope t, CurrentUser u, KapsoClient kapso, ConversationService svc) =>
         {
             var conv = await db.Conversations.SingleOrDefaultAsync(x => x.Id == id); if (conv is null) return Results.NotFound();
             TeamEndpoints.RequireEditable(conv,u);
             var form = await ctx.Request.ReadFormAsync(); var file = form.Files.GetFile("file"); if (file is null || file.Length == 0 || file.Length > 16 * 1024 * 1024) throw new ArgumentException("Archivo requerido, máximo 16 MB");
             var allowed = new[] { "application/pdf", "image/jpeg", "image/png", "audio/ogg", "audio/mpeg", "audio/mp4", "video/mp4" }; if (!allowed.Contains(file.ContentType)) throw new ArgumentException("Formato no permitido");
-            var channel = await db.Channels.SingleAsync(x => x.Id == conv.ChannelId); if (!channel.Enabled) throw new ArgumentException("Este número está desactivado. Un administrador puede activarlo en WhatsApp.");
-            kapso.RequireSending(manual: true);
-            if (!Rules.WithinWindow(conv.LastInboundAt, DateTimeOffset.UtcNow)) throw new ArgumentException("Ventana de WhatsApp cerrada. Espera un mensaje del paciente o utiliza una plantilla aprobada desde Kapso.");
+            var channel = await svc.RequireSendable(conv, manual: true);
             await using var stream = file.OpenReadStream(); var mid = await kapso.Upload(channel.PhoneNumberId, stream, file.FileName, file.ContentType);
             using (var teamLease = await svc.Lock(t.Id)) using (var l = await svc.Lock(id)) { await db.Entry(conv).ReloadAsync(); TeamEndpoints.RequireEditable(conv,u); InboxWorkflow.SetState(conv,"open"); conv.Status = "human"; conv.AssignedTo = u.Subject; conv.Revision++; await db.SaveChangesAsync(); }
             var type = file.ContentType.Split('/')[0]; if (type == "application") type = "document";

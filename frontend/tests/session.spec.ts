@@ -60,7 +60,7 @@ test('login returns to requested workspace and rejects external callback', async
   await expect(page.getByRole('heading', { name: 'Agenda', exact: true })).toBeVisible();
   await login(page, 'admin', 'https://evil.example');
   expect(page.url()).not.toContain('evil.example');
-  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Inicio', exact: true })).toBeVisible();
 });
 test('temporary server failure is not presented as expired login', async ({ page }) => {
   await draftConversation(page);
@@ -96,7 +96,7 @@ test('recovery with another account clears old workspace instead of reusing its 
   const auth = await newTab;
   await enter(auth, 'doctor');
   await expect(auth.getByRole('heading', { name: 'Ya puedes continuar' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Inicio', exact: true })).toBeVisible();
   await openMenu(page);
   await expect(page.locator('.profile')).toContainText(users.doctor.name);
   await expect(page.getByLabel('Mensaje al paciente')).toHaveCount(0);

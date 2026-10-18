@@ -7,16 +7,13 @@ public sealed class ConversationService(CrmDb db, TenantScope scope, KapsoClient
 {
     public async Task<Message> Send(Guid id, string body, string sender, string requestKey, string? mediaId = null, string type = "text", CancellationToken ct = default, string? actingSubject = null, CurrentUser? actor = null, Choices? choices = null)
     {
-        if (string.IsNullOrWhiteSpace(requestKey) || requestKey.Length > 100) throw new ArgumentException("Idempotency-Key requerido");
+        RequireKey(requestKey);
         using var lease = await Lock(id, ct);
         var existing = await db.Messages.SingleOrDefaultAsync(x => x.RequestKey == requestKey, ct); if (existing is not null) { if (existing.ConversationId != id || existing.Body != body || existing.MediaId != mediaId || existing.Type != type) throw new ArgumentException("Clave de envío reutilizada"); return existing; }
         var conv = await db.Conversations.SingleAsync(x => x.Id == id, ct);
         await db.Entry(conv).ReloadAsync(ct);
         if (actingSubject is not null && conv.AssignedTo != actingSubject) throw new ArgumentException("La conversación se transfirió a otra persona. Revisa el responsable antes de responder.");
-        var channel = await db.Channels.SingleAsync(x => x.Id == conv.ChannelId, ct); var contact = await db.Contacts.SingleAsync(x => x.Id == conv.ContactId, ct);
-        if (!channel.Enabled) throw new ArgumentException("Este número está desactivado. Un administrador puede activarlo en WhatsApp.");
-        if (!Rules.WithinWindow(conv.LastInboundAt, DateTimeOffset.UtcNow)) throw new ArgumentException("Ventana de WhatsApp cerrada. Espera un mensaje del paciente o utiliza una plantilla aprobada desde Kapso.");
-        kapso.RequireSending(sender == "human");
+        var channel = await RequireSendable(conv, sender == "human", ct); var contact = await db.Contacts.SingleAsync(x => x.Id == conv.ContactId, ct);
         var message = new Message { TenantId = scope.Id, ConversationId = id, Body = body, Sender = sender, RequestKey = requestKey, MediaId = mediaId, Type = type, Status = "sending" }; db.Add(message);
         db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = id, ContactId = conv.ContactId,
             MessageId = message.Id, Kind = "response", Actor = sender == "agent" ? "Agente" : actor?.Name ?? "Equipo",
@@ -44,6 +41,16 @@ public sealed class ConversationService(CrmDb db, TenantScope scope, KapsoClient
                 } });
         }
         conv.LastMessage=body.Length>160?body[..160]:body;conv.Revision++; conv.UpdatedAt = DateTimeOffset.UtcNow; await db.SaveChangesAsync(CancellationToken.None); return message;
+    }
+    public static void RequireKey(string requestKey) { if (string.IsNullOrWhiteSpace(requestKey) || requestKey.Length > 100) throw new ArgumentException("Idempotency-Key requerido"); }
+    /// <summary>What every send needs, checked by Send and, before it changes the conversation, by whoever takes it to reply (INV-5).</summary>
+    public async Task<Channel> RequireSendable(Conversation conv, bool manual, CancellationToken ct = default)
+    {
+        var channel = await db.Channels.SingleAsync(x => x.Id == conv.ChannelId, ct);
+        if (!channel.Enabled) throw new ArgumentException("Este número está desactivado. Un administrador puede activarlo en WhatsApp.");
+        if (!Rules.WithinWindow(conv.LastInboundAt, DateTimeOffset.UtcNow)) throw new ArgumentException("Ventana de WhatsApp cerrada. Espera un mensaje del paciente o utiliza una plantilla aprobada desde Kapso.");
+        kapso.RequireSending(manual);
+        return channel;
     }
     public async Task<IDisposable> Lock(Guid id, CancellationToken ct = default)
     {
