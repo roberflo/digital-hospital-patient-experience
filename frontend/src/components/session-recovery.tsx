@@ -53,6 +53,7 @@ function Recovery({ children }: { children: ReactNode }) {
       if (pending || !alive) return;
       pending = true;
       setChecking(true);
+      const pausedBefore = isSessionPaused();
       try {
         // Intentionally bypass the paused fetcher: this only validates identity, never replays work.
         const response = await fetch('/api/crm/me', {
@@ -83,6 +84,13 @@ function Recovery({ children }: { children: ReactNode }) {
         }
         const next = platform ? 'platform:' + platform : identityKey(await response.json());
         if (!next) throw new Error('Identity missing');
+        // Asked while the session was still valid and answered after it expired (a slow first
+        // check under load): it names who was signed in, so remember it; it says nothing about
+        // the session that comes back, so neither reload nor resume on it.
+        if (!pausedBefore && isSessionPaused()) {
+          identity.current ??= next;
+          return;
+        }
         if (isSessionPaused() && !identity.current) {
           window.location.reload();
           return;
