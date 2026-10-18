@@ -23,7 +23,8 @@ public sealed class HospitalConnectionStore(CrmDb db, IConfiguration config)
     // half lives only in the encrypted HospitalConnection; Keycloak reads the public half from /hospital-jwks/<tenant>.
     // Created on first need, before the first token request makes Keycloak fetch it. Null for a hospital with no row.
     // Creating and rotating take the tenant's advisory lock (the one Save takes) and re-read under it, so concurrent
-    // first uses agree on one key. A rotation keeps only the PUBLIC half of the previous key, published for RotationGrace.
+    // first uses agree on one key. A rotation keeps nothing of the old key: Keycloak caches every key a JWKS read returns and
+    // re-reads only on an unknown kid, so an old key published next to the new one would keep verifying after the rotation.
     public async Task<ECDsa?> SigningKeyAsync(Guid tenant, bool rotate = false, CancellationToken ct = default)
     {
         if (!rotate && Section(tenant)["SigningKey"] is { Length: > 0 } cached) return Import(cached);
@@ -34,13 +35,7 @@ public sealed class HospitalConnectionStore(CrmDb db, IConfiguration config)
         var stored = values.GetValueOrDefault("SigningKey");
         if (!rotate && stored is { Length: > 0 }) { cache.Remove(tenant); return Import(stored); }
         var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
-        values.Remove("PreviousSigningKey"); // the first version of this branch kept the old private key: dropped on the next rotation
-        if (stored is { Length: > 0 })
-        {
-            using var old = Import(stored);
-            values["PreviousPublicKey"] = Convert.ToBase64String(old.ExportSubjectPublicKeyInfo());
-            values["RotatedAt"] = DateTimeOffset.UtcNow.ToString("O");
-        }
+        foreach (var legacy in new[] { "PreviousSigningKey", "PreviousPublicKey", "RotatedAt" }) values.Remove(legacy); // earlier versions of this branch
         values["SigningKey"] = Convert.ToBase64String(key.ExportPkcs8PrivateKey());
         var json = JsonSerializer.Serialize(values);
         // Outside the request's change tracker: a token request never flushes what the handler has pending.
@@ -58,19 +53,11 @@ public sealed class HospitalConnectionStore(CrmDb db, IConfiguration config)
         return new() { ["kty"] = "EC", ["crv"] = "P-256", ["x"] = x, ["y"] = y, ["kid"] = kid, ["use"] = "sig", ["alg"] = "ES256" };
     }
     static ECDsa Import(string pkcs8) { var key = ECDsa.Create(); key.ImportPkcs8PrivateKey(Convert.FromBase64String(pkcs8), out _); return key; }
-    /// <summary>What /hospital-jwks/<tenant> publishes: the current public key and the one before it, or nothing. Never creates one.</summary>
-    /// <summary>How long the previous public key stays published after a rotation: Keycloak re-reads a JWKS at most every ~10 s,
-    /// so this covers it, and a leaked key stops verifying anything this long after the rotation.</summary>
-    public static readonly TimeSpan RotationGrace = TimeSpan.FromMinutes(2);
-    /// <summary>What /hospital-jwks/<tenant> publishes: the current public key, plus the previous one during RotationGrace. Never creates one.
-    /// A legacy PreviousSigningKey (no rotation date) is never published.</summary>
-    public Dictionary<string,string>[] PublicKeys(Guid tenant, DateTimeOffset now)
+    /// <summary>What /hospital-jwks/<tenant> publishes: the current public key only, or nothing. Never creates one.</summary>
+    public Dictionary<string,string>[] PublicKeys(Guid tenant)
     {
-        var section = Section(tenant); var keys = new List<Dictionary<string,string>>();
-        if (section["SigningKey"] is { Length: > 0 } current) { using var key = Import(current); keys.Add(Jwk(key)); }
-        if (section["PreviousPublicKey"] is { Length: > 0 } previous && DateTimeOffset.TryParse(section["RotatedAt"], out var rotated) && now - rotated < RotationGrace)
-        { using var key = ECDsa.Create(); key.ImportSubjectPublicKeyInfo(Convert.FromBase64String(previous), out _); keys.Add(Jwk(key)); }
-        return keys.ToArray();
+        if (Section(tenant)["SigningKey"] is not { Length: > 0 } current) return [];
+        using var key = Import(current); return [Jwk(key)];
     }
     // What makes a hospital connect by signing in: one installation-wide Hospital API and the
     // service account Hospital's realm job declares for every tenant, `recepcion-service-<tenant>`, which

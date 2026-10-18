@@ -115,7 +115,6 @@ public class HospitalConnectionTests
     static string ServiceToken(Guid tenant) => "x."+Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new{tenant_id=tenant,exp=DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds()}))).TrimEnd('=').Replace('+','-').Replace('/','_')+".x";
     static byte[] B64(string value){value=value.Replace('-','+').Replace('_','/');return Convert.FromBase64String(value.PadRight((value.Length+3)/4*4,'='));}
     static JsonElement Keys(Guid tenant,CrmDb db,IConfiguration config) => JsonSerializer.SerializeToElement(HospitalConnectionEndpoints.Jwks(tenant,new HospitalConnectionStore(db,config))).GetProperty("keys");
-    static JsonElement KeysAt(Guid tenant,CrmDb db,IConfiguration config,DateTimeOffset now) => JsonSerializer.SerializeToElement(new HospitalConnectionStore(db,config).PublicKeys(tenant,now));
     /// <summary>Every token request the client makes, as form fields; Hospital's API answers 200 to everything else.</summary>
     sealed class Keycloak(Func<Dictionary<string,string>,HttpResponseMessage> token):HttpMessageHandler
     {
@@ -180,32 +179,25 @@ public class HospitalConnectionTests
         await new HospitalClient(new HttpClient(keycloak),config,new HospitalConnectionStore(db,config)).GetClinicAsync(a);
         Assert.Equal(3,keycloak.TokenRequests.Count);
         Assertion(keycloak.TokenRequests[2],a,Keys(a,db,config));
-        // N2, no cut-over gap: the previous key stays published for one rotation, so an assertion Keycloak is
-        // still verifying with it passes; public halves only.
-        var afterOne=Keys(a,db,config); Assert.Equal(2,afterOne.GetArrayLength());
-        Assertion(keycloak.TokenRequests[0],a,afterOne);
-        Assert.All(afterOne.EnumerateArray(),k=>Assert.False(k.TryGetProperty("d",out var __)));
-        await new HospitalConnectionStore(db,config).SigningKeyAsync(a,rotate:true);
-        var afterTwo=Keys(a,db,config); Assert.Equal(2,afterTwo.GetArrayLength());
-        Assert.Throws<InvalidOperationException>(()=>Assertion(keycloak.TokenRequests[0],a,afterTwo)); // two rotations ago: gone
-        Assertion(keycloak.TokenRequests[2],a,afterTwo);
+        // The old key is not published at all: Keycloak caches every key it reads and re-reads only on an unknown kid,
+        // so publishing the old one next to the new one would keep it verifying long after the rotation.
+        var afterOne=Keys(a,db,config); Assert.Equal(1,afterOne.GetArrayLength());
+        Assert.Throws<InvalidOperationException>(()=>Assertion(keycloak.TokenRequests[0],a,afterOne));
     }
-    // I-A: rotating revokes a leaked key. Only the PUBLIC half of the previous key is kept, and it is published
-    // only for the grace Keycloak needs to re-read the JWKS; after it the old key verifies nothing.
-    [Fact] public async Task RotatingRevokesThePreviousKeyAfterTheGrace()
+    // I-A: one rotation revokes a leaked key. Nothing of the old key is kept or published; the new kid makes Keycloak
+    // re-read the JWKS, which then holds only the new key.
+    [Fact] public async Task RotatingRevokesThePreviousKeyAtOnce()
     {
         var (db,a,_)=await TwoHospitals(); await using var __=db; var config=Installation();
         using(await new HospitalConnectionStore(db,config).SigningKeyAsync(a)){}
         var old=new HospitalConnectionStore(db,config).Section(a)["SigningKey"]!;
         var oldKid=Keys(a,db,config)[0].GetProperty("kid").GetString();
-        var rotatedAt=DateTimeOffset.UtcNow;
         using(await new HospitalConnectionStore(db,config).SigningKeyAsync(a,rotate:true)){}
-        Assert.DoesNotContain(new HospitalConnectionStore(db,config).Section(a).GetChildren(),x=>x.Value==old); // the old private half is gone
-        var during=KeysAt(a,db,config,rotatedAt.AddSeconds(30));
-        Assert.Equal(2,during.GetArrayLength()); Assert.Contains(during.EnumerateArray(),k=>k.GetProperty("kid").GetString()==oldKid);
-        var after=KeysAt(a,db,config,rotatedAt.Add(HospitalConnectionStore.RotationGrace).AddSeconds(5));
+        var section=new HospitalConnectionStore(db,config).Section(a);
+        Assert.DoesNotContain(section.GetChildren(),x=>x.Value==old); // the old private half is gone
+        Assert.Null(section["PreviousPublicKey"]);
+        var after=Keys(a,db,config);
         Assert.Equal(1,after.GetArrayLength()); Assert.DoesNotContain(after.EnumerateArray(),k=>k.GetProperty("kid").GetString()==oldKid);
-        Assert.Equal(TimeSpan.FromMinutes(2),HospitalConnectionStore.RotationGrace);
     }
     // A row written by the first version of this branch (PreviousSigningKey = a private key, no date) still reads,
     // and that key is not published: there is no rotation date to bound its grace.

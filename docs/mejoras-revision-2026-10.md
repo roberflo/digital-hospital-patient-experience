@@ -117,12 +117,12 @@ Commits de Recepción salvo «Hospital». Fecha de todos: 2026-10-17.
 | MR-14, MR-15, MR-16 | Hecho | `41e382e`, `04d9b68` |
 | MR-17…MR-30 | Hecho | `5c055ba`, `71ccbb5`, `b638cff`, `52afc55`, `8e0e088` |
 | MR-31, MR-32 | Hecho | Hospital `bc35077e`, `342d1dd8` |
-| MR-33 | Hecho (en rama, pendiente de merge) | rama `mr/rec-d` (este lote): `verification.md`, `deployment.md`, `hospital-easypanel.md` |
-| MR-34 | Hecho (en rama, pendiente de merge) | rama `mr/rec-d`: `eval-agent.sh`, `evals/agent/known-failures.txt` (arranca con los 2 casos inestables medidos el 2026-10-17; los «8 fallos documentados» del criterio no se identificaron como evals que fallen hoy: el único «8 fallos» de `reception-agent.md` son rojos previos a un arreglo del 2026-10-03), `KnownFailuresAreCasesWithAReason` |
+| MR-33 | Hecho | `verification.md`, `deployment.md`, `hospital-easypanel.md` |
+| MR-34 | Hecho | `eval-agent.sh`, `evals/agent/known-failures.txt` (arranca con los 2 casos inestables medidos el 2026-10-17; los «8 fallos documentados» del criterio no se identificaron como evals que fallen hoy: el único «8 fallos» de `reception-agent.md` son rojos previos a un arreglo del 2026-10-03), `KnownFailuresAreCasesWithAReason` |
 | MR-35 | Hecho, con la lista aprobada por el dueño | `2c7d640`, `ccf232f`, `8c25ed0`, `1d55113`, `9cd7ee9` |
 | MR-36 | Hecho | `222524e`, `8754830` |
 | MR-37 | Hecho | `e8479d4`, `5ea7282` |
-| MR-38 | Pendiente: en curso en la rama `mr/rec-38` | — |
+| MR-38 | Hecho: `client-jwt` por hospital con JWKS servida por Recepción; rotar revoca la clave vieja de inmediato (sin gracia, decisión del dueño 2026-10-17); despliegue en 3 pasos | Recepción `HospitalConnectionTests`; Hospital `RecepcionRealmScriptTests`, `ServiceAccountReconcilerTests` |
 | MR-39 | Hecho | `2deb945`, `834079f` |
 | MR-40 | Hecho; nits de revisión en `mr/rec-d` | `4aabc9d`, `5a3c5d0`, `1e16e28` |
 | MR-41 | Hecho. Recepción envía `Idempotency-Key` en `POST v1/agenda` y `POST v1/patients`. Lo que protege: la **creación de cita del personal** que vence por tiempo libera su recibo, y repetirla con la misma clave (el navegador la reusa para el mismo cuerpo) devuelve la cita original en Hospital, sin duplicado; cancelar y reprogramar no llevan clave y siguen gastando el recibo. En el agente (`agent:`/`agent-register:` + id de la propuesta) es defensa en profundidad: la propuesta se consume antes de escribir, así que no hay reenvío, y un resultado incierto sigue yendo a conciliación. Un 409 `*.idempotency_key_reused` se concilia, nunca se reintenta | Hospital `4daedd9d`, `71187473`, `c1655713`; Recepción rama `mr/rec-41`, `HospitalIdempotencyTests` |
