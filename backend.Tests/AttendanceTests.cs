@@ -15,9 +15,12 @@ public sealed class AttendanceTests : IAsyncLifetime
     public Task DisposeAsync() => h.DisposeAsync().AsTask();
 
     readonly List<(string Path, string? Bearer)> reads = [];
-    AgentHarness.Fake Hospital(HttpStatusCode status, object? body = null) => new(request =>
+    /// <summary>Hospital: the patient (with <paramref name="phone"/>, the contact's by default) and the attendance read, recorded.</summary>
+    AgentHarness.Fake Hospital(HttpStatusCode status, object? body = null, string? phone = null) => new(request =>
     {
-        lock (reads) reads.Add((request.RequestUri!.AbsolutePath, request.Headers.Authorization?.Parameter));
+        var path = request.RequestUri!.AbsolutePath;
+        if (path.StartsWith("/v1/patients/")) return Task.FromResult(AgentHarness.Json(new { patientId = h.Contact.PatientId, givenNames = "Paciente", familyNames = "Sintético", phone = phone ?? h.Contact.Phone }));
+        lock (reads) reads.Add((path, request.Headers.Authorization?.Parameter));
         return Task.FromResult(status == HttpStatusCode.OK ? AgentHarness.Json(body!) : new HttpResponseMessage(status) { Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json") });
     });
     string token = "";
@@ -45,6 +48,23 @@ public sealed class AttendanceTests : IAsyncLifetime
         var result = await HospitalEndpoints.ContactAttendance(h.Contact.Id, Staff(), h.Db, h.Client(Hospital(HttpStatusCode.OK, new { noShows = 1, consecutiveNoShows = 1 })), h.Scope);
 
         Assert.Equal(404, Assert.IsAssignableFrom<IStatusCodeHttpResult>(result).StatusCode);
+        Assert.Empty(reads);
+    }
+
+    /// <summary>Attendance is the patient's history: a link whose phone no longer matches is refused as the contact's appointments are.</summary>
+    [Fact]
+    public async Task AStaleLinkIsRefusedAsTheAppointmentsAreAndAttendanceIsNotRead()
+    {
+        await h.Link();
+        var stale = h.Client(Hospital(HttpStatusCode.OK, new { noShows = 3, consecutiveNoShows = 2 }, phone: "50379999999"));
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var appointments = await Assert.ThrowsAsync<HospitalIntegrationException>(() => HospitalEndpoints.ContactAppointments(h.Contact.Id, today, today, Staff(), h.Db, stale, h.Scope));
+        reads.Clear();
+
+        var attendance = await Assert.ThrowsAsync<HospitalIntegrationException>(() => HospitalEndpoints.ContactAttendance(h.Contact.Id, Staff(), h.Db, stale, h.Scope));
+
+        Assert.Equal("hospital.patient_phone_mismatch", appointments.Code);
+        Assert.Equal((appointments.Code, appointments.StatusCode), (attendance.Code, attendance.StatusCode));
         Assert.Empty(reads);
     }
 

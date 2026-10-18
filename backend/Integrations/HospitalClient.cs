@@ -94,9 +94,13 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
         catch (Exception ex) when (!ct.IsCancellationRequested && ex is HttpRequestException or HospitalIntegrationException { Code: not ("hospital.user_forbidden" or "hospital.user_token_rejected") } or TaskCanceledException or JsonException or KeyNotFoundException or InvalidOperationException) { return "follow-up"; }
     }
 
-    /// <summary>MR-44: Hospital's count of this patient's explicit no-shows, total and since the last appointment they came to.</summary>
-    public Task<HospitalAttendance> GetPatientAttendanceAsync(Guid tenantId, Guid patientId, CancellationToken ct = default) =>
-        ReadAsync<HospitalAttendance>(tenantId, $"v1/agenda/patients/{patientId:D}/attendance", ct);
+    /// <summary>MR-44: Hospital's count of this patient's explicit no-shows, total and since the last appointment they came to. The patient's
+    /// history, so the link is verified first, as for their appointments.</summary>
+    public async Task<HospitalAttendance> GetPatientAttendanceAsync(Guid tenantId, Guid patientId, string phone, CancellationToken ct = default)
+    {
+        await GetVerifiedPatientAsync(tenantId, patientId, phone, ct);
+        return await ReadAsync<HospitalAttendance>(tenantId, $"v1/agenda/patients/{patientId:D}/attendance", ct);
+    }
 
     /// <summary>Only ever the patient-scoped agenda: the whole day's agenda carries every other patient (MR-12).</summary>
     public async Task<JsonElement> GetPatientAppointmentsAsync(Guid tenantId, Guid patientId,
