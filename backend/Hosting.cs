@@ -1,6 +1,9 @@
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.DataProtection.KeyManagement;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Recepcion.Integrations;
@@ -14,7 +17,8 @@ public static class Hosting
     {
         services.AddScoped<TenantScope>(); services.AddScoped<CurrentUser>();
         services.AddDbContext<CrmDb>(o => o.UseNpgsql(config.GetConnectionString("Database")));
-        services.AddDataProtection().SetApplicationName("Recepcion").PersistKeysToFileSystem(new DirectoryInfo(config["KEY_DIRECTORY"] ?? "/keys"));
+        var keyring = services.AddDataProtection().SetApplicationName("Recepcion").PersistKeysToFileSystem(new DirectoryInfo(KeyDirectory(config)));
+        if (KeyringCertificate(config) is { } cert) keyring.ProtectKeysWithCertificate(cert);
         services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(o => HospitalIdentity.Configure(o, config, dev));
         services.AddAuthorization();
         services.AddRateLimiter(o =>
@@ -39,6 +43,45 @@ public static class Hosting
         services.AddHostedService<CalendarWorker>();
         services.AddProblemDetails();
     }
+    // MR-37: the keyring certificate lives outside /keys and outside every backup (docs/deployment.md).
+    public static X509Certificate2? KeyringCertificate(IConfiguration config)
+    {
+        var path = config["DATAPROTECTION_CERT_PATH"];
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        byte[] bytes;
+        try { bytes = File.ReadAllBytes(path); }
+        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { throw new InvalidOperationException("DATAPROTECTION_CERT_PATH does not point to a readable PKCS#12 file"); }
+        catch (UnauthorizedAccessException) { throw new InvalidOperationException("DATAPROTECTION_CERT_PATH is not readable by the API user (UID 1654): chown or chmod the mounted file (docs/deployment.md)"); }
+        // Easypanel mounts files as text: the base64 of the .p12 is accepted too. A DER PKCS#12 starts with 0x30.
+        if (bytes is [not 0x30, ..])
+            try { bytes = Convert.FromBase64String(System.Text.Encoding.ASCII.GetString(bytes)); }
+            catch (FormatException) { throw new InvalidOperationException("DATAPROTECTION_CERT_PATH is neither a PKCS#12 file nor its base64"); }
+        X509Certificate2 cert;
+        try { cert = X509CertificateLoader.LoadPkcs12(bytes, config["DATAPROTECTION_CERT_PASSWORD"]); }
+        catch (CryptographicException) { throw new InvalidOperationException("DATAPROTECTION_CERT_PATH could not be opened: wrong DATAPROTECTION_CERT_PASSWORD or not a PKCS#12 file"); }
+        return cert.HasPrivateKey ? cert : throw new InvalidOperationException("DATAPROTECTION_CERT_PATH has no private key: the keyring could not be read back");
+    }
+    public static void RequireKeyringCertificate(IConfiguration config, IHostEnvironment env)
+    {
+        if (!env.IsDevelopment() && string.IsNullOrWhiteSpace(config["DATAPROTECTION_CERT_PATH"]))
+            throw new InvalidOperationException("DATAPROTECTION_CERT_PATH is required outside Development: mount the keyring certificate outside /keys (docs/deployment.md)");
+    }
+    /// <summary>Once at startup, with a certificate: the key the resolver would use must be encrypted, or a new encrypted key becomes the default. Old keys stay readable.</summary>
+    public static void ProtectKeyring(IServiceProvider services, IConfiguration config)
+    {
+        if (string.IsNullOrWhiteSpace(config["DATAPROTECTION_CERT_PATH"])) return;
+        var dir = KeyDirectory(config);
+        bool Encrypted(IKey key) { var file = Path.Combine(dir, $"key-{key.KeyId:D}.xml"); return File.Exists(file) && File.ReadAllText(file).Contains("<encryptedSecret", StringComparison.Ordinal); }
+        var manager = services.GetRequiredService<IKeyManager>(); var keys = manager.GetAllKeys(); var now = DateTimeOffset.UtcNow;
+        // A plaintext key scheduled beyond the resolver's 5-minute clock skew has protected nothing yet (a
+        // rollback to an image without the certificate leaves one): revoke it so it never becomes the default.
+        foreach (var key in keys.Where(k => !k.IsRevoked && k.ActivationDate > now.AddMinutes(5) && !Encrypted(k)))
+            manager.RevokeKey(key.KeyId, "MR-37: plaintext key scheduled while the keyring certificate is mounted");
+        var current = services.GetRequiredService<Microsoft.AspNetCore.DataProtection.KeyManagement.Internal.IDefaultKeyResolver>().ResolveDefaultKeyPolicy(now, keys).DefaultKey;
+        if (current is not null && Encrypted(current)) return;
+        manager.CreateNewKey(now, now.AddDays(90));
+    }
+    static string KeyDirectory(IConfiguration config) => config["KEY_DIRECTORY"] ?? "/keys";
     /// <summary>The outermost middleware Program.cs installs: security headers and the one place an exception becomes a response.</summary>
     public static async Task Errors(HttpContext ctx, RequestDelegate next)
     {

@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Recepcion;
 using Recepcion.Integrations;
@@ -78,6 +79,115 @@ public sealed class SecurityTests {
         var root=new DirectoryInfo(AppContext.BaseDirectory);
         while(root is not null&&!File.Exists(Path.Combine(root.FullName,"backend","Program.cs")))root=root.Parent;
         Assert.Contains("app.Use(Hosting.Errors);",File.ReadAllText(Path.Combine(root!.FullName,"backend","Program.cs")));
+    }
+    // MR-37: the DataProtection keyring is protected by a certificate mounted outside /keys. Every case
+    // goes through Hosting.AddRecepcionServices, the registration Program.cs uses; the certificate is
+    // synthetic, generated here and written to a temporary directory (never to the repository).
+    const string KeyringPassword="synthetic-keyring-pass";
+    static string SyntheticCertificate(string dir)
+    {
+        using var rsa=RSA.Create(2048);
+        var request=new System.Security.Cryptography.X509Certificates.CertificateRequest("CN=recepcion-keyring-test",rsa,HashAlgorithmName.SHA256,RSASignaturePadding.Pkcs1);
+        using var cert=request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1),DateTimeOffset.UtcNow.AddDays(30));
+        var path=Path.Combine(dir,"dataprotection.p12");File.WriteAllBytes(path,cert.Export(System.Security.Cryptography.X509Certificates.X509ContentType.Pfx,KeyringPassword));
+        return path;
+    }
+    static IConfiguration KeyringConfig(string keys,string? cert,string? password=KeyringPassword)=>new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{["ConnectionStrings:Database"]="Host=never-opened",["Auth:Authority"]="https://identity.example.test/realms/hospital",["KEY_DIRECTORY"]=keys,["DATAPROTECTION_CERT_PATH"]=cert,["DATAPROTECTION_CERT_PASSWORD"]=cert is null?null:password}).Build();
+    static ServiceProvider Keyring(IConfiguration config){var services=new ServiceCollection().AddLogging();services.AddRecepcionServices(config,false);return services.BuildServiceProvider();}
+    static string[] KeyFiles(string keys)=>Directory.GetFiles(keys,"*.xml").Select(File.ReadAllText).ToArray();
+    [Fact] public void NewKeyIsEncryptedToTheCertificate() // MR-37 (a)
+    {
+        var keys=Directory.CreateTempSubdirectory("keys-").FullName;var config=KeyringConfig(keys,SyntheticCertificate(Directory.CreateTempSubdirectory("cert-").FullName));
+        using var sp=Keyring(config);Hosting.ProtectKeyring(sp,config);
+        sp.GetRequiredService<IDataProtectionProvider>().CreateProtector("mr37").Protect("synthetic");
+        var files=KeyFiles(keys);Assert.NotEmpty(files);
+        Assert.All(files,xml=>{Assert.Contains("<encryptedSecret",xml);Assert.Contains("EncryptedKey",xml);Assert.DoesNotContain("<value>",xml);});
+    }
+    [Fact] public void AnotherProcessWithTheSameDirectoryAndCertificateUnprotects() // MR-37 (b)
+    {
+        var keys=Directory.CreateTempSubdirectory("keys-").FullName;var config=KeyringConfig(keys,SyntheticCertificate(Directory.CreateTempSubdirectory("cert-").FullName));
+        string payload;
+        using(var first=Keyring(config)){Hosting.ProtectKeyring(first,config);payload=first.GetRequiredService<IDataProtectionProvider>().CreateProtector("mr37").Protect("synthetic");}
+        Assert.Contains(KeyFiles(keys),xml=>xml.Contains("EncryptedKey"));
+        using var second=Keyring(config);
+        Assert.Equal("synthetic",second.GetRequiredService<IDataProtectionProvider>().CreateProtector("mr37").Unprotect(payload));
+    }
+    [Fact] public void PayloadOfAnOldUnprotectedKeyIsStillRead() // MR-37 (c)
+    {
+        var keys=Directory.CreateTempSubdirectory("keys-").FullName;string payload;
+        using(var before=Keyring(KeyringConfig(keys,null))){payload=before.GetRequiredService<IDataProtectionProvider>().CreateProtector("mr37").Protect("synthetic");}
+        Assert.All(KeyFiles(keys),xml=>Assert.DoesNotContain("<encryptedSecret",xml));
+        var config=KeyringConfig(keys,SyntheticCertificate(Directory.CreateTempSubdirectory("cert-").FullName));
+        using var after=Keyring(config);Hosting.ProtectKeyring(after,config);
+        Assert.Contains(KeyFiles(keys),xml=>xml.Contains("EncryptedKey"));
+        Assert.Equal("synthetic",after.GetRequiredService<IDataProtectionProvider>().CreateProtector("mr37").Unprotect(payload));
+    }
+    [Fact] public void ProductionWithoutCertificateRefusesToStart() // MR-37 (d)
+    {
+        IHostEnvironment Env(string name)=>new Microsoft.Extensions.Hosting.Internal.HostingEnvironment{EnvironmentName=name};
+        var keys=Directory.CreateTempSubdirectory("keys-").FullName;
+        var refused=Assert.Throws<InvalidOperationException>(()=>Hosting.RequireKeyringCertificate(KeyringConfig(keys,null),Env("Production")));
+        Assert.Contains("DATAPROTECTION_CERT_PATH",refused.Message);
+        Hosting.RequireKeyringCertificate(KeyringConfig(keys,null),Env("Development"));
+        // N5: every environment that is not Development needs the certificate, not only Production.
+        Assert.Contains("DATAPROTECTION_CERT_PATH",Assert.Throws<InvalidOperationException>(()=>Hosting.RequireKeyringCertificate(KeyringConfig(keys,null),Env("Staging"))).Message);
+        var cert=SyntheticCertificate(Directory.CreateTempSubdirectory("cert-").FullName);
+        Hosting.RequireKeyringCertificate(KeyringConfig(keys,cert),Env("Production"));
+        // A wrong password or a missing file fails with a message that names the setting, never the password.
+        var wrong=Assert.Throws<InvalidOperationException>(()=>Hosting.KeyringCertificate(KeyringConfig(keys,cert,"not-the-password")));
+        Assert.Contains("DATAPROTECTION_CERT_PASSWORD",wrong.Message);Assert.DoesNotContain("not-the-password",wrong.Message);
+        Assert.Contains("DATAPROTECTION_CERT_PATH",Assert.Throws<InvalidOperationException>(()=>Hosting.KeyringCertificate(KeyringConfig(keys,Path.Combine(keys,"absent.p12")))).Message);
+        var root=new DirectoryInfo(AppContext.BaseDirectory);
+        while(root is not null&&!File.Exists(Path.Combine(root.FullName,"backend","Program.cs")))root=root.Parent;
+        var program=File.ReadAllText(Path.Combine(root!.FullName,"backend","Program.cs"));
+        Assert.Contains("Hosting.RequireKeyringCertificate(config, builder.Environment);",program);
+        Assert.Contains("Hosting.ProtectKeyring(app.Services, config);",program);
+    }
+    [Fact] public void ANewProtectedKeyIsCreatedOnceWhenNoKeyIsEncrypted() // MR-37 (e)
+    {
+        var keys=Directory.CreateTempSubdirectory("keys-").FullName;
+        using(var before=Keyring(KeyringConfig(keys,null))){before.GetRequiredService<IDataProtectionProvider>().CreateProtector("mr37").Protect("synthetic");}
+        Assert.Single(KeyFiles(keys));
+        var config=KeyringConfig(keys,SyntheticCertificate(Directory.CreateTempSubdirectory("cert-").FullName));
+        using(var after=Keyring(config)){Hosting.ProtectKeyring(after,config);}
+        Assert.Equal(2,KeyFiles(keys).Length);Assert.Single(KeyFiles(keys),xml=>xml.Contains("EncryptedKey"));
+        using(var again=Keyring(config)){Hosting.ProtectKeyring(again,config);}
+        Assert.Equal(2,KeyFiles(keys).Length);
+    }
+    // MR-37 I-1: a rollback to an image without the certificate leaves plaintext keys, one current and one
+    // scheduled. The next start with the certificate must not keep using either: once the plaintext key
+    // files are gone, what was written after that start still reads.
+    [Fact] public void APlaintextDefaultLeftByARollbackIsReplacedAtStartup()
+    {
+        var keys=Directory.CreateTempSubdirectory("keys-").FullName;var config=KeyringConfig(keys,SyntheticCertificate(Directory.CreateTempSubdirectory("cert-").FullName));
+        using(var first=Keyring(config))Hosting.ProtectKeyring(first,config);
+        Guid scheduled;
+        using(var rollback=Keyring(KeyringConfig(keys,null)))
+        {
+            var manager=rollback.GetRequiredService<Microsoft.AspNetCore.DataProtection.KeyManagement.IKeyManager>();var now=DateTimeOffset.UtcNow;
+            manager.CreateNewKey(now,now.AddDays(90));
+            scheduled=manager.CreateNewKey(now.AddDays(3),now.AddDays(93)).KeyId;
+        }
+        string payload;
+        using(var after=Keyring(config)){Hosting.ProtectKeyring(after,config);payload=after.GetRequiredService<IDataProtectionProvider>().CreateProtector("mr37").Protect("synthetic");}
+        var revocations=Directory.GetFiles(keys,"revocation-*.xml").Select(File.ReadAllText).ToArray();
+        foreach(var file in Directory.GetFiles(keys,"key-*.xml").Where(f=>!File.ReadAllText(f).Contains("<encryptedSecret")))File.Delete(file);
+        using var reader=Keyring(config);
+        Assert.Equal("synthetic",reader.GetRequiredService<IDataProtectionProvider>().CreateProtector("mr37").Unprotect(payload));
+        // The scheduled plaintext key protected nothing yet; it is revoked so it never becomes the default.
+        Assert.Contains(revocations,xml=>xml.Contains(scheduled.ToString()));
+    }
+    // MR-37 I-2: Easypanel mounts files as text, so the certificate may arrive as the base64 of the .p12.
+    [Fact] public void ABase64CertificateFileProtectsTheKeyring()
+    {
+        var certDir=Directory.CreateTempSubdirectory("cert-").FullName;var b64=Path.Combine(certDir,"dataprotection.p12.b64");
+        File.WriteAllText(b64,Convert.ToBase64String(File.ReadAllBytes(SyntheticCertificate(certDir)),Base64FormattingOptions.InsertLineBreaks)+"\n");
+        var keys=Directory.CreateTempSubdirectory("keys-").FullName;var config=KeyringConfig(keys,b64);
+        string payload;
+        using(var first=Keyring(config)){Hosting.ProtectKeyring(first,config);payload=first.GetRequiredService<IDataProtectionProvider>().CreateProtector("mr37").Protect("synthetic");}
+        Assert.All(KeyFiles(keys),xml=>Assert.Contains("EncryptedKey",xml));
+        using var second=Keyring(config);
+        Assert.Equal("synthetic",second.GetRequiredService<IDataProtectionProvider>().CreateProtector("mr37").Unprotect(payload));
     }
     sealed class TimingOut:HttpMessageHandler
     {
