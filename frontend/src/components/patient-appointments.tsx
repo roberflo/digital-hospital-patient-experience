@@ -29,13 +29,13 @@ export function PatientAppointments({ contact, me }: { contact: Contact; me: Me 
       ? `/hospital/contacts/${contact.id}/appointments?from=${today}&to=${end.toISOString().slice(0, 10)}`
       : null,
     fetcher,
-    { shouldRetryOnError: false },
+    { shouldRetryOnError: false, revalidateOnFocus: false },
   );
   // MR-44: a failed read (Hospital down, 403) leaves the profile as it was, without the line and without a toast.
   const { data: attendance } = useSWR<{ noShows: number; consecutiveNoShows: number }>(
     contact.patientId ? `/hospital/contacts/${contact.id}/attendance` : null,
     fetcher,
-    { shouldRetryOnError: false },
+    { shouldRetryOnError: false, revalidateOnFocus: false },
   );
   const noShows = attendance && noShowLine(attendance);
   return (

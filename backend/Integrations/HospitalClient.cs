@@ -99,7 +99,12 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
     public async Task<HospitalAttendance> GetPatientAttendanceAsync(Guid tenantId, Guid patientId, string phone, CancellationToken ct = default)
     {
         await GetVerifiedPatientAsync(tenantId, patientId, phone, ct);
-        return await ReadAsync<HospitalAttendance>(tenantId, $"v1/agenda/patients/{patientId:D}/attendance", ct);
+        // Fails closed: a count Hospital did not send, or one that cannot be, is never shown as one.
+        HospitalAttendance? answer;
+        try { answer = await ReadAsync<HospitalAttendance>(tenantId, $"v1/agenda/patients/{patientId:D}/attendance", ct); }
+        catch (JsonException) { answer = null; }
+        return answer is { NoShows: >= 0, ConsecutiveNoShows: >= 0 } && answer.ConsecutiveNoShows <= answer.NoShows ? answer
+            : throw new HospitalIntegrationException("hospital.invalid_response", HttpStatusCode.BadGateway);
     }
 
     /// <summary>Only ever the patient-scoped agenda: the whole day's agenda carries every other patient (MR-12).</summary>

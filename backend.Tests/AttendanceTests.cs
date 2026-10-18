@@ -21,7 +21,7 @@ public sealed class AttendanceTests : IAsyncLifetime
         var path = request.RequestUri!.AbsolutePath;
         if (path.StartsWith("/v1/patients/")) return Task.FromResult(AgentHarness.Json(new { patientId = h.Contact.PatientId, givenNames = "Paciente", familyNames = "Sintético", phone = phone ?? h.Contact.Phone }));
         lock (reads) reads.Add((path, request.Headers.Authorization?.Parameter));
-        return Task.FromResult(status == HttpStatusCode.OK ? AgentHarness.Json(body!) : new HttpResponseMessage(status) { Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json") });
+        return Task.FromResult(status == HttpStatusCode.OK ? body is string raw ? new HttpResponseMessage(status) { Content = new StringContent(raw, System.Text.Encoding.UTF8, "application/json") } : AgentHarness.Json(body!) : new HttpResponseMessage(status) { Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json") });
     });
     string token = "";
     HttpContext Staff()
@@ -66,6 +66,21 @@ public sealed class AttendanceTests : IAsyncLifetime
         Assert.Equal("hospital.patient_phone_mismatch", appointments.Code);
         Assert.Equal((appointments.Code, appointments.StatusCode), (attendance.Code, attendance.StatusCode));
         Assert.Empty(reads);
+    }
+
+    /// <summary>A count Hospital did not send, or one that cannot be, is not shown as a count: it fails closed.</summary>
+    [Theory]
+    [InlineData("""{"noShowCount":3}""")]
+    [InlineData("""{"noShows":2}""")]
+    [InlineData("""{"consecutiveNoShows":0}""")]
+    [InlineData("""{"noShows":1,"consecutiveNoShows":3}""")]
+    [InlineData("""{"noShows":-1,"consecutiveNoShows":0}""")]
+    [InlineData("""{"noShows":2,"consecutiveNoShows":-1}""")]
+    public async Task AnAnswerThatIsNotACountIsAnInvalidResponse(string answer)
+    {
+        await h.Link();
+        var e = await Assert.ThrowsAsync<HospitalIntegrationException>(() => HospitalEndpoints.ContactAttendance(h.Contact.Id, Staff(), h.Db, h.Client(Hospital(HttpStatusCode.OK, answer)), h.Scope));
+        Assert.Equal(("hospital.invalid_response", HttpStatusCode.BadGateway), (e.Code, e.StatusCode));
     }
 
     [Theory]

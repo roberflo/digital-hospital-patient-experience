@@ -188,3 +188,29 @@ test('restricted prescription content stays hidden and clinical denial has a ret
     0,
   );
 });
+test('MR-44 the profile says the no-shows Hospital counts, and nothing when the read fails', async ({
+  page,
+}) => {
+  await login(page, 'agent');
+  let attendance: { status: number; json: object } = {
+    status: 403,
+    json: { title: 'Sin permiso' },
+  };
+  await page.route(`**/api/crm/hospital/contacts/${id}/attendance`, (r) => r.fulfill(attendance));
+  await inbox(page);
+  if (!(await page.getByRole('heading', { name: 'Citas en Hospital' }).isVisible()))
+    await page.getByRole('button', { name: 'Ver información del paciente' }).click();
+  await expect(page.getByRole('heading', { name: 'Citas en Hospital' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Consultar próximas citas' })).toBeVisible();
+  await expect(page.getByText(/No asistió/)).toHaveCount(0);
+
+  attendance = { status: 200, json: { noShows: 2, consecutiveNoShows: 1 } };
+  await page.reload();
+  await page
+    .locator('.conversation-card')
+    .filter({ hasText: 'Paciente clínico sintético' })
+    .click();
+  if (!(await page.getByRole('heading', { name: 'Citas en Hospital' }).isVisible()))
+    await page.getByRole('button', { name: 'Ver información del paciente' }).click();
+  await expect(page.getByText('No asistió 2 veces · 1 seguida', { exact: true })).toBeVisible();
+});

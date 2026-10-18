@@ -90,5 +90,5 @@ public static class HospitalEndpoints
     }
 }
 public sealed record VisitKindAnswer(string VisitKind);
-public sealed record HospitalAttendance(int NoShows, int ConsecutiveNoShows);
+public sealed record HospitalAttendance([property: System.Text.Json.Serialization.JsonRequired] int NoShows, [property: System.Text.Json.Serialization.JsonRequired] int ConsecutiveNoShows);
 public record AppointmentInput(Guid ContactId, string Action, Guid? AppointmentId, Guid DoctorId, DateTimeOffset StartsAt, int DurationMinutes, string? CancelReason = null, string? VisitKind = null);
