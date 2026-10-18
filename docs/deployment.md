@@ -31,7 +31,7 @@ API:
 - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI=https://<api>/oauth/google/callback`, `FRONTEND_URL=https://<web>`.
 - `HOSPITAL_API_URL`, `HOSPITAL_SERVICE_CLIENT_SECRET`, `HOSPITAL_ALLOWED_API_ORIGINS` y `HOSPITAL_PUBLIC_URL`, una vez por instalación ([hospital-easypanel.md](hospital-easypanel.md)). No hay configuración por hospital.
 
-Web recibe únicamente `AUTH_SECRET`, `NEXTAUTH_SECRET` (mismo valor), `NEXTAUTH_URL=https://<web>`, `API_URL=http://<servicio-api>:8080`, `KEYCLOAK_ISSUER`, `KEYCLOAK_CLIENT_ID`, `KEYCLOAK_CLIENT_SECRET`. No necesita claves Kapso/NIM/Google ni acceso a PostgreSQL.
+Web recibe `AUTH_SECRET`, `NEXTAUTH_SECRET` (mismo valor), `NEXTAUTH_URL=https://<web>`, `API_URL=http://<servicio-api>:8080`, `KEYCLOAK_ISSUER`, `KEYCLOAK_CLIENT_ID`, `KEYCLOAK_CLIENT_SECRET` y, opcional, `KEYCLOAK_INTERNAL_ISSUER`. Además lee `SEND_ENABLED` y `KAPSO_MANUAL_SEND_ENABLED` (mismos valores que la API) para que `/inbox` ofrezca enviar sólo cuando la API lo permitirá; la API decide cada envío. Sólo si se usa `/inbox`: `KAPSO_API_KEY` y `KAPSO_PHONE_NUMBER_ID` para leer sus conversaciones (el envío va por la API, MR-36) y `KAPSO_WEBHOOK_SECRET` para su webhook. No necesita claves NIM/Google ni acceso a PostgreSQL.
 
 Las migraciones EF están versionadas en `backend/Migrations`. Tras respaldar, iniciar una sola réplica con `INITIALIZE_DATABASE=true` para aplicarlas; después poner `false`. Antes de retroceder una versión, comprobar compatibilidad del esquema; no ejecutar `migrations remove` ni borrar volúmenes en producción.
 
@@ -164,17 +164,30 @@ Lo que el operador hace al desplegar la versión con MR-1…MR-42 ([mejoras-revi
 
 **Antes**
 
-1. **Hospital primero.** Desplegar Hospital con la lectura `GET v1/agenda/patients/{id}/earlier` (MR-42) y `Idempotency-Key` en `POST v1/agenda` y `POST v1/patients` (MR-41). Con un Hospital anterior Recepción no falla, pero toda cita sale `follow-up` (la lectura da 404). Recepción todavía no envía `Idempotency-Key` (la mitad de MR-41 que le toca está pendiente): cuando la envíe, Hospital ya debe aceptarla.
+1. **Hospital primero.** Ejecutar el paso `--migrate` de Hospital (crea `appointment_creation_key` y `registration_key`, las tablas de `Idempotency-Key`) y desplegar Hospital con la lectura `GET v1/agenda/patients/{id}/earlier` (MR-42) y `Idempotency-Key` en `POST v1/agenda` y `POST v1/patients` (MR-41). Con un Hospital anterior Recepción no falla, pero toda cita sale `follow-up` (la lectura da 404). Recepción todavía no envía `Idempotency-Key` (la mitad de MR-41 que le toca está pendiente): cuando la envíe, Hospital ya debe aceptarla.
 2. **Certificado del llavero (MR-37).** Generarlo, montarlo fuera de `/keys` y definir `DATAPROTECTION_CERT_PATH` y `DATAPROTECTION_CERT_PASSWORD` según «Llavero protegido» (arriba). Sin él la API no arranca fuera de Development: es lo buscado. Guardar el `.p12` y su contraseña en el gestor de secretos, aparte de los respaldos.
 3. **Respaldo.** `scripts/backup.sh` antes de migrar (dump y llavero en destinos separados).
-4. **`AGENT_LEGACY_QUESTIONS_BEFORE` (MR-40)** con la hora real del despliegue en ISO-8601 con zona (`2026-10-18T09:00:00-06:00`). Un «sí» a una pregunta que la versión anterior envió antes de esa hora se sigue entendiendo durante 24 h; sin la variable el corte es `2026-10-18T01:30Z`, y las preguntas enviadas entre ese corte y el despliegue real se quedarían sin respuesta reconocida. Se retira después del 2026-11-17.
+4. **`AGENT_LEGACY_QUESTIONS_BEFORE` (MR-40)** con la hora real del despliegue en ISO-8601 con zona (`2026-10-18T09:00:00-06:00`). Un «sí» a una pregunta que la versión anterior envió antes de esa hora se sigue entendiendo durante 24 h; sin la variable el corte es `2026-10-18T01:30Z`, y las preguntas enviadas entre ese corte y el despliegue real se quedarían sin respuesta reconocida. Ante la duda, mejor equivocarse hacia **tarde** (unos minutos después de que arranque la versión nueva): la transición sólo lee preguntas sin `PendingAction`, que la versión nueva siempre registra, y caduca a las 24 h; hacia temprano, un «sí» a una pregunta de la versión vieja deja de entenderse. Un valor ilegible o sin zona detiene el arranque (`AGENT_LEGACY_QUESTIONS_BEFORE must be an ISO-8601 time with its zone`). Se retira después del 2026-11-17.
 5. Opcionales: `AI_TURN_BUDGET_SECONDS` (90) y `AI_ATTEMPT_TIMEOUT_SECONDS` (30), ver «Variables de producción». Sin definirlas rigen los valores por defecto.
 
 **Al desplegar**
 
 6. **Migraciones `JobsStatusIndex` (MR-39) y `PendingActions` (MR-40).** Se aplican al arrancar una réplica con `INITIALIZE_DATABASE=true`; después volver a `false`. `PendingActions` borra una sola vez las filas de estado de `Activity` (`intake`, `visit_kind`, `proposal:%`); `proposal_used:%` y el historial se quedan. Una propuesta sin confirmar o un registro a medias en ese momento se pierden: el paciente vuelve a pedir la cita.
+   **Si se olvida `INITIALIZE_DATABASE=true`** la API arranca y `/health/ready` responde 200 (sólo comprueba la conexión), pero cada turno del agente termina `failed` con `42P01` (no existe la relación `PendingActions`) y, con la ventana de WhatsApp abierta, el paciente recibe el aviso de turno fallido (MR-3). Por eso el paso 7 mira la tabla de migraciones, no la salud.
 
 **Después**
 
-7. `/health/ready` y el inicio de sesión; en `/keys` aparece un `key-*.xml` con `encryptedSecret`.
+7. `/health/ready` y el inicio de sesión; en `/keys` aparece un `key-*.xml` con `encryptedSecret`. Y las dos migraciones aplicadas (en Compose; en Easypanel, la misma consulta en la consola del servicio db):
+
+   ```sh
+   docker compose exec -T db psql -U recepcion -d recepcion -c \
+     "SELECT \"MigrationId\" FROM \"__EFMigrationsHistory\" WHERE \"MigrationId\" IN ('20261017201035_JobsStatusIndex','20261017235936_PendingActions');"
+   ```
+
+   Deben salir las dos filas; con una sola o ninguna, repetir el paso 6.
 8. En `/api/jobs`, que no queden trabajos `failed` nuevos; una cita de prueba con un paciente sintético sale `first-visit` o `follow-up` según su historial en Hospital.
+
+**Retroceder**
+
+- Tras MR-37 una imagen anterior **no puede leer lo cifrado desde el despliegue**: no carga el certificado y las claves nuevas del llavero están cifradas con él (ver «Llavero protegido»). Retroceder la imagen sin restaurar deja ilegibles los contactos, mensajes y tokens escritos desde entonces.
+- El `Down` de `PendingActions` sólo borra la tabla: **no recupera las filas de `Activity` que la migración borró** (`intake`, `visit_kind`, `proposal:%`). La única vuelta atrás completa es restaurar el dump y el llavero del paso 3.

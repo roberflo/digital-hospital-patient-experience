@@ -15,6 +15,7 @@ public static class Hosting
 {
     public static void AddRecepcionServices(this IServiceCollection services, IConfiguration config, bool dev)
     {
+        AgentRuntime.LegacyQuestionsBefore(config); // MR-40: an unreadable cut stops the start instead of being read as the default
         services.AddScoped<TenantScope>(); services.AddScoped<CurrentUser>();
         services.AddDbContext<CrmDb>(o => o.UseNpgsql(config.GetConnectionString("Database")));
         var keyring = services.AddDataProtection().SetApplicationName("Recepcion").PersistKeysToFileSystem(new DirectoryInfo(KeyDirectory(config)));

@@ -333,7 +333,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
     // ponytail: retire this and the setting after 2026-11-17; a day after the deploy nothing can still match it.
     async Task<string?> LegacyQuestion(Message? asked, CancellationToken ct)
     {
-        var cut = DateTimeOffset.TryParse(config["AGENT_LEGACY_QUESTIONS_BEFORE"], System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var set) ? set : LegacyCut;
+        var cut = LegacyQuestionsBefore(config);
         if (asked is not { Sender: "agent" } || asked.CreatedAt >= cut || asked.CreatedAt < DateTimeOffset.UtcNow - QuestionLife || await db.PendingActions.AnyAsync(x => x.PromptMessageId == asked.Id, ct)) return null;
         return asked.Body.Contains(AgentGuard.EmergencyQuestion) ? "emergency" : asked.Body.Contains(AgentGuard.PersonQuestion) ? "person"
             : asked.Body.Contains(EmergencyContact, StringComparison.OrdinalIgnoreCase) ? "emergency-contact" : null;
@@ -341,6 +341,12 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
     const string EmergencyContact = "contacto de emergencia";
     /// <summary>When this change was committed (UTC); the deploy sets the real cut.</summary>
     static readonly DateTimeOffset LegacyCut = new(2026, 10, 18, 1, 30, 0, TimeSpan.Zero);
+    /// <summary>The cut of the deploy transition. Unset, the commit's; set, an ISO-8601 time with its zone, or the API does not start
+    /// (Hosting.AddRecepcionServices): read as the default by mistake, the old version's questions would go unanswered.</summary>
+    public static DateTimeOffset LegacyQuestionsBefore(IConfiguration config) =>
+        config["AGENT_LEGACY_QUESTIONS_BEFORE"] is not { Length: > 0 } value ? LegacyCut
+        : Regex.IsMatch(value.Trim(), @"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$") && DateTimeOffset.TryParse(value.Trim(), System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var set) ? set
+        : throw new InvalidOperationException("AGENT_LEGACY_QUESTIONS_BEFORE must be an ISO-8601 time with its zone, e.g. 2026-10-18T09:00:00-06:00 (docs/deployment.md)");
     /// <summary>Something the agent now waits on in this conversation; it is matched to the next message the agent sends (<see cref="Reply"/>).</summary>
     PendingAction Hold(string kind, string code, string body, TimeSpan life)
     {

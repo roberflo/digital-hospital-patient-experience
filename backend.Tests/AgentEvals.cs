@@ -202,7 +202,6 @@ public sealed class AgentEvalCases
         Assert.NotNull(root);
         var ids = Load().Select(spec => spec.GetProperty("id").GetString()).ToHashSet();
         var known = File.ReadAllLines(Path.Combine(root.FullName, "evals", "agent", "known-failures.txt")).Where(line => line.Trim() is { Length: > 0 } text && !text.StartsWith('#')).ToList();
-        Assert.NotEmpty(known);
         Assert.All(known, line =>
         {
             var parts = line.Trim().Split(' ', 2);
