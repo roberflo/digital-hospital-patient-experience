@@ -48,26 +48,38 @@ public static class Hosting
     {
         var path = config["DATAPROTECTION_CERT_PATH"];
         if (string.IsNullOrWhiteSpace(path)) return null;
-        if (!File.Exists(path)) throw new InvalidOperationException("DATAPROTECTION_CERT_PATH does not point to a readable PKCS#12 file");
+        byte[] bytes;
+        try { bytes = File.ReadAllBytes(path); }
+        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { throw new InvalidOperationException("DATAPROTECTION_CERT_PATH does not point to a readable PKCS#12 file"); }
+        catch (UnauthorizedAccessException) { throw new InvalidOperationException("DATAPROTECTION_CERT_PATH is not readable by the API user (UID 1654): chown or chmod the mounted file (docs/deployment.md)"); }
+        // Easypanel mounts files as text: the base64 of the .p12 is accepted too. A DER PKCS#12 starts with 0x30.
+        if (bytes is [not 0x30, ..])
+            try { bytes = Convert.FromBase64String(System.Text.Encoding.ASCII.GetString(bytes)); }
+            catch (FormatException) { throw new InvalidOperationException("DATAPROTECTION_CERT_PATH is neither a PKCS#12 file nor its base64"); }
         X509Certificate2 cert;
-        try { cert = X509CertificateLoader.LoadPkcs12FromFile(path, config["DATAPROTECTION_CERT_PASSWORD"]); }
+        try { cert = X509CertificateLoader.LoadPkcs12(bytes, config["DATAPROTECTION_CERT_PASSWORD"]); }
         catch (CryptographicException) { throw new InvalidOperationException("DATAPROTECTION_CERT_PATH could not be opened: wrong DATAPROTECTION_CERT_PASSWORD or not a PKCS#12 file"); }
         return cert.HasPrivateKey ? cert : throw new InvalidOperationException("DATAPROTECTION_CERT_PATH has no private key: the keyring could not be read back");
     }
     public static void RequireKeyringCertificate(IConfiguration config, IHostEnvironment env)
     {
-        if (env.IsProduction() && string.IsNullOrWhiteSpace(config["DATAPROTECTION_CERT_PATH"]))
-            throw new InvalidOperationException("DATAPROTECTION_CERT_PATH is required in Production: mount the keyring certificate outside /keys (docs/deployment.md)");
+        if (!env.IsDevelopment() && string.IsNullOrWhiteSpace(config["DATAPROTECTION_CERT_PATH"]))
+            throw new InvalidOperationException("DATAPROTECTION_CERT_PATH is required outside Development: mount the keyring certificate outside /keys (docs/deployment.md)");
     }
-    /// <summary>Once at startup: with a certificate and no encrypted key yet, a new key becomes the default so new data stops depending on plaintext keys. Old keys stay readable.</summary>
+    /// <summary>Once at startup, with a certificate: the key the resolver would use must be encrypted, or a new encrypted key becomes the default. Old keys stay readable.</summary>
     public static void ProtectKeyring(IServiceProvider services, IConfiguration config)
     {
         if (string.IsNullOrWhiteSpace(config["DATAPROTECTION_CERT_PATH"])) return;
-        var dir = new DirectoryInfo(KeyDirectory(config));
-        // ponytail: scans the key files; the keyring is a handful of small XML files.
-        if (dir.Exists && dir.EnumerateFiles("*.xml").Any(f => File.ReadAllText(f.FullName).Contains("<encryptedSecret", StringComparison.Ordinal))) return;
-        var now = DateTimeOffset.UtcNow;
-        services.GetRequiredService<IKeyManager>().CreateNewKey(now, now.AddDays(90));
+        var dir = KeyDirectory(config);
+        bool Encrypted(IKey key) { var file = Path.Combine(dir, $"key-{key.KeyId:D}.xml"); return File.Exists(file) && File.ReadAllText(file).Contains("<encryptedSecret", StringComparison.Ordinal); }
+        var manager = services.GetRequiredService<IKeyManager>(); var keys = manager.GetAllKeys(); var now = DateTimeOffset.UtcNow;
+        // A plaintext key scheduled beyond the resolver's 5-minute clock skew has protected nothing yet (a
+        // rollback to an image without the certificate leaves one): revoke it so it never becomes the default.
+        foreach (var key in keys.Where(k => !k.IsRevoked && k.ActivationDate > now.AddMinutes(5) && !Encrypted(k)))
+            manager.RevokeKey(key.KeyId, "MR-37: plaintext key scheduled while the keyring certificate is mounted");
+        var current = services.GetRequiredService<Microsoft.AspNetCore.DataProtection.KeyManagement.Internal.IDefaultKeyResolver>().ResolveDefaultKeyPolicy(now, keys).DefaultKey;
+        if (current is not null && Encrypted(current)) return;
+        manager.CreateNewKey(now, now.AddDays(90));
     }
     static string KeyDirectory(IConfiguration config) => config["KEY_DIRECTORY"] ?? "/keys";
     /// <summary>The outermost middleware Program.cs installs: security headers and the one place an exception becomes a response.</summary>

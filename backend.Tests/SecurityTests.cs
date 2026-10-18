@@ -129,6 +129,8 @@ public sealed class SecurityTests {
         var refused=Assert.Throws<InvalidOperationException>(()=>Hosting.RequireKeyringCertificate(KeyringConfig(keys,null),Env("Production")));
         Assert.Contains("DATAPROTECTION_CERT_PATH",refused.Message);
         Hosting.RequireKeyringCertificate(KeyringConfig(keys,null),Env("Development"));
+        // N5: every environment that is not Development needs the certificate, not only Production.
+        Assert.Contains("DATAPROTECTION_CERT_PATH",Assert.Throws<InvalidOperationException>(()=>Hosting.RequireKeyringCertificate(KeyringConfig(keys,null),Env("Staging"))).Message);
         var cert=SyntheticCertificate(Directory.CreateTempSubdirectory("cert-").FullName);
         Hosting.RequireKeyringCertificate(KeyringConfig(keys,cert),Env("Production"));
         // A wrong password or a missing file fails with a message that names the setting, never the password.
@@ -151,6 +153,41 @@ public sealed class SecurityTests {
         Assert.Equal(2,KeyFiles(keys).Length);Assert.Single(KeyFiles(keys),xml=>xml.Contains("EncryptedKey"));
         using(var again=Keyring(config)){Hosting.ProtectKeyring(again,config);}
         Assert.Equal(2,KeyFiles(keys).Length);
+    }
+    // MR-37 I-1: a rollback to an image without the certificate leaves plaintext keys, one current and one
+    // scheduled. The next start with the certificate must not keep using either: once the plaintext key
+    // files are gone, what was written after that start still reads.
+    [Fact] public void APlaintextDefaultLeftByARollbackIsReplacedAtStartup()
+    {
+        var keys=Directory.CreateTempSubdirectory("keys-").FullName;var config=KeyringConfig(keys,SyntheticCertificate(Directory.CreateTempSubdirectory("cert-").FullName));
+        using(var first=Keyring(config))Hosting.ProtectKeyring(first,config);
+        Guid scheduled;
+        using(var rollback=Keyring(KeyringConfig(keys,null)))
+        {
+            var manager=rollback.GetRequiredService<Microsoft.AspNetCore.DataProtection.KeyManagement.IKeyManager>();var now=DateTimeOffset.UtcNow;
+            manager.CreateNewKey(now,now.AddDays(90));
+            scheduled=manager.CreateNewKey(now.AddDays(3),now.AddDays(93)).KeyId;
+        }
+        string payload;
+        using(var after=Keyring(config)){Hosting.ProtectKeyring(after,config);payload=after.GetRequiredService<IDataProtectionProvider>().CreateProtector("mr37").Protect("synthetic");}
+        var revocations=Directory.GetFiles(keys,"revocation-*.xml").Select(File.ReadAllText).ToArray();
+        foreach(var file in Directory.GetFiles(keys,"key-*.xml").Where(f=>!File.ReadAllText(f).Contains("<encryptedSecret")))File.Delete(file);
+        using var reader=Keyring(config);
+        Assert.Equal("synthetic",reader.GetRequiredService<IDataProtectionProvider>().CreateProtector("mr37").Unprotect(payload));
+        // The scheduled plaintext key protected nothing yet; it is revoked so it never becomes the default.
+        Assert.Contains(revocations,xml=>xml.Contains(scheduled.ToString()));
+    }
+    // MR-37 I-2: Easypanel mounts files as text, so the certificate may arrive as the base64 of the .p12.
+    [Fact] public void ABase64CertificateFileProtectsTheKeyring()
+    {
+        var certDir=Directory.CreateTempSubdirectory("cert-").FullName;var b64=Path.Combine(certDir,"dataprotection.p12.b64");
+        File.WriteAllText(b64,Convert.ToBase64String(File.ReadAllBytes(SyntheticCertificate(certDir)),Base64FormattingOptions.InsertLineBreaks)+"\n");
+        var keys=Directory.CreateTempSubdirectory("keys-").FullName;var config=KeyringConfig(keys,b64);
+        string payload;
+        using(var first=Keyring(config)){Hosting.ProtectKeyring(first,config);payload=first.GetRequiredService<IDataProtectionProvider>().CreateProtector("mr37").Protect("synthetic");}
+        Assert.All(KeyFiles(keys),xml=>Assert.Contains("EncryptedKey",xml));
+        using var second=Keyring(config);
+        Assert.Equal("synthetic",second.GetRequiredService<IDataProtectionProvider>().CreateProtector("mr37").Unprotect(payload));
     }
     sealed class TimingOut:HttpMessageHandler
     {

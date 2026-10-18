@@ -18,7 +18,10 @@ keyring="$keyring_dir/keyring-${stamp}.tar.gz.enc"
 docker compose exec -T db pg_dump -U recepcion -d recepcion -Fc > "$dump.partial"
 mv "$dump.partial" "$dump"
 docker compose exec -T recepcion-api tar -C /keys -czf - . | openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -salt -pass env:KEYRING_BACKUP_PASSPHRASE -out "$keyring.partial"
-# A pipeline only reports openssl's status: decrypt and list the archive so a failed or truncated tar fails here.
-openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -pass env:KEYRING_BACKUP_PASSPHRASE -in "$keyring.partial" | tar -tzf - | grep -q '\.xml$' || { echo "keyring backup is empty or unreadable" >&2; rm -f "$keyring.partial"; exit 1; }
+# A pipeline only reports openssl's status: decrypt and list the WHOLE archive, so a failed or truncated
+# tar, or a wrong passphrase, fails here instead of producing a backup that never restores.
+fail() { echo "keyring backup is unreadable or empty: $1" >&2; rm -f "$keyring.partial"; exit 1; }
+list=$(openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -pass env:KEYRING_BACKUP_PASSPHRASE -in "$keyring.partial" | tar -tzf -) || fail "the archive does not decrypt and list completely"
+printf '%s\n' "$list" | grep -q 'key-.*\.xml$' || fail "no key-*.xml in /keys"
 mv "$keyring.partial" "$keyring"
 printf 'Backup completed:\n  %s\n  %s\n' "$dump" "$keyring"

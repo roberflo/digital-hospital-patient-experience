@@ -23,7 +23,7 @@ API:
 - `ASPNETCORE_ENVIRONMENT=Production`, `SEND_ENABLED=false` inicialmente.
 - `ConnectionStrings__Database=Host=<servicio-db>;Database=recepcion;Username=recepcion;Password=<secreto>`.
 - `KEY_DIRECTORY=/keys`, `PHONE_HASH_KEY`, `Auth__Authority`, `Auth__Audience=hospital-api`.
-- `DATAPROTECTION_CERT_PATH` y `DATAPROTECTION_CERT_PASSWORD` (MR-37): certificado PKCS#12 que cifra el llavero de `/keys`. **Production no arranca sin `DATAPROTECTION_CERT_PATH`** (`DATAPROTECTION_CERT_PATH is required in Production`); una contraseña equivocada o un fichero ausente también detienen el arranque nombrando la variable. El certificado se monta fuera de `/keys` y nunca entra en un respaldo. Ver «Llavero protegido».
+- `DATAPROTECTION_CERT_PATH` y `DATAPROTECTION_CERT_PASSWORD` (MR-37): certificado PKCS#12 que cifra el llavero de `/keys`. **Ningún entorno salvo Development arranca sin `DATAPROTECTION_CERT_PATH`** (`DATAPROTECTION_CERT_PATH is required outside Development`); una contraseña equivocada o un fichero ausente también detienen el arranque nombrando la variable. El certificado se monta fuera de `/keys` y nunca entra en un respaldo. Ver «Llavero protegido».
 - `BOOTSTRAP_TENANT_ID`: UUID real de Hospital; `BOOTSTRAP_TENANT_NAME`: nombre del negocio inicial.
 - `KAPSO_API_KEY`, `KAPSO_WEBHOOK_SECRET`, opcional `KAPSO_PHONE_NUMBER_ID` para asociar el primer número al tenant bootstrap.
 - `NVIDIA_API_KEY`, `AI_BASE_URL=https://integrate.api.nvidia.com/v1`, `AI_MODEL=nvidia/nemotron-3-super-120b-a12b`.
@@ -96,16 +96,26 @@ El agente de WhatsApp envía al proveedor la guía de atención, hasta 24 mensaj
 
 ### Llavero protegido (MR-37)
 
-Con `DATAPROTECTION_CERT_PATH` cada clave nueva de DataProtection se escribe en `/keys` cifrada con el certificado (`<encryptedSecret>` con `EncryptedKey`). Al arrancar, si ninguna clave de `/keys` está cifrada, la API crea una clave nueva cifrada (vigencia 90 días) que pasa a ser la de uso; las claves viejas sin cifrar **siguen leyéndose**. Límite: lo cifrado con una clave vieja sigue legible con solo `/keys` mientras exista; deja de depender de ella cuando ese dato se reescribe. Development sin certificado funciona como antes.
+Autorizado por el dueño el 2026-10-17.
+
+Con `DATAPROTECTION_CERT_PATH` cada clave nueva de DataProtection se escribe en `/keys` cifrada con el certificado (`<encryptedSecret>` con `EncryptedKey`). Al arrancar, si la clave que DataProtection usaría por defecto no está cifrada (o no hay ninguna), la API crea una clave nueva cifrada (vigencia 90 días) que pasa a ser la de uso, y revoca las claves sin cifrar programadas para activarse más adelante (aún no protegieron nada); las claves viejas sin cifrar **siguen leyéndose**. Límite: lo cifrado con una clave vieja sigue legible con solo `/keys` mientras exista; deja de depender de ella cuando ese dato se reescribe. Development sin certificado funciona como antes.
+
+- **Volver a una versión anterior a MR-37 deja ilegible lo escrito desde el despliegue**: esa versión no carga el certificado y no puede descifrar las claves nuevas. Si hubo que volver atrás y ya escribió con una clave suya sin cifrar, el siguiente arranque con MR-37 lo detecta y vuelve a una clave cifrada; lo escrito durante el retroceso queda con esa clave sin cifrar.
+- **Custodia**: perder el `.p12` o su contraseña deja ilegible todo lo escrito desde MR-37, aunque `/keys` y el dump estén intactos. Guardar ambos en el gestor de secretos, en un lugar distinto de los respaldos.
+- **Rotación del certificado: aún no se soporta.** Cambiar el certificado montado deja ilegibles las claves cifradas con el anterior. Soportarlo exige cargar también el anterior con `UnprotectKeysWithAnyCertificate` y crear una clave nueva con el nuevo; queda para un cambio aparte.
 
 **Paso de despliegue, antes de desplegar la versión con MR-37:**
 
 1. Generar el certificado fuera del repositorio (RSA 3072, PKCS#12 con contraseña). En local: `DATAPROTECTION_CERT_PASSWORD=… scripts/dev-keyring-cert.sh` lo escribe en `${HOME}/.config/recepcion/dataprotection.p12` y se niega a sobrescribirlo. `*.p12` y `*.pfx` están en `.gitignore`.
-2. En Easypanel, en la API de Recepción: montar el `.p12` como fichero (Mounts → File) en `/run/secrets/dataprotection.p12`, legible por UID 1654, **fuera** del volumen `/keys`; definir `DATAPROTECTION_CERT_PATH=/run/secrets/dataprotection.p12` y `DATAPROTECTION_CERT_PASSWORD`. Guardar una copia del `.p12` y su contraseña en el gestor de secretos, separada de los respaldos.
+2. En Easypanel, en la API de Recepción: Easypanel monta ficheros como texto, así que se pega el **base64** del `.p12` (`base64 -i dataprotection.p12` en macOS, `base64 -w 76 dataprotection.p12` en Linux): Mounts → File, ruta `/run/secrets/dataprotection.p12.b64`, **fuera** del volumen `/keys`. La API acepta el `.p12` binario o su base64 en la misma variable, sin otra configuración. Definir `DATAPROTECTION_CERT_PATH=/run/secrets/dataprotection.p12.b64` y `DATAPROTECTION_CERT_PASSWORD`. Guardar una copia del `.p12` y su contraseña en el gestor de secretos, separada de los respaldos.
 3. Desplegar. Si falta el certificado, la API no arranca y el log dice qué variable falta: es el comportamiento buscado, no un fallo a reintentar.
 4. Comprobar `/health/ready` y que en `/keys` apareció un `key-*.xml` que contiene `encryptedSecret`.
 
 En Compose local: `DATAPROTECTION_CERT_FILE=<ruta del .p12 en el host>` y `DATAPROTECTION_CERT_PASSWORD` en el entorno, y `docker compose -f docker-compose.yml -f docker-compose.keyring.yml up -d`. No poner `DATAPROTECTION_CERT_PATH` en `.env`: la API lo recibiría sin el fichero montado.
+
+**Permisos del fichero**: la API corre como UID 1654. En Linux un bind mount conserva dueño y modo del host, y un `.p12` con `0600` de otro usuario no se puede leer: la API se detiene con `DATAPROTECTION_CERT_PATH is not readable by the API user (UID 1654)`. Usar `sudo chown 1654 dataprotection.p12 && chmod 0400 dataprotection.p12` (o un grupo compartido con `0440`). En Docker Desktop (macOS) no hace falta.
+
+Las variables del llavero y de `backup.sh` no están en `.env.example`: ese fichero lo protege un hook frente a los agentes que implementaron MR-37. Esta sección es su referencia.
 
 **Ensayo de restauración** (en un entorno separado, nunca sobre la base compartida):
 
@@ -117,10 +127,23 @@ grep -l encryptedSecret restored-keys/*.xml   # claves protegidas por el certifi
 ```
 
 1. Con certificado: restaurar dump y `restored-keys` en el entorno de ensayo, montar el certificado y arrancar; abrir una conversación con mensajes y un contacto: se leen.
-2. Sin certificado (caso que debe fallar): el mismo arranque en Production se detiene con `DATAPROTECTION_CERT_PATH is required in Production`. Con Development, las claves cifradas no se pueden descifrar y los datos protegidos con ellas no se leen; los protegidos con claves viejas sin cifrar sí. Esto demuestra que `/keys` solo ya no basta.
+2. Sin certificado (caso que debe fallar): el mismo arranque en Production se detiene con `DATAPROTECTION_CERT_PATH is required outside Development`. Con Development, las claves cifradas no se pueden descifrar y los datos protegidos con ellas no se leen; los protegidos con claves viejas sin cifrar sí. Esto demuestra que `/keys` solo ya no basta.
 3. Con una frase de paso equivocada `openssl` responde `bad decrypt` y no extrae nada.
 
-Ensayado el 2026-10-17 en local con un `docker` simulado y datos sintéticos (`scripts/backup.sh`): destinos separados, llavero cifrado (`openssl enc'd data with salted password`), restauración idéntica (`diff -r`), y rechazo de destinos iguales o anidados, de la frase ausente, de la frase equivocada y de un llavero vacío. El certificado de `dev-keyring-cert.sh` carga con `X509CertificateLoader` de .NET 10. Pendiente: el ensayo completo con la API (pasos 1–2) en un entorno de ensayo.
+Ejecutado el 2026-10-17 en local con datos sintéticos, en proyectos de Compose desechables (`kd-a`, `kd-b`: Postgres 17 propio, red propia, API construida desde el árbol de MR-37 en Production, `SEND_ENABLED=false`, sin claves de Kapso ni de modelo) y un sondeo que lee y escribe un contacto mediante `Hosting.AddRecepcionServices`:
+
+| Paso | Resultado |
+|---|---|
+| A: contacto «old» escrito sin certificado | 1 clave, `encryptedSecret=0` |
+| A: API con certificado | `/health/ready` 200; clave nueva cifrada creada al arrancar |
+| A: contacto «new» con certificado; `backup.sh` (con `COMPOSE_PROJECT_NAME`/`COMPOSE_FILE`) | dump y `keyring-*.tar.gz.enc` en destinos separados (`openssl enc'd data with salted password`) |
+| B: `pg_restore` en Postgres vacío + llavero descifrado en directorio vacío | `/keys` idéntico (`diff -r`); API con el certificado **en base64**: `/health/ready` 200 |
+| B: lectura con certificado | «old» y «new» legibles |
+| C: API sin certificado | `Unhandled exception. System.InvalidOperationException: DATAPROTECTION_CERT_PATH is required outside Development`; `/health/ready` sin respuesta |
+| C: lectura sin certificado | «old» legible; «new» **no legible** (`CryptographicException`) |
+| Frase de paso equivocada | `bad decrypt`, nada extraído |
+
+Antes, con un `docker` simulado: rechazo de destinos iguales o anidados, de la frase ausente y de un llavero vacío.
 
 - Perder `/keys` impide descifrar contactos/mensajes/notas/tokens. Cambiar `PHONE_HASH_KEY` exige recalcular los índices de teléfonos; no cambiarlo como si fuera una contraseña ordinaria.
 - Logs operativos omiten cuerpos de mensajes y errores detallados de proveedores. Proteger también los volúmenes, copias de seguridad, acceso al host y retención de datos.
