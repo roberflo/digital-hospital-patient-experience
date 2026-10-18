@@ -97,8 +97,9 @@ function Status({ status }: { status?: MessageStatus }) {
       />
     );
   if (status === 'sent') return <Check className="size-3.5" aria-label="Enviado" />;
-  if (status === 'failed')
-    return <TriangleAlert className="size-3.5" aria-label="Envío fallido o sin confirmar" />;
+  if (status === 'failed') return <TriangleAlert className="size-3.5" aria-label="Envío fallido" />;
+  if (status === 'uncertain')
+    return <span>Sin confirmar — revisa el historial antes de repetir</span>;
   return <Clock3 className="size-3.5" aria-label="Pendiente" />;
 }
 class RequestError extends Error {

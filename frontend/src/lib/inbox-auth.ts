@@ -40,8 +40,8 @@ export async function authorizeInbox(req: NextRequest) {
   for (const cookie of response.headers.getSetCookie()) headers.append('Set-Cookie', cookie);
   return { number, headers };
 }
-// The check above may have renewed the session. Later calls in the same request carry the renewed
-// cookies, so a rotating refresh token is never spent twice.
+// Any call may renew the session. Each later call in the same request carries the cookies the
+// previous ones left, and `headers` collects every Set-Cookie for the response, error or not.
 function renewedCookies(req: NextRequest, headers: Headers) {
   const jar = new Map(req.cookies.getAll().map((c) => [c.name, c.value]));
   for (const line of headers.getSetCookie()) {
@@ -68,7 +68,14 @@ async function reception<T>(
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
   });
   const response = await forward(call, { params: Promise.resolve({ path }) }, false);
+  for (const cookie of response.headers.getSetCookie()) headers.append('Set-Cookie', cookie);
   const result = await response.json().catch(() => null);
+  // 403 here is TeamEndpoints.RequireEditable; as 403 the inbox would read it as lost access.
+  if (response.status === 403 && init.body !== undefined)
+    throw new InboxError(
+      409,
+      'Esta conversación la atiende otra persona; pídele que te la asigne.',
+    );
   if (!response.ok)
     throw new InboxError(
       response.status,
@@ -115,7 +122,10 @@ export async function sendThroughReception(
     },
   );
   if (!Array.isArray(rows) || rows.length !== 1)
-    throw new InboxError(409, 'Esta conversación aún no está en Recepción');
+    throw new InboxError(
+      409,
+      'Esta conversación aún no está en Recepción. Ábrela desde la bandeja cuando el paciente vuelva a escribir.',
+    );
   const sent = await reception<ReceptionMessage>(
     req,
     headers,
@@ -124,11 +134,8 @@ export async function sendThroughReception(
   );
   if (sent.status === 'failed')
     throw new InboxError(502, 'WhatsApp no aceptó el mensaje; no salió. Revisa el historial.');
-  if (sent.status !== 'sent')
-    throw new InboxError(
-      502,
-      'No se pudo confirmar el envío. Revisa el historial antes de repetir.',
-    );
+  // Stored but unconfirmed: shown as such, never as a failure that invites a retry with a new key.
+  const status = sent.status === 'sent' ? 'sent' : 'uncertain';
   return {
     id: sent.externalId || sent.id,
     timestamp: String(Math.floor(Date.parse(sent.createdAt) / 1000)),
@@ -136,19 +143,21 @@ export async function sendThroughReception(
     text: { body: sent.body },
     kapso: {
       direction: 'outbound',
-      status: 'sent',
+      status,
       whatsapp_conversation_id: input.conversationId,
     },
   };
 }
-export function errorResponse(error: unknown) {
-  return NextResponse.json(
+export function errorResponse(error: unknown, headers?: Headers) {
+  const response = NextResponse.json(
     { error: error instanceof InboxError ? error.message : 'No se pudo completar la operación.' },
     {
       status: error instanceof InboxError ? error.status : 500,
       headers: { 'Cache-Control': 'no-store' },
     },
   );
+  for (const cookie of headers?.getSetCookie() ?? []) response.headers.append('Set-Cookie', cookie);
+  return response;
 }
 export function requireOrigin(req: NextRequest) {
   const origin = process.env.NEXTAUTH_URL;

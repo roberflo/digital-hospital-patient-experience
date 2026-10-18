@@ -183,6 +183,36 @@ test('optimistic send reconciles SSE and ACK without duplicate or regressed chec
     fullPage: true,
   });
 });
+test('an unconfirmed send reads as unconfirmed, not as failed', async ({ page }) => {
+  await realtime(page);
+  await login(page);
+  await page.route('**/api/conversations?*', (route) =>
+    route.fulfill({ json: { data: [base], manualSendEnabled: true } }),
+  );
+  await page.route('**/api/conversations/*/messages*', (route) =>
+    route.fulfill({ json: { conversation: base, data: [inbound] } }),
+  );
+  await page.route('**/api/messages?*', (route) =>
+    route.fulfill({
+      json: {
+        message: {
+          ...inbound,
+          id: '44444444-4444-4444-8444-444444444444',
+          text: { body: 'Respuesta sin confirmar' },
+          kapso: { direction: 'outbound', status: 'uncertain' },
+        },
+      },
+    }),
+  );
+  await page.goto('/inbox');
+  await page.getByRole('button', { name: 'Abrir conversación con Paciente de prueba' }).click();
+  await page.getByLabel('Mensaje', { exact: true }).fill('Respuesta sin confirmar');
+  await page.getByRole('button', { name: 'Enviar mensaje', exact: true }).click();
+  await expect(
+    page.getByText('Sin confirmar — revisa el historial antes de repetir', { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByLabel('Envío fallido', { exact: true })).toHaveCount(0);
+});
 test('closed 24h window blocks composer even when manual send is configured', async ({ page }) => {
   await realtime(page);
   await login(page);

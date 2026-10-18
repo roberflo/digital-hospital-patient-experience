@@ -9,9 +9,12 @@ import { InboxError } from '@/lib/kapso';
 import { publish, readBody } from '@/lib/events';
 export const runtime = 'nodejs';
 export async function POST(req: NextRequest) {
+  let headers: Headers | undefined;
   try {
     requireOrigin(req);
-    const { number, headers } = await authorizeInbox(req);
+    const authorized = await authorizeInbox(req);
+    const number = authorized.number;
+    headers = authorized.headers;
     let body;
     try {
       body = JSON.parse((await readBody(req, 20000)).toString('utf8'));
@@ -40,6 +43,6 @@ export async function POST(req: NextRequest) {
     });
     return Response.json({ message }, { headers });
   } catch (error) {
-    return errorResponse(error);
+    return errorResponse(error, headers);
   }
 }

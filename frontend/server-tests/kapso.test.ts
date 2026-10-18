@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { registerHooks } from 'node:module';
@@ -100,6 +100,11 @@ test('reconciliation deduplicates webhook/ACK and prevents read status regressio
   );
 });
 test('provider reads scope number, verify conversation ownership and reverse history', async (t) => {
+  const old = process.env.KAPSO_API_KEY;
+  t.after(() => {
+    if (old === undefined) delete process.env.KAPSO_API_KEY;
+    else process.env.KAPSO_API_KEY = old;
+  });
   process.env.KAPSO_API_KEY = 'fixture-key';
   const paths: string[] = [];
   t.mock.method(globalThis, 'fetch', async (url: string) => {
@@ -128,125 +133,231 @@ test('provider reads scope number, verify conversation ownership and reverse his
   assert.throws(() => cursor('a'.repeat(1001)), { status: 400 });
 });
 // MR-36: /inbox sends through Recepción's API (agent paused, Activity, idempotency); never to Kapso.
-test('send goes through the Recepción API with the client key and never POSTs to Kapso', async (t) => {
-  registerHooks({
-    resolve: (specifier, context, next) =>
-      next(specifier === 'next/server' ? 'next/server.js' : specifier, context),
-  });
-  const { NextRequest } = await import('next/server');
-  const { encode } = await import('next-auth/jwt');
-  const { authorizeInbox, sendThroughReception } = await import('../src/lib/inbox-auth.ts');
-  process.env.AUTH_SECRET = 'synthetic-secret-for-tests-only';
-  process.env.NEXTAUTH_URL = 'http://localhost:3215';
-  process.env.API_URL = 'http://api.test';
-  process.env.KAPSO_API_KEY = 'fixture-key';
-  const reception = '22222222-2222-4222-8222-222222222222';
-  const key = '33333333-3333-4333-8333-333333333333';
-  const cookie =
-    'next-auth.session-token=' +
-    (await encode({
-      token: { sub: 'staff', accessToken: 'h.e30.s', accessExpires: Date.now() + 600000 },
-      secret: process.env.AUTH_SECRET,
-    }));
-  // What the API really answers: GET /api/conversations rows and the stored Message.
-  let matches: unknown[] = [{ conversation: { id: reception }, contact: {}, channel: {} }];
-  let sent: Response = Response.json({
+// Node resolves neither the `@/` alias nor `next/server` without the extension Next's bundler adds.
+registerHooks({
+  resolve: (specifier, context, next) =>
+    next(
+      specifier === 'next/server'
+        ? 'next/server.js'
+        : specifier.startsWith('@/')
+          ? new URL(`../src/${specifier.slice(2)}.ts`, import.meta.url).href
+          : specifier,
+      context,
+    ),
+});
+const { NextRequest } = await import('next/server');
+const { encode, decode } = await import('next-auth/jwt');
+const { authorizeInbox, sendThroughReception } = await import('../src/lib/inbox-auth.ts');
+const { POST } = await import('../src/app/api/messages/route.ts');
+const { GET: listRoute } = await import('../src/app/api/conversations/route.ts');
+const reception = '22222222-2222-4222-8222-222222222222';
+const key = '33333333-3333-4333-8333-333333333333';
+const stored = (status: string, externalId: string | null = 'wamid.sent') =>
+  Response.json({
     id: '44444444-4444-4444-8444-444444444444',
     conversationId: reception,
-    externalId: 'wamid.sent',
+    externalId,
     sender: 'human',
     body: 'test',
     type: 'text',
-    status: 'sent',
+    status,
     requestKey: key,
     createdAt: '2026-10-17T15:00:00+00:00',
   });
-  const calls: { url: string; method: string; headers: Headers; body?: string }[] = [];
+// Sets env for one test and puts back what was there.
+function env(t: TestContext, values: Record<string, string | undefined>) {
+  const old = Object.fromEntries(Object.keys(values).map((k) => [k, process.env[k]]));
+  const put = (v: Record<string, string | undefined>) => {
+    for (const [k, value] of Object.entries(v))
+      if (value === undefined) delete process.env[k];
+      else process.env[k] = value;
+  };
+  put(values);
+  t.after(() => put(old));
+}
+// What the API, Kapso and Keycloak really answer; every call recorded.
+function stack(t: TestContext) {
+  env(t, {
+    AUTH_SECRET: 'synthetic-secret-for-tests-only',
+    NEXTAUTH_URL: 'http://localhost:3215',
+    API_URL: 'http://api.test',
+    KAPSO_API_KEY: 'fixture-key',
+    KEYCLOAK_ISSUER: 'http://keycloak.test/realms/r',
+    KEYCLOAK_INTERNAL_ISSUER: undefined,
+    KEYCLOAK_CLIENT_ID: 'web',
+    KEYCLOAK_CLIENT_SECRET: 'synthetic',
+  });
+  const state = {
+    kapso: conversation as Conversation,
+    matches: [{ conversation: { id: reception }, contact: {}, channel: {} }] as unknown[],
+    sent: () => stored('sent'),
+    refreshes: [] as string[],
+    calls: [] as { url: string; method: string; headers: Headers; body?: string }[],
+  };
   t.mock.method(globalThis, 'fetch', async (url: string, init: RequestInit = {}) => {
     const method = init.method ?? 'GET';
-    calls.push({
-      url: String(url),
-      method,
-      headers: new Headers(init.headers),
-      body: init.body ? Buffer.from(init.body as ArrayBuffer).toString() : undefined,
-    });
+    const body =
+      init.body instanceof URLSearchParams
+        ? init.body.toString()
+        : init.body
+          ? Buffer.from(init.body as ArrayBuffer).toString()
+          : undefined;
+    state.calls.push({ url: String(url), method, headers: new Headers(init.headers), body });
+    if (String(url).startsWith('http://keycloak.test/')) {
+      const n = state.refreshes.push(new URLSearchParams(body).get('refresh_token')!);
+      // Short-lived on purpose: every call in the request renews again.
+      return Response.json({ access_token: `h.e30.${n}`, refresh_token: `r${n}`, expires_in: 1 });
+    }
     if (String(url) === 'http://api.test/api/channels')
       return Response.json([{ phoneNumberId: number }]);
     if (String(url).startsWith(`https://api.kapso.ai/platform/v1/whatsapp/conversations/${id}`))
-      return Response.json({ data: conversation });
-    if (String(url).startsWith('http://api.test/api/conversations?')) return Response.json(matches);
+      return Response.json({ data: state.kapso });
+    if (String(url).startsWith('https://api.kapso.ai/platform/v1/whatsapp/conversations?'))
+      return Response.json({ data: [state.kapso] });
+    if (String(url).startsWith('http://api.test/api/conversations?'))
+      return Response.json(state.matches);
     if (
       method === 'POST' &&
       String(url) === `http://api.test/api/conversations/${reception}/messages`
     )
-      return sent.clone();
+      return state.sent();
     return new Response(null, { status: 404 });
   });
-  const send = async (to: string, idempotencyKey = key) => {
-    const req = new NextRequest(`http://localhost:3215/api/messages?phoneNumberId=${number}`, {
-      method: 'POST',
-      headers: { cookie, origin: 'http://localhost:3215', 'idempotency-key': idempotencyKey },
-    });
-    const { headers } = await authorizeInbox(req);
-    return sendThroughReception(req, number, headers, { conversationId: id, to, text: 'test' });
-  };
-  const posts = () => calls.filter((c) => c.method === 'POST');
+  return state;
+}
+const session = async (token: Record<string, unknown>) =>
+  'next-auth.session-token=' +
+  (await encode({ token: { sub: 'staff', ...token }, secret: process.env.AUTH_SECRET! }));
+const fresh = () => session({ accessToken: 'h.e30.s', accessExpires: Date.now() + 600000 });
+const inboxRequest = (cookie: string, body: unknown, idempotencyKey = key) =>
+  new NextRequest(`http://localhost:3215/api/messages?phoneNumberId=${number}`, {
+    method: 'POST',
+    headers: {
+      cookie,
+      origin: 'http://localhost:3215',
+      'content-type': 'application/json',
+      'idempotency-key': idempotencyKey,
+    },
+    body: JSON.stringify(body),
+  });
+async function send(to: string, idempotencyKey = key) {
+  const req = inboxRequest(await fresh(), {}, idempotencyKey);
+  const { headers } = await authorizeInbox(req);
+  return sendThroughReception(req, number, headers, { conversationId: id, to, text: 'test' });
+}
+const writes = <T extends { url: string; method: string }>(calls: T[]) =>
+  calls.filter((c) => c.method !== 'GET' && !c.url.startsWith('http://keycloak.test/'));
 
+test('send goes through the Recepción API with the client key and never POSTs to Kapso', async (t) => {
+  const api = stack(t);
   const message = await send('+50370000000');
   assert.equal(message.id, 'wamid.sent');
   assert.equal(message.kapso?.status, 'sent');
   assert.equal(message.kapso?.whatsapp_conversation_id, id);
   const lookup = new URL(
-    calls.find((c) => c.url.startsWith('http://api.test/api/conversations?'))!.url,
+    api.calls.find((c) => c.url.startsWith('http://api.test/api/conversations?'))!.url,
   );
   assert.equal(lookup.searchParams.get('phone'), '+50370000000');
   assert.equal(lookup.searchParams.get('phoneNumberId'), number);
-  assert.equal(posts().length, 1);
-  assert.equal(posts()[0].url, `http://api.test/api/conversations/${reception}/messages`);
-  assert.equal(posts()[0].headers.get('idempotency-key'), key);
-  assert.deepEqual(JSON.parse(posts()[0].body!), { body: 'test' });
-  assert.equal(
-    calls.filter((c) => c.url.startsWith('https://api.kapso.ai') && c.method !== 'GET').length,
-    0,
-  );
+  assert.equal(writes(api.calls).length, 1);
+  assert.equal(writes(api.calls)[0].url, `http://api.test/api/conversations/${reception}/messages`);
+  assert.equal(writes(api.calls)[0].headers.get('idempotency-key'), key);
+  assert.deepEqual(JSON.parse(writes(api.calls)[0].body!), { body: 'test' });
+});
 
-  calls.length = 0;
+test('send refuses a wrong recipient, a missing key and a conversation Recepción does not hold', async (t) => {
+  const api = stack(t);
   await assert.rejects(send('50379999999'), { status: 400 });
+  api.kapso = { ...conversation, phone_number: null };
+  await assert.rejects(send('50370000000'), { status: 400 });
+  api.kapso = conversation;
   await assert.rejects(send('50370000000', 'not a key'), { status: 400 });
-  matches = [];
-  await assert.rejects(send('50370000000'), {
+  const absent = {
     status: 409,
-    message: 'Esta conversación aún no está en Recepción',
-  });
-  matches = [{ conversation: { id: reception } }, { conversation: { id: id } }];
-  await assert.rejects(send('50370000000'), {
-    status: 409,
-    message: 'Esta conversación aún no está en Recepción',
-  });
-  assert.equal(posts().length, 0);
+    message:
+      'Esta conversación aún no está en Recepción. Ábrela desde la bandeja cuando el paciente vuelva a escribir.',
+  };
+  api.matches = [];
+  await assert.rejects(send('50370000000'), absent);
+  api.matches = [{ conversation: { id: reception } }, { conversation: { id } }];
+  await assert.rejects(send('50370000000'), absent);
+  assert.equal(writes(api.calls).length, 0);
+});
 
-  // The API decides whether manual sending is on; its refusal reaches the UI as it was written.
-  matches = [{ conversation: { id: reception } }];
-  sent = Response.json(
-    { title: 'El envío manual está en pausa. Solicita a administración habilitarlo.', status: 400 },
-    { status: 400 },
-  );
+test('the API decides: its refusals reach the UI, failed is an error and uncertain is not', async (t) => {
+  const api = stack(t);
+  const paused = 'El envío manual está en pausa. Solicita a administración habilitarlo.';
+  api.sent = () => Response.json({ title: paused, status: 400 }, { status: 400 });
+  await assert.rejects(send('50370000000'), { status: 400, message: paused });
+  // Taken by someone else: not 403, which the inbox reads as "you lost access to this number".
+  api.sent = () =>
+    Response.json({ title: 'No tienes permiso para esta operación', status: 403 }, { status: 403 });
   await assert.rejects(send('50370000000'), {
-    status: 400,
-    message: 'El envío manual está en pausa. Solicita a administración habilitarlo.',
+    status: 409,
+    message: 'Esta conversación la atiende otra persona; pídele que te la asigne.',
   });
-  sent = Response.json({
-    id: reception,
-    externalId: null,
-    body: 'test',
-    status: 'uncertain',
-    createdAt: '2026-10-17T15:00:00+00:00',
-  });
+  api.sent = () => stored('failed', null);
   await assert.rejects(send('50370000000'), { status: 502 });
-  assert.equal(
-    calls.filter((c) => c.url.startsWith('https://api.kapso.ai') && c.method !== 'GET').length,
-    0,
+  api.sent = () => stored('uncertain', null);
+  const uncertain = await send('50370000000');
+  assert.equal(uncertain.kapso?.status, 'uncertain');
+  assert.equal(uncertain.id, '44444444-4444-4444-8444-444444444444');
+  assert.equal(writes(api.calls).filter((c) => c.url.startsWith('https://api.kapso.ai')).length, 0);
+});
+
+test('POST /api/messages sends through the API and keeps every renewed session cookie', async (t) => {
+  const api = stack(t);
+  // Expiring session: each of the three API calls renews it, each with the token the previous left.
+  const cookie = await session({
+    accessToken: 'h.e30.0',
+    refreshToken: 'r0',
+    accessExpires: Date.now(),
+  });
+  const body = { conversationId: id, to: '+50370000000', text: ' test ' };
+  const response = await POST(inboxRequest(cookie, body));
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).message.id, 'wamid.sent');
+  assert.deepEqual(api.refreshes, ['r0', 'r1', 'r2']);
+  assert.deepEqual(JSON.parse(writes(api.calls)[0].body!), { body: 'test' });
+  const last = response.headers
+    .getSetCookie()
+    .filter((c) => c.startsWith('next-auth.session-token='))
+    .at(-1)!;
+  const token = await decode({
+    token: last.split(';')[0].split('=')[1],
+    secret: process.env.AUTH_SECRET!,
+  });
+  assert.equal(token?.refreshToken, 'r3');
+
+  // An error after a renewal still hands the browser the renewed cookie.
+  api.matches = [];
+  const refused = await POST(
+    inboxRequest(
+      await session({ accessToken: 'h.e30.x', refreshToken: 'rx', accessExpires: Date.now() }),
+      body,
+    ),
   );
+  assert.equal(refused.status, 409);
+  assert.ok(refused.headers.getSetCookie().some((c) => c.startsWith('next-auth.session-token=')));
+});
+
+test('the composer opens with the same rule the API applies', async (t) => {
+  stack(t);
+  const manual = async (values: Record<string, string | undefined>) => {
+    env(t, values);
+    const response = await listRoute(
+      new NextRequest(`http://localhost:3215/api/conversations?phoneNumberId=${number}`, {
+        headers: { cookie: await fresh() },
+      }),
+    );
+    return (await response.json()).manualSendEnabled;
+  };
+  assert.equal(
+    await manual({ SEND_ENABLED: undefined, KAPSO_MANUAL_SEND_ENABLED: undefined }),
+    false,
+  );
+  assert.equal(await manual({ SEND_ENABLED: 'true', KAPSO_MANUAL_SEND_ENABLED: undefined }), true);
+  assert.equal(await manual({ SEND_ENABLED: undefined, KAPSO_MANUAL_SEND_ENABLED: 'true' }), true);
 });
 
 test('shared signed receiver routes each number separately without trusting inconsistent scopes', () => {

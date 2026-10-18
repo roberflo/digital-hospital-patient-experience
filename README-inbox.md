@@ -21,7 +21,11 @@ las variables exclusivamente al servidor:
 - `KAPSO_WEBHOOK_SECRET`: secreto del webhook; conservarlo al crearlo.
 - `KAPSO_MANUAL_SEND_ENABLED=false`: activar explícitamente con `true` cuando se
   autorice enviar respuestas manuales. Quien decide es la API (`recepcion-api`, vía
-  `.env`); en la web solo habilita el cuadro de texto. No activa el agente automático.
+  `.env`); en la web solo habilita el cuadro de texto, con la misma regla que la API
+  (`SEND_ENABLED=true` o esta variable). No activa el agente automático. Un envío
+  rechazado (ventana cerrada, número desactivado o envío en pausa) no pausa al agente
+  ni reasigna la conversación. Un envío sin confirmar se muestra como «Sin confirmar»
+  y no se reintenta.
 - `API_URL`, `AUTH_SECRET`, `NEXTAUTH_URL` y credenciales Keycloak: autenticación
   existente de Recepción. No usar variables `NEXT_PUBLIC_` para credenciales.
 
