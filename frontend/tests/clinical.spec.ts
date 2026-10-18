@@ -197,12 +197,15 @@ test('MR-44 the profile says the no-shows Hospital counts, and nothing when the 
     json: { title: 'Sin permiso' },
   };
   await page.route(`**/api/crm/hospital/contacts/${id}/attendance`, (r) => r.fulfill(attendance));
+  const refused = page.waitForResponse(`**/api/crm/hospital/contacts/${id}/attendance`);
   await inbox(page);
   if (!(await page.getByRole('heading', { name: 'Citas en Hospital' }).isVisible()))
     await page.getByRole('button', { name: 'Ver información del paciente' }).click();
+  await refused; // the 403 has arrived: the absence below is the component's answer to it, not a race
   await expect(page.getByRole('heading', { name: 'Citas en Hospital' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Consultar próximas citas' })).toBeVisible();
   await expect(page.getByText(/No asistió/)).toHaveCount(0);
+  await expect(page.locator('[data-sonner-toast]')).toHaveCount(0); // a failed read raises no toast
 
   attendance = { status: 200, json: { noShows: 2, consecutiveNoShows: 1 } };
   await page.reload();
