@@ -1069,7 +1069,12 @@ public sealed class AgentWorker(IServiceScopeFactory scopes, ILogger<AgentWorker
         catch (Exception ex) when (!stoppingToken.IsCancellationRequested) { log.LogWarning("Worker unavailable {ErrorType}", ex.GetType().Name); }
         catch (OperationCanceledException) { }
     }
+    /// <summary>The tenant's turn, then the daily retention sweep: the sweep runs after the claim, and its failure never holds the turn back (MR-39).</summary>
     public static async Task RunTenant(IServiceProvider sp, Guid tid, ILogger log, CancellationToken stoppingToken)
+    {
+        await Turn(sp, tid, log, stoppingToken); await Retention.Daily(sp.GetRequiredService<CrmDb>(), tid, log, stoppingToken);
+    }
+    static async Task Turn(IServiceProvider sp, Guid tid, ILogger log, CancellationToken stoppingToken)
     {
         var scope = sp.GetRequiredService<TenantScope>(); scope.Id = tid; var d = sp.GetRequiredService<CrmDb>(); var service = sp.GetRequiredService<ConversationService>();
         await InboxWorkflow.WakeDue(d,scope,service,stoppingToken);
