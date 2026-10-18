@@ -295,7 +295,7 @@ Verificación · 2026-10-13 (segunda entrega):
 
 ## Señales de alarma (MR-35) · 2026-10-17
 
-Lista y reglas aprobadas por el dueño el 2026-10-17, con las dos revisiones adversarias del mismo día. Antes del modelo, `AgentGuard.NamesEmergency` lleva estas señales al número de emergencia y a una persona por el mismo camino que «emergencia», «sobredosis» y «suicidio»: handoff urgente, sin llamar al modelo. Cada señal tiene su propio patrón con nombre en `AgentGuard.cs`. Los patrones se aplican a los primeros 4096 caracteres de cada mensaje, sin tildes, en minúsculas y con espacios simples. Los saltos de línea se conservan y cortan la cláusula. La guarda es la primera red; el modelo y las evals son la segunda, para lo que la lista cerrada de frases no reconoce.
+Lista y reglas aprobadas por el dueño el 2026-10-17, con las dos revisiones adversarias del mismo día. Antes del modelo, `AgentGuard.NamesEmergency` lleva estas señales al número de emergencia y a una persona por el mismo camino que «emergencia», «sobredosis» y «suicidio»: handoff urgente, sin llamar al modelo. Cada señal tiene su propio patrón con nombre en `AgentGuard.cs`. Los patrones se aplican a los últimos 4096 caracteres de cada mensaje, sin tildes, en minúsculas y con espacios simples. Las señales se buscan con los saltos de línea como espacios («no puedo⏎respirar»), y esos mismos saltos cortan la cláusula al leer negación, pasado y recuperación. La guarda es la primera red; el modelo y las evals son la segunda, para lo que la lista cerrada de frases no reconoce.
 
 | Señal | Patrón |
 |---|---|
@@ -308,7 +308,7 @@ Lista y reglas aprobadas por el dueño el 2026-10-17, con las dos revisiones adv
 | 7. Ideación suicida o autolesión | `Suicide` |
 | 8. Intoxicación o sobredosis (también «se tomó 20 pastillas», «toda la caja», «un frasco entero») | `Poisoning` |
 | 9. Reacción alérgica grave con hinchazón de cara o garganta: reacción y hinchazón en el mismo mensaje, o la garganta que se cierra | `Allergy` + `Swelling`, `AllergicAirway` |
-| 10. Infarto, derrame (cerebral, no «en el ojo»), embolia, ataque al corazón; como los mismos signos: paro cardiaco, preinfarto, ACV, ictus, trombosis | `Cardiac` |
+| 10. Infarto, derrame (cerebral, no «en el ojo»), embolia, ataque al corazón; como los mismos signos: paro cardiaco, preinfarto, ACV, ictus | `Cardiac` |
 | 11. «Se puso morado» y los labios morados (no un moretón en un dedo, brazo, pierna u ojo) y «se cayó y no se levanta» | `Collapse` |
 
 Reglas:
@@ -349,8 +349,7 @@ Criterios adicionales:
 Límites:
 
 - La lista de frases es cerrada, con las faltas de ortografía frecuentes; lo que no reconoce queda para el modelo, que es la segunda red, y para las evals. El dueño decidió el 2026-10-17 hacer una sola pasada más y publicar.
-- Una frase dentro de una sola línea que el salto de línea parte («no puedo⏎respirar») solo se reconoce al leer el turno unido si la señal tolera el salto.
-- Más allá de 4096 caracteres por mensaje no se lee.
+- De un mensaje de más de 4096 caracteres solo se leen los últimos 4096.
 - Falsos positivos aceptados: «me mato trabajando», «tengo que tomar muchas pastillas al día», «el doctor no responde» sin complemento, «se me durmió el brazo derecho» por haber dormido encima.
 - `urgencia-119` (señal pasada y resuelta que pide cita) es variable con `gpt-6-luna`: la guarda nunca deriva, pero el modelo a veces enseña la lista de horarios o llama a `handoff` en vez de proponer.
 - Si el agente habló en medio («me duele» / «¿qué te duele?» / «el pecho»), la guarda no une los mensajes y la decisión queda en el modelo.

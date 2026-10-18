@@ -518,7 +518,18 @@ public sealed class AgentGuardTests : IAsyncLifetime
     [InlineData("creo que es un preinfarto", true)]
     [InlineData("le dio un ACV", true)]
     [InlineData("tuvo un ictus", true)]
-    [InlineData("creo que tiene una trombosis", true)]
+    [InlineData("creo que tiene una trombosis", false)]                    // not a synonym of a stroke (coordinator, final review)
+    [InlineData("cita de control por trombosis", false)]
+    // Revisión final de 1d55113: a line break inside a sign does not hide it
+    [InlineData("no puedo\nrespirar", true)]
+    [InlineData("me quiero\nmorir", true)]
+    [InlineData("me falta\nel aire", true)]
+    [InlineData("perdió el\nconocimiento", true)]
+    [InlineData("se puso\nmorado", true)]
+    [InlineData("mucha\nsangre", true)]
+    [InlineData("ataque\nal corazón", true)]
+    [InlineData("tomó\n20 pastillas", true)]
+    [InlineData("no quiero\nvivir", true)]
     [InlineData("anoche se tomó 20 pastillas", true)]
     [InlineData("no ha parado de sangrar", true)]
     [InlineData("se comió unas pastillas", true)]
@@ -565,6 +576,15 @@ public sealed class AgentGuardTests : IAsyncLifetime
     [InlineData("me duele", "el pecho")]
     [InlineData("ayuda", "no puedo respirar")]
     [InlineData("me duele el pecho", "ayuda por favor")]   // a newer message coalesces the older job: the sign is in the one before
+    [InlineData("no puedo", "respirar")]
+    [InlineData("me quiero", "morir")]
+    [InlineData("me falta", "el aire")]
+    [InlineData("perdió el", "conocimiento")]
+    [InlineData("se puso", "morado")]
+    [InlineData("mucha", "sangre")]
+    [InlineData("ataque", "al corazón")]
+    [InlineData("tomó", "20 pastillas")]
+    [InlineData("no quiero", "vivir")]
     public async Task AnAlarmSignSplitAcrossTheTurnStillGoesToAPerson(string first, string second)
     {
         var tenant = await h.Db.Tenants.SingleAsync(t => t.Id == h.Scope.Id); tenant.EmergencyPhone = "2200 0000"; await h.Db.SaveChangesAsync();

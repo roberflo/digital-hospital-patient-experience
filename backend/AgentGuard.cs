@@ -32,19 +32,20 @@ public static partial class AgentGuard
     /// Suicidal words and self-harm fire always.</summary>
     static bool AlarmSign(string body)
     {
-        // ponytail: the first 4096 characters of a message; the scan restarts per match, so a longer one would cost quadratic time.
-        var text = Blanks().Replace(Plain(body.Length > 4096 ? body[..4096] : body), " ");
-        if (Suicide().IsMatch(text)) return true;
+        // ponytail: the last 4096 characters of a message; the scan restarts per match, so a longer one would cost quadratic time.
+        // Signs are searched with line breaks as spaces («no puedo⏎respirar»); the breaks, at the same positions, only cut clauses.
+        var text = Spaces().Replace(Plain(body.Length > 4096 ? body[^4096..] : body), m => m.Value.Contains('\n') ? "\n" : " "); var flat = text.Replace('\n', ' ');
+        if (Suicide().IsMatch(flat)) return true;
         // A recent ingestion is not resolved by time: poisoning skips the past rules, like suicide, but a negation still holds.
-        if (Current(text, Poisoning(), timed: false)) return true;
+        if (Current(text, flat, Poisoning(), timed: false)) return true;
         Regex[] signs = [ChestPain(), Breathing(), Unconscious(), Seizure(), Bleeding(), OneSide(), AllergicAirway(), Cardiac(), Collapse()];
-        return signs.Any(sign => Current(text, sign)) || (Allergy().IsMatch(text) && Current(text, Swelling()));
+        return signs.Any(sign => Current(text, flat, sign)) || (Allergy().IsMatch(flat) && Current(text, flat, Swelling()));
     }
     /// <summary>Any match that is stated now. The scan restarts one character on, so a negated match («no es dolor…») does not hide a later
     /// one that starts inside it («…el pecho me aprieta»).</summary>
-    static bool Current(string text, Regex sign, bool timed = true)
+    static bool Current(string text, string flat, Regex sign, bool timed = true)
     {
-        for (var m = sign.Match(text); m.Success; m = m.Index + 1 < text.Length ? sign.Match(text, m.Index + 1) : Match.Empty)
+        for (var m = sign.Match(flat); m.Success; m = m.Index + 1 < flat.Length ? sign.Match(flat, m.Index + 1) : Match.Empty)
             if (Stated(text, m, timed)) return true;
         return false;
     }
@@ -53,7 +54,8 @@ public static partial class AgentGuard
         var before = text[..m.Index]; var clause = Clause().Split(before)[^1];
         // Negated: «no», «sin», «ni» or «tampoco» followed only by pronouns and auxiliaries up to the sign («no me duele», «no tengo dolor»).
         // «No aguanto el dolor» negates «aguanto», not the pain; «no sé si…» is doubt, and so is «no se me duele», which only reads as «no sé, me duele».
-        if (Negated().IsMatch(clause) && !(NoSe().IsMatch(clause) && NotReflexive().IsMatch(m.Value))) return false;
+        var value = text.Substring(m.Index, m.Length);
+        if (Negated().IsMatch(clause) && !(NoSe().IsMatch(clause) && NotReflexive().IsMatch(value))) return false;
         if (!timed) return true;
         // Resolved: «no ha vuelto» before it in its clause, or an explicit, affirmative recovery of the patient right after it, in this clause or the
         // next one («…pero ya estoy bien», «Me desmayé. Ya estoy bien.»). Not a question, not of something else («ya estoy bien de la gripe»),
@@ -63,10 +65,10 @@ public static partial class AgentGuard
         if (Recovers().Match(after) is { Success: true } recovery && !Ongoing().IsMatch(SentenceOf(after[recovery.Length..]))) return false;
         // Past: a time gone by in the sign's own clause with no verb in the present there («tuvo un infarto hace dos años», but not
         // «hace dos días que me duele el pecho»), unless the sentence says it is still going («y no se me quita», «hoy», «peor»).
-        var own = clause + m.Value + Clause().Split(after)[0];
+        var own = clause + value + Clause().Split(after)[0];
         if (!Past().IsMatch(own) || Present().IsMatch(own)) return true;
         var start = before.LastIndexOfAny(['.', '!', '?', '\n']) + 1;
-        return Ongoing().IsMatch(text[start..m.Index] + m.Value + SentenceOf(after));
+        return Ongoing().IsMatch(text[start..m.Index] + value + SentenceOf(after));
     }
     static string SentenceOf(string text) => text.IndexOfAny(['.', '!', '?', '\n']) is var stop and >= 0 ? text[..stop] : text;
     static string Plain(string text) => new string(text.Normalize(System.Text.NormalizationForm.FormD).Where(c => System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c) != System.Globalization.UnicodeCategory.NonSpacingMark).ToArray()).ToLowerInvariant();
@@ -180,7 +182,7 @@ public static partial class AgentGuard
         + @"|\bse (?:comio|comieron) (?:\w+ ){0,3}?(?:pastillas|pildoras|tabletas|medicinas|medicamentos|capsulas)\b")] private static partial Regex Poisoning();
     [GeneratedRegex(@"\banafila\w*|\bcerrando la garganta\b|\bse (?:me |le )?cierra la garganta\b|\bgarganta (?:se (?:me |le )?)?(?:cerrada|cierra|cerrando)\b")] private static partial Regex AllergicAirway();
     // Added by the owner on 2026-10-17, with the medical synonyms the coordinator counted as the same signs. «Derrame» is a stroke unless in an eye or a knee.
-    [GeneratedRegex(@"\bi[nm]fart\w*|\bpre ?infart\w*|\bparo cardi\w*|\bataques? (?:al|del) corazon\b|\bataques? cardiac\w*|\bembolia\w*|\bacv\b|\bictus\b|\btrombosis\b|\bderrames?\b(?! (?:en|de) (?:(?:el|la|los|las|un|una|mi|su) )?(?:ojos?|rodillas?|liquido|petroleo|aceite)\b)")] private static partial Regex Cardiac();
+    [GeneratedRegex(@"\bi[nm]fart\w*|\bpre ?infart\w*|\bparo cardi\w*|\bataques? (?:al|del) corazon\b|\bataques? cardiac\w*|\bembolia\w*|\bacv\b|\bictus\b|\bderrames?\b(?! (?:en|de) (?:(?:el|la|los|las|un|una|mi|su) )?(?:ojos?|rodillas?|liquido|petroleo|aceite)\b)")] private static partial Regex Cardiac();
     // Added by the owner on 2026-10-17: turning blue (not a bruise on a limb: «se le puso morado el dedo»), and a fall with no getting up.
     [GeneratedRegex(@"\bse (?:me |le )?(?:puso|pone|pusieron|esta poniendo) morad(?:it)?[oa]s?\b(?! (?:el|la|los|las|mi|su|un|una) (?:dedos?|brazos?|piernas?|ojos?|rodillas?|manos?|pies?|unas?|golpe|moreton)\b)|\blabios? morad\w*|\bse ca(?:y|ll)o\b(?:\W+\w+){0,4}?\W+no (?:se )?(?:puede )?levant\w*")] private static partial Regex Collapse();
     [GeneratedRegex(@"\bsui[cs]id\w*|\b(?:quiero|kiero|quisiera) morir\w*|\bme (?:quiero|kiero) morir\b|\bganas de morir\w*|\b(?:quiero|quisiera|kiero) estar muert[oa]\b|\bquit\w* la vida\b|\bmatarme\b|\bme (?:quiero|kiero|voy a) matar\b|\bme mato\b|\bmejor me muero\b|\bojala (?:y )?me muera\b|\bno (?:quiero|kiero) (?:seguir )?viv\w*|\bno vale la pena (?:seguir )?vivir\b|\bacabar con mi vida\b|\bhacerme dano\b|\bme hago dano\b|\blastimarme\b|\bme estoy lastimando\b|\bautolesi\w*"
@@ -188,7 +190,6 @@ public static partial class AgentGuard
     // A severe allergy is the reaction plus swelling of the face or throat: «garganta inflamada» alone is a sore throat, a swollen face alone a tooth.
     [GeneratedRegex(@"\b(?:alerg\w*|reaccion\w*|pico\b|picadura\w*|piquete\w*|ronchas?|anafila\w*)")] private static partial Regex Allergy();
     [GeneratedRegex(@"\b(?:hinch\w*|inflam\w*)\b(?:\W+\w+){0,4}?\W+(?:cara|garganta|labios?|lengua|ojos|parpados|boca)\b|\b(?:cara|garganta|labios?|lengua|ojos|parpados|boca)\b(?:\W+\w+){0,2}?\W+(?:hinchad|inflamad)\w*")] private static partial Regex Swelling();
-    [GeneratedRegex(@"[ \t]+")] private static partial Regex Blanks();
     [GeneratedRegex(@"[.,;:!?\n]|\b(?:y|e|pero|aunque|sino)\b")] private static partial Regex Clause();
     [GeneratedRegex(@"\b(?:no|sin|ni|tampoco)(?: (?:me|te|le|se|nos|les|lo|la|los|las|he|ha|has|han|hemos|habia|tengo|tiene|tienes|tenia|tuve|tuvo|siento|sentia|hay|esta|estoy|estaba|es|era|fue|un|una|el|ningun|ninguna|nada|de|mucho|mucha)){0,3} ?$")] private static partial Regex Negated();
     [GeneratedRegex(@"\bno se (?:me|le|te|nos) $")] private static partial Regex NoSe();
