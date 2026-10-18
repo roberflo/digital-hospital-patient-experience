@@ -51,16 +51,19 @@ public sealed class GoogleCalendarClient(HttpClient http, IConfiguration config,
         tenant.GoogleCalendarId = id;
         await db.SaveChangesAsync(ct);
     }
-    public async Task<int> Sync(DateOnly from, int days, CancellationToken ct = default)
+    /// <param name="actor">Who the local audit names: the Administrador who asked, or the worker.</param>
+    public async Task<int> Sync(DateOnly from, int days, CancellationToken ct = default, string actor = "calendar-worker")
     {
         if (days is < 1 or > 31) throw new ArgumentException("Sincroniza entre 1 y 31 días");
         var tenant = await db.Tenants.SingleAsync(x => x.Id == scope.Id, ct);
         if (string.IsNullOrEmpty(tenant.GoogleRefreshToken) || string.IsNullOrEmpty(tenant.GoogleCalendarId)) throw new ArgumentException("Conecta Google y selecciona un calendario");
+        // Every day is read from Hospital before Google is touched: a token or permission that fails midway leaves Google as it was.
+        var agendas = new List<JsonElement>();
+        for (var i = 0; i < days; i++) agendas.Add(await hospital.GetAgendaDayAsync(scope.Id, from.AddDays(i), ct));
         var token = await Token(new() { ["refresh_token"] = tenant.GoogleRefreshToken, ["grant_type"] = "refresh_token" }, ct); var access = token.GetProperty("access_token").GetString()!;
         var count = 0;
-        for (var i = 0; i < days; i++)
+        foreach (var agenda in agendas)
         {
-            var agenda = await hospital.GetAgendaDayAsync(scope.Id, from.AddDays(i), ct);
             foreach (var row in agenda.GetProperty("rows").EnumerateArray())
             {
                 var appointment = row.GetProperty("appointmentId").GetGuid(); var status = row.GetProperty("status").GetString();
@@ -84,7 +87,7 @@ public sealed class GoogleCalendarClient(HttpClient http, IConfiguration config,
                 count++;
             }
         }
-        db.Audits.Add(new Audit { TenantId = scope.Id, Actor = "calendar-worker", Action = "google.synced", Resource = count.ToString() }); await db.SaveChangesAsync(ct); return count;
+        db.Audits.Add(new Audit { TenantId = scope.Id, Actor = actor, Action = "google.synced", Resource = count.ToString() }); await db.SaveChangesAsync(ct); return count;
     }
     public static string EventId(Guid tenant, Guid appointment) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(tenant + ":" + appointment))).ToLowerInvariant();
     static HttpRequestMessage Google(HttpMethod method, string url, string token) { var r = new HttpRequestMessage(method, url); r.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token); return r; }
@@ -111,7 +114,7 @@ public static class GoogleEndpoints
         });
         app.MapGet("/api/google/calendars", async (CurrentUser u, GoogleCalendarClient g, CancellationToken ct) => { u.RequireAdmin(); return Results.Ok(await g.Calendars(ct)); }).RequireAuthorization();
         app.MapPut("/api/google/calendar", async (CalendarSelection b, CurrentUser u, GoogleCalendarClient g, CancellationToken ct) => { u.RequireAdmin(); await g.SelectCalendar(b.Id, ct); return Results.Ok(); }).RequireAuthorization();
-        app.MapPost("/api/google/sync", async (CalendarSync b, HttpContext ctx, CurrentUser u, GoogleCalendarClient g) => { u.RequireAdmin(); return Results.Ok(new { synced = await g.AsUser(Identity.Bearer(ctx)).Sync(b.From, b.Days) }); }).RequireAuthorization();
+        app.MapPost("/api/google/sync", async (CalendarSync b, HttpContext ctx, CurrentUser u, GoogleCalendarClient g) => { u.RequireAdmin(); return Results.Ok(new { synced = await g.AsUser(Identity.Bearer(ctx)).Sync(b.From, b.Days, actor: u.Subject) }); }).RequireAuthorization();
         app.MapDelete("/api/google", async (CrmDb db, TenantScope t, CurrentUser u) => { u.RequireAdmin(); var row = await db.Tenants.SingleAsync(x => x.Id == t.Id); row.GoogleRefreshToken = null; row.GoogleStateHash = null; row.GoogleStateExpires = null; await db.SaveChangesAsync(); return Results.Ok(); }).RequireAuthorization();
     }
     static string Hash(string input) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(input)));

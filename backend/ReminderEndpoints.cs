@@ -36,7 +36,7 @@ public static class ReminderEndpoints
             }
             return Results.Ok(rows);
         });
-        api.MapPost("/sync",async(HttpContext ctx,CurrentUser user,AppointmentReminderService service,CancellationToken ct)=>{user.RequireAdmin();await service.AsUser(Identity.Bearer(ctx)).Sync(DateTimeOffset.UtcNow,ct);return Results.Ok(new{synced=true});});
+        api.MapPost("/sync",async(HttpContext ctx,CurrentUser user,AppointmentReminderService service,CancellationToken ct)=>{user.RequireAdmin();await service.AsUser(Identity.Bearer(ctx)).SyncAsPerson(DateTimeOffset.UtcNow,ct);return Results.Ok(new{synced=true});});
         api.MapGet("/contacts/{id:guid}",async(Guid id,CrmDb db)=>{
             var contact=await db.Contacts.SingleOrDefaultAsync(c=>c.Id==id);return contact is null?Results.NotFound():Results.Ok(new{enabled=contact.ReminderConsentAt!=null,consentAt=contact.ReminderConsentAt,linked=contact.PatientId!=null});
         });
