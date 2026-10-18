@@ -45,19 +45,23 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         var latest = history.LastOrDefault(x => x.Sender == "patient"); if (latest is null || job.Key != "agent:" + latest.ExternalId) return;
         heard = string.Join("\n", history.Where(x => x.Sender == "patient").TakeLast(3).Select(x => x.Body));
         var registering = history.Count > 1 && history[^2].Sender != "patient" && history[^2].Body.Contains("contacto de emergencia", StringComparison.OrdinalIgnoreCase);
+        // A sign split across messages («me duele» + «el pecho»), or in a message whose job a newer one coalesced, is read on the patient's
+        // messages since the agent or the team last spoke. Older ones were already answered: joining them would hand off every later message.
+        var turn = string.Join(" ", history.AsEnumerable().Reverse().TakeWhile(x => x.Sender == "patient").Take(3).Reverse().Select(x => x.Body));
+        var alarm = AgentGuard.NamesEmergency(latest.Body, registering) || AgentGuard.NamesEmergency(turn, registering);
         if (waitingSince is { } since)
         {
             // An emergency always gets the number. A tap of a registered patient is still served below, with no model.
             // Anything else is for the person who will answer: the patient is told so once it has been a while.
             var tap = latest.Body.Trim();
-            if (AgentGuard.Inbound(latest.Body, latest.Type, registering) is { } danger && AgentGuard.NamesEmergency(latest.Body, registering)) { await Handoff(conv, danger, ct, true); return; }
+            if (alarm) { await Handoff(conv, AgentGuard.Inbound(latest.Body, latest.Type, registering, alarm)!, ct, true); return; }
             if (contact.PatientId is null || !(tap is "AGENDAR" or "MISCITAS" or "RECETA" || tap.StartsWith("CONFIRMAR ", StringComparison.OrdinalIgnoreCase) || AgentGuard.SlotChoice(tap) is not null || AgentGuard.AppointmentChoice(tap) is not null)) { await StillWaiting(since, tenant.EmergencyPhone, ct); return; }
         }
-        else if (AgentGuard.Inbound(latest.Body, latest.Type, registering) is { } reason)
+        else if (AgentGuard.Inbound(latest.Body, latest.Type, registering, alarm) is { } reason)
         {
             // An emergency, or a patient who asks for a person, goes at once. A file the agent cannot open is the patient's call.
-            if (latest.Type != "text" && latest.Body == "[Archivo recibido]") await OfferPerson(reason, "Gracias por el archivo. Yo no puedo abrirlo, pero el equipo sí.", ct);
-            else await Handoff(conv, reason, ct, AgentGuard.NamesEmergency(latest.Body, registering), offerDoctor: true);
+            if (!alarm && latest.Type != "text" && latest.Body == "[Archivo recibido]") await OfferPerson(reason, "Gracias por el archivo. Yo no puedo abrirlo, pero el equipo sí.", ct);
+            else await Handoff(conv, reason, ct, alarm, offerDoctor: true);
             return;
         }
         // The patient chose a person: with the button, or by saying yes to the offer just made. The team gets the reason the agent offered it for.

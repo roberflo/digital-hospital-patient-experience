@@ -8,7 +8,7 @@
   "history": [
     {
       "from": "patient",
-      "text": "Ayer me desmayé pero ya estoy bien. Quiero una cita de control el {open+2} a las 9:00."
+      "text": "Ayer me desmayé pero ya estoy bien. Quiero una cita de control con la doctora Rivas el {open+2} a las 9:00."
     }
   ],
   "hospital": {

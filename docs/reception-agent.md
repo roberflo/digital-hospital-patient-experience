@@ -295,37 +295,54 @@ Verificación · 2026-10-13 (segunda entrega):
 
 ## Señales de alarma (MR-35) · 2026-10-17
 
-Lista y reglas aprobadas por el dueño el 2026-10-17. Antes del modelo, `AgentGuard.NamesEmergency` lleva estas señales al número de emergencia y a una persona: es el mismo camino que «emergencia», «sobredosis» y «suicidio» (handoff urgente; el modelo no se llama).
+Lista y reglas aprobadas por el dueño el 2026-10-17, con la revisión adversaria del mismo día. Antes del modelo, `AgentGuard.NamesEmergency` lleva estas señales al número de emergencia y a una persona por el mismo camino que «emergencia», «sobredosis» y «suicidio»: handoff urgente, sin llamar al modelo. Cada señal tiene su propio patrón con nombre en `AgentGuard.cs`, y los patrones se aplican al texto sin tildes, en minúsculas y con espacios simples.
 
-1. Dolor u opresión en el pecho.
-2. No puede respirar o se ahoga.
-3. Desmayo o pérdida de conciencia.
-4. Convulsión.
-5. Sangrado abundante que no para.
-6. Debilidad o adormecimiento de un lado, cara caída o no puede hablar.
-7. Ideación suicida o autolesión («me quiero morir», «quitarme la vida»).
-8. Intoxicación o sobredosis.
-9. Reacción alérgica grave con hinchazón de cara o garganta.
-10. Infarto, derrame (cerebral), embolia, ataque al corazón.
+| Señal | Patrón |
+|---|---|
+| 1. Dolor u opresión en el pecho | `ChestPain` |
+| 2. No puede respirar o se ahoga («me cuesta respirar», «me falta el aire», «no me entra el aire») | `Breathing` |
+| 3. Desmayo o pérdida de conciencia («se privó», «no reacciona», «no despierta», «no responde», «se desvaneció») | `Unconscious` |
+| 4. Convulsión («le dio un ataque», «le dan ataques», «echando espuma por la boca») | `Seizure` |
+| 5. Sangrado abundante que no para | `Bleeding` |
+| 6. Debilidad o adormecimiento de un lado, hormigueo en un brazo, cara caída, no puede hablar o «habla raro» | `OneSide` |
+| 7. Ideación suicida o autolesión | `Suicide` |
+| 8. Intoxicación o sobredosis (también «se tomó 20 pastillas», «toda la caja», «un frasco entero») | `Poisoning` |
+| 9. Reacción alérgica grave con hinchazón de cara o garganta: reacción y hinchazón en el mismo mensaje, o la garganta que se cierra | `Allergy` + `Swelling`, `AllergicAirway` |
+| 10. Infarto, derrame (cerebral, no «en el ojo»), embolia, ataque al corazón | `Cardiac` |
+| 11. «Se puso morado» (no «se le puso morado el dedo») y «se cayó y no se levanta» | `Collapse` |
 
-Reglas, con el texto leído sin tildes ni mayúsculas:
+Reglas:
 
-- **Negada no dispara.** Un «no», «sin», «ni» o «tampoco» en la misma cláusula, a tres palabras o menos de la señal, la niega («no me duele el pecho»). «No sé si…» es duda, no negación.
-- **Pasada o resuelta no dispara; la atiende el modelo.** Hay tres formas de marcarlo:
-  - un tiempo ya ido en la cláusula de la señal («ayer», «anoche», «hace dos años», «la semana pasada», «de niño»);
-  - «no ha vuelto» antes de la señal;
-  - «ya estoy bien» o «ya pasó» después de ella.
-  
-  Lo que diga que sigue («desde ayer», «todavía», «sigue», «ahora») la mantiene actual. Ante una frase ambigua en presente, dispara.
-- **Sinónimos y excepción.** Los sinónimos coloquiales se quedan: «me cuesta respirar», «me falta el aire», «se privó», «no reacciona». Las frases suicidas o de autolesión disparan siempre, aunque estén negadas, en pasado o sean coloquiales («me quiero morir de la vergüenza»).
+1. **Negada no dispara.** La negación tiene que recaer sobre el verbo de la señal: «no», «sin», «ni» o «tampoco» seguidos solo de pronombres y auxiliares hasta la señal («no me duele el pecho», «no tengo dolor de pecho», «no es un infarto»).
+   - «No aguanto / no soporto el dolor de pecho» niega «aguanto», no el dolor, y dispara.
+   - «No sé si…» es duda y dispara.
+   - Una coincidencia negada no tapa a la siguiente: en «no es dolor, es como que el pecho me aprieta» dispara «el pecho me aprieta».
+2. **Pasada o resuelta no dispara; la atiende el modelo.** Hay tres vías:
+   - **Pasada.** La cláusula de la señal trae un tiempo ya ido («ayer», «anoche», «hace dos años», «la semana pasada», «de niño») y ningún verbo en presente. Por eso «tuvo un infarto hace dos años» no dispara y «hace dos días que me duele el pecho» sí.
+   - **«No ha vuelto».** Aparece antes de la señal, en su cláusula («no ha vuelto a tener convulsiones»).
+   - **Recuperación en la cláusula siguiente.** Una recuperación abre lo que sigue en la misma cláusula o en la inmediata siguiente, aunque sea otra frase: «…pero ya estoy bien», «Me desmayé. Ya estoy bien.», «ya pasó», «ya se le quitó». Tiene que estar en 1.ª persona o sin otro sujeto. No cuenta como recuperación:
+     - «ya pasó una hora» ni «ya pasó media hora», que son tiempo;
+     - «Mi hermano tuvo covid pero ya está bien», que habla de otra persona.
+   
+   Lo que diga que sigue, en la misma frase, mantiene actual una señal pasada: «desde», «todavía», «sigue», «hoy», «ahora», «peor», «más», «también», «no se me quita», «no despierta». Si en el mensaje hay una señal en presente, dispara aunque otra mención sea pasada («me duele el pecho como cuando me dio el infarto hace un año»). Ante una frase ambigua en presente, dispara.
+3. **Suicidio y autolesión disparan siempre**, aunque estén negados, en pasado o sean coloquiales («me quiero morir de la vergüenza», «hace un año quise quitarme la vida»).
+
+Criterios adicionales:
+
+- **«No puede hablar».** No dispara solo en 1.ª persona y con un contexto claro de ocupación en la misma frase: trabajo, teléfono, llamada, ocupado, reunión, clase o «manejando». Dicho de otra persona dispara siempre («mi papá no puede hablar ahora»). «No puedo hablar con…» es sobre contactar a alguien y no dispara.
+- **Mensajes partidos.** También se lee la unión de los mensajes del paciente desde la última vez que habló el agente o el equipo, hasta tres mensajes («me duele» + «el pecho»). Esa unión también cubre el mensaje cuyo trabajo absorbió uno más nuevo. Los mensajes anteriores ya tuvieron respuesta: unirlos haría derivar todos los mensajes siguientes.
 
 | Cómo se prueba | |
 |---|---|
-| Tabla de frases que disparan y que no | `AgentGuardTests.AlarmSignsAreReadBeforeTheModel` |
-| Extremo a extremo por `Run` (número de emergencia, `human`, modelo sin llamar) | `AgentGuardTests.AnAlarmSignGetsTheEmergencyNumberAndAPersonWithoutTheModel` |
-| Evals | `urgencia-111` a `urgencia-116` y `urgencia-118` derivan; `urgencia-117` (negada) y `urgencia-119` (pasada y resuelta) agendan |
+| Tabla de frases que disparan y que no, con las regresiones de la revisión | `AgentGuardTests.AlarmSignsAreReadBeforeTheModel` |
+| Extremo a extremo por `Run`: número de emergencia, `human`, modelo sin llamar | `AnAlarmSignGetsTheEmergencyNumberAndAPersonWithoutTheModel`, `AnAlarmSignSplitAcrossTheTurnStillGoesToAPerson`, `ASignAnsweredByTheAgentIsNotReadAgainWithTheNextMessage` |
+| Evals que derivan | `urgencia-111` a `116`, `118`, `120` a `124` |
+| Evals que agendan | `urgencia-117` (señal negada) y `urgencia-119` (señal pasada y resuelta) |
 
-Límites: la lista de frases es cerrada; lo que no reconoce queda para el prompt y las evals, como antes. «No puedo hablar» seguido de «ahorita», «por teléfono» o «estoy en el trabajo» no dispara. Un «derrame en el ojo» tampoco.
+Límites:
+
+- La lista de frases es cerrada, con las faltas de ortografía frecuentes; lo que no reconoce queda para el prompt y las evals, como antes.
+- Si el agente habló en medio («me duele» / «¿qué te duele?» / «el pecho»), la guarda no une los mensajes y la decisión queda en el modelo.
 
 ## Límites conocidos
 

@@ -368,6 +368,99 @@ public sealed class AgentGuardTests : IAsyncLifetime
     [InlineData("mi papá tuvo un infarto hace dos años", false)]           // past
     [InlineData("le dio una embolia el año pasado y quiere control", false)]
     [InlineData("tengo un derrame en el ojo", false)]                      // an eye, not a stroke
+    // Revisión adversaria de ccf232f (2026-10-17): falsos negativos medidos, y señales nuevas del dueño del mismo día
+    [InlineData("hace dos días que me duele el pecho", true)]
+    [InlineData("hace dos días me duele el pecho", true)]
+    [InlineData("tengo dolor de pecho hace dos días", true)]
+    [InlineData("ayer me empezó un dolor en el pecho y no se me quita", true)]
+    [InlineData("anoche empezó el dolor de pecho y no se me ha quitado", true)]
+    [InlineData("anoche me empezó el dolor de pecho y está peor", true)]
+    [InlineData("ayer me dolió el pecho y hoy me duele más", true)]
+    [InlineData("mi mamá se desmayó anoche y no despierta", true)]
+    [InlineData("anoche se desmayó y no ha despertado", true)]
+    [InlineData("me duele el pecho. Ya pasó una hora y nadie me contesta", true)]
+    [InlineData("me duele el pecho y ya pasó media hora", true)]
+    [InlineData("Me duele mucho el pecho. Mi hermano tuvo covid pero ya está bien.", true)]
+    [InlineData("me duele el pecho como cuando me dio el infarto hace un año", true)]
+    [InlineData("siento que me va a dar un infarto como el que me dio hace dos años", true)]
+    [InlineData("no aguanto el dolor de pecho", true)]
+    [InlineData("no soporto el dolor de pecho", true)]
+    [InlineData("ya no aguanto este dolor en el pecho", true)]
+    [InlineData("no aguanto la presión en el pecho", true)]
+    [InlineData("no es dolor, es como que el pecho me aprieta", true)]
+    [InlineData("me empezó a doler el pecho", true)]
+    [InlineData("no le entra aire", true)]
+    [InlineData("no me entra el aire", true)]
+    [InlineData("tampoco puedo respirar", true)]
+    [InlineData("ni puedo respirar", true)]
+    [InlineData("no despierta", true)]
+    [InlineData("mi abuela no despierta", true)]
+    [InlineData("no responde", true)]
+    [InlineData("se desvaneció", true)]
+    [InlineData("me desmalle", true)]
+    [InlineData("se desmallo", true)]
+    [InlineData("se desmalló mi mamá", true)]
+    [InlineData("se me duerme la mitad de la cara", true)]
+    [InlineData("se me duerme la mitad del cuerpo", true)]
+    [InlineData("no puedo mover el brazo izquierdo", true)]
+    [InlineData("no puede mover un lado del cuerpo", true)]
+    [InlineData("no siento la mitad del cuerpo", true)]
+    [InlineData("no siento el lado derecho", true)]
+    [InlineData("se le va la boca de lado", true)]
+    [InlineData("se tomó 20 pastillas", true)]
+    [InlineData("se tomó como 20 pastillas", true)]
+    [InlineData("me tome como diez pastillas de clonazepam", true)]
+    [InlineData("se tomó toda la caja de pastillas", true)]
+    [InlineData("se tomó el frasco de pastillas", true)]
+    [InlineData("se tomó un frasco entero de pastillas", true)]
+    [InlineData("me voy a matar", true)]
+    [InlineData("me mato", true)]
+    [InlineData("mejor me muero", true)]
+    [InlineData("ojalá me muera", true)]
+    [InlineData("no vale la pena vivir", true)]
+    [InlineData("me corté las venas", true)]
+    [InlineData("me estoy cortando", true)]
+    [InlineData("me quiero cortar", true)]
+    [InlineData("me estoy aogando", true)]
+    [InlineData("le dio una convulcion", true)]
+    [InlineData("tiene una emorragia", true)]
+    [InlineData("me kiero morir", true)]
+    [InlineData("creo que tome una sobre dosis", true)]
+    [InlineData("pienso en el suisidio", true)]
+    [InlineData("me duele el pexo... digo el pecho", true)]
+    [InlineData("se intosico con cloro", true)]
+    [InlineData("mi papá no puede hablar ahora", true)]
+    [InlineData("no puedo hablar", true)]
+    [InlineData("le dio un ataque", true)]
+    [InlineData("le dan ataques", true)]
+    [InlineData("está temblando y echando espuma por la boca", true)]
+    [InlineData("se puso morado", true)]
+    [InlineData("mi bebé se puso morado y no respira bien", true)]
+    [InlineData("se cayó y no se levanta", true)]
+    [InlineData("mi abuelo se cayó y no se puede levantar", true)]
+    [InlineData("habla raro", true)]
+    [InlineData("siento hormigueo en el brazo izquierdo", true)]
+    [InlineData("Ayer se desmayó pero no despierta bien", true)]
+    [InlineData("Ayer se desmayó pero ya está bien", false)]
+    [InlineData("ayer me desmayé pero ahora ya estoy bien", false)]
+    [InlineData("me desmayé hace dos semanas", false)]
+    [InlineData("me dolió el pecho hace un mes pero ya pasó", false)]
+    [InlineData("no puedo hablar con nadie del hospital", false)]
+    [InlineData("no puedo hablar, estoy en una reunión", false)]
+    [InlineData("nadie me responde", false)]
+    [InlineData("el doctor no me responde", false)]
+    [InlineData("me quiero cortar el pelo", false)]
+    [InlineData("necesito una caja de pastillas para la presión", false)]
+    [InlineData("me tomé 2 pastillas de acetaminofén", false)]
+    [InlineData("le dio un ataque de risa", false)]
+    [InlineData("tengo ataques de ansiedad", false)]
+    [InlineData("se le puso morado el dedo del golpe", false)]
+    [InlineData("no le dio ningún ataque", false)]
+    [InlineData("no tengo hormigueo en el brazo izquierdo", false)]
+    [InlineData("no habla raro, solo está cansado", false)]
+    [InlineData("no se puso morado", false)]
+    [InlineData("tuvo un derrame hace dos años y quiere control", false)]
+    [InlineData("no tengo tos ni fiebre, respiro bien", false)]
     // Not on the list: the model and the existing paths decide
     [InlineData("Me duele muchísimo el estómago", false)]
     [InlineData("Tengo dolor de garganta y fiebre desde ayer", false)]
@@ -384,6 +477,8 @@ public sealed class AgentGuardTests : IAsyncLifetime
     [InlineData("me tomé un frasco de pastillas")]
     [InlineData("tengo alergia y se me hinchó la garganta")]
     [InlineData("creo que me está dando un infarto")]
+    [InlineData("le dio un ataque")]
+    [InlineData("se puso morado")]
     public async Task AnAlarmSignGetsTheEmergencyNumberAndAPersonWithoutTheModel(string message)
     {
         var tenant = await h.Db.Tenants.SingleAsync(t => t.Id == h.Scope.Id); tenant.EmergencyPhone = "2200 0000"; await h.Db.SaveChangesAsync();
@@ -396,6 +491,36 @@ public sealed class AgentGuardTests : IAsyncLifetime
         Assert.Equal("human", (await h.Fresh()).Status);
         Assert.StartsWith("Si es una emergencia, llama ya al *2200 0000*", Assert.Single(h.Sent));
         Assert.Contains(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => a.Kind == "handoff");
+    }
+
+    [Theory]
+    [InlineData("me duele", "el pecho")]
+    [InlineData("ayuda", "no puedo respirar")]
+    [InlineData("me duele el pecho", "ayuda por favor")]   // a newer message coalesces the older job: the sign is in the one before
+    public async Task AnAlarmSignSplitAcrossTheTurnStillGoesToAPerson(string first, string second)
+    {
+        var tenant = await h.Db.Tenants.SingleAsync(t => t.Id == h.Scope.Id); tenant.EmergencyPhone = "2200 0000"; await h.Db.SaveChangesAsync();
+        await h.Say("patient", first); await h.Say("patient", second);
+        var model = h.Model(AgentHarness.Reply("No debe consultarse el modelo"));
+
+        await h.Runtime(model, h.Sender()).Run(h.Job, CancellationToken.None);
+
+        Assert.Equal(0, model.Calls);
+        Assert.Equal("human", (await h.Fresh()).Status);
+        Assert.StartsWith("Si es una emergencia, llama ya al *2200 0000*", Assert.Single(h.Sent));
+    }
+
+    [Fact]
+    public async Task ASignAnsweredByTheAgentIsNotReadAgainWithTheNextMessage()
+    {
+        // Only the patient's messages since the agent last spoke are joined: an old sign does not hand off every later message.
+        await h.Say("patient", "me duele el pecho"); await h.Say("agent", "Le pasé tu consulta al equipo del hospital."); await h.Say("patient", "hola");
+        var model = h.Model(AgentHarness.Reply("No debe consultarse el modelo"));
+
+        await h.Runtime(model, h.Sender()).Run(h.Job, CancellationToken.None);
+
+        Assert.Equal("agent", (await h.Fresh()).Status);
+        Assert.DoesNotContain(h.Sent, text => text.StartsWith("Si es una emergencia"));
     }
 
     [Fact]
