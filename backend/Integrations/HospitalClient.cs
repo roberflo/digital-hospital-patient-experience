@@ -64,17 +64,20 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
 
     /// <summary>The visit kinds Hospital publishes for a new appointment.</summary>
     public static readonly string[] VisitKinds = ["first-visit", "follow-up", "procedure", "results", "paperwork", "same-day-urgent"];
-    /// <summary>MR-42 (decided by the owner 2026-10-17): «first-visit» when Hospital has no appointment of this patient before
-    /// <paramref name="before"/>, else «follow-up». A cancelled appointment did not take place, so it does not count.</summary>
+    /// <summary>MR-42 (decided by the owner 2026-10-17): «first-visit» when Hospital has no appointment of this patient, of any date, before
+    /// <paramref name="before"/>, else «follow-up». A cancelled appointment (cancelled-by-patient, cancelled-by-clinic) does not count.</summary>
     public async Task<string> FirstOrFollowUpAsync(Guid tenantId, Guid patientId, string phone, DateTimeOffset before, CancellationToken ct = default)
     {
         await GetVerifiedPatientAsync(tenantId, patientId, phone, ct);
-        // ponytail: Hospital answers 31 days per query, so this looks back one year (12 queries, newest first); a patient last seen before that
-        // is booked as a first visit. A Hospital query «has an earlier appointment» if returning after longer matters.
-        var to = DateOnly.FromDateTime(before.UtcDateTime).AddDays(1);
-        for (var i = 0; i < 12; i++, to = to.AddDays(-31))
+        // Hospital answers 31 days per query and publishes no earlier read (openapi.v1.json: v1/agenda/patients/{id}, from/to only), so the
+        // agenda is walked back to the first day this hospital can hold an appointment: AgendaSince per tenant, 2020-01-01 if unset.
+        // ponytail: a true first visit costs one query per 31 days since then, in order, newest first (about 80 from 2020); a follow-up stops at
+        // its last appointment. One Hospital read «has an earlier appointment» would make it one request (proposed to Hospital, not built).
+        var since = DateOnly.TryParse(Tenant(tenantId)["AgendaSince"], System.Globalization.CultureInfo.InvariantCulture, out var floor) ? floor : new DateOnly(2020, 1, 1);
+        for (var to = DateOnly.FromDateTime(before.UtcDateTime).AddDays(1); to >= since; to = to.AddDays(-31))
         {
-            var page = await ReadAsync<JsonElement>(tenantId, $"v1/agenda/patients/{patientId:D}?from={to.AddDays(-30):yyyy-MM-dd}&to={to:yyyy-MM-dd}", ct);
+            var from = to.AddDays(-30) < since ? since : to.AddDays(-30);
+            var page = await ReadAsync<JsonElement>(tenantId, $"v1/agenda/patients/{patientId:D}?from={from:yyyy-MM-dd}&to={to:yyyy-MM-dd}", ct);
             if (page.GetProperty("rows").EnumerateArray().Any(row => row.GetProperty("status").GetString()?.StartsWith("cancelled") != true && row.GetProperty("scheduledStart").GetDateTimeOffset() < before)) return "follow-up";
         }
         return "first-visit";

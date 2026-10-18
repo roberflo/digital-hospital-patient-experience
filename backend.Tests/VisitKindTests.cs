@@ -18,44 +18,71 @@ public sealed class VisitKindTests : IAsyncLifetime
     static object Agenda() => new { clinicalDayFrom = "", clinicalDayTo = "", maxDaysPerQuery = 31, rollState = "open", professionals = new[] { new { clinicianId = Doctor, clinicianName = "Dra. Sintética", placeName = "", defaultDurationMinutes = 30, days = new[] { new { clinicalDay = "", state = "open", takenSlotCount = 0, utcOffset = "-06:00", slots = new[] { new { slotId = "a", startsAt = Start, durationMinutes = 30, takenBy = 0, offered = true } } } } } } };
 
     /// <summary>The harness's Hospital, with a patient agenda that answers only the days asked, as Hospital does (31 at most).</summary>
-    AgentHarness.Fake Hospital(int[] days, string status)
+    /// <summary>The earliest day any patient-agenda query asked for.</summary>
+    DateOnly? earliest;
+    AgentHarness.Fake Hospital(int[] days, string status) => Hospital(days.Select(d => $"{d} {status}").ToArray());
+    /// <param name="appointments">«days status», days from now: «-1095 booked» is an appointment three years ago.</param>
+    AgentHarness.Fake Hospital(string[] appointments)
     {
+        var rows = appointments.Select(a => a.Split(' ')).Select(a => (At: DateTimeOffset.UtcNow.AddDays(int.Parse(a[0])), Status: a[1])).ToList();
         var inner = new HttpMessageInvoker(h.Hospital(availability: Agenda()));
         return new(async request =>
         {
             if (request.RequestUri!.AbsolutePath.StartsWith("/v1/agenda/patients/"))
             {
                 var query = request.RequestUri.Query.TrimStart('?').Split('&').Select(x => x.Split('=')).ToDictionary(x => x[0], x => DateOnly.Parse(x[1]));
-                Assert.True(query["to"].DayNumber - query["from"].DayNumber <= 30);
-                var rows = days.Select(d => DateTimeOffset.UtcNow.AddDays(d)).Where(at => DateOnly.FromDateTime(at.UtcDateTime) is var day && day >= query["from"] && day <= query["to"])
-                    .Select(at => new { appointmentId = Guid.NewGuid(), clinicianId = Doctor, clinicianName = "Dra. Sintética", scheduledStart = at, durationMinutes = 30, status }).ToArray();
-                return AgentHarness.Json(new { rows });
+                Assert.True(query["to"].DayNumber - query["from"].DayNumber <= 30); // Hospital refuses more (GetRangeViewQuery.MaxDaysPerQuery)
+                if (earliest is null || query["from"] < earliest) earliest = query["from"];
+                return AgentHarness.Json(new { rows = rows.Where(r => DateOnly.FromDateTime(r.At.UtcDateTime) is var day && day >= query["from"] && day <= query["to"])
+                    .Select(r => new { appointmentId = Guid.NewGuid(), clinicianId = Doctor, clinicianName = "Dra. Sintética", scheduledStart = r.At, durationMinutes = 30, status = r.Status }).ToArray() });
             }
             return await inner.SendAsync(request, CancellationToken.None);
         });
     }
     string Booked() { using var body = JsonDocument.Parse(Assert.Single(h.HospitalBodies)); return body.RootElement.GetProperty("visitKind").GetString()!; }
 
-    public static TheoryData<int[], string, string> History => new()
+    // Owner, 2026-10-17: any earlier appointment of any date counts, except a cancelled one. Statuses as Hospital publishes them (AgendaContracts).
+    public static TheoryData<string[], string> History => new()
     {
-        { [], "booked", "first-visit" },
-        { [-10], "booked", "follow-up" },
-        { [-10], "cancelled", "first-visit" },   // a cancelled appointment did not take place
-        { [-60], "booked", "follow-up" },        // further back than one query of Hospital's
-        { [1], "booked", "follow-up" },          // booked earlier than this one, still ahead
-        { [10], "booked", "first-visit" },       // later than this one: not an earlier appointment
-        { [-400], "booked", "first-visit" },     // ponytail ceiling: one year back
+        { [], "first-visit" },
+        { ["-10 booked"], "follow-up" },
+        { ["-10 fulfilled"], "follow-up" },
+        { ["-10 no-show"], "follow-up" },                                  // an appointment that existed, whatever came of it
+        { ["-10 cancelled-by-patient", "-400 cancelled-by-clinic"], "first-visit" }, // only cancelled ones: none took place
+        { ["-60 booked"], "follow-up" },                                   // further back than one query of Hospital's
+        { ["-1095 fulfilled"], "follow-up" },                              // three years ago, not cancelled
+        { ["-1095 fulfilled", "-5 cancelled-by-patient"], "follow-up" },    // the cancelled one is not the only one
+        { ["1 booked"], "follow-up" },                                     // booked earlier than this one, still ahead
+        { ["10 booked"], "first-visit" },                                  // later than this one: not an earlier appointment
     };
 
     [Theory, MemberData(nameof(History))]
-    public async Task TheAgentBooksAFirstVisitOnlyForAPatientWithNoEarlierAppointment(int[] days, string status, string expected)
+    public async Task TheAgentBooksAFirstVisitOnlyForAPatientWithNoEarlierAppointment(string[] appointments, string expected)
     {
-        var hospital = Hospital(days, status);
+        var hospital = Hospital(appointments);
         await h.Runtime(h.Model(AgentHarness.ToolCall("propose_action", new { action = "create", doctorId = Doctor, startsAt = Start, durationMinutes = 30 }), AgentHarness.Reply("Listo.")), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
         await h.Say("patient", "CONFIRMAR " + Assert.Single(await h.Pending("proposal")).Code);
         await h.Runtime(NoModel, h.Sender(), hospital).Run(h.Job, CancellationToken.None);
 
         Assert.Equal(expected, Booked());
+    }
+
+    /// <summary>The walk back stops at the first day this hospital can hold an appointment (Hospital:Tenants:{id}:AgendaSince); 2020-01-01 if unset.</summary>
+    [Theory]
+    [InlineData(null, "2020-01-01")]
+    [InlineData(-200, null)]
+    public async Task TheAgendaIsReadBackToTheHospitalsFirstDay(int? sinceDays, string? floor)
+    {
+        var since = floor is not null ? DateOnly.Parse(floor) : DateOnly.FromDateTime(DateTime.UtcNow.AddDays(sinceDays!.Value));
+        var extra = sinceDays is null ? null : new Dictionary<string, string?> { [$"Hospital:Tenants:{h.Scope.Id}:AgendaSince"] = since.ToString("yyyy-MM-dd") };
+        var hospital = Hospital([$"{since.AddDays(-100).DayNumber - DateOnly.FromDateTime(DateTime.UtcNow).DayNumber} fulfilled"]); // before the floor: not read
+        await h.Runtime(h.Model(AgentHarness.ToolCall("propose_action", new { action = "create", doctorId = Doctor, startsAt = Start, durationMinutes = 30 }), AgentHarness.Reply("Listo.")), h.Sender(), hospital, extra).Run(h.Job, CancellationToken.None);
+        await h.Say("patient", "CONFIRMAR " + Assert.Single(await h.Pending("proposal")).Code);
+        earliest = null;
+        await h.Runtime(NoModel, h.Sender(), hospital, extra).Run(h.Job, CancellationToken.None);
+
+        Assert.Equal("first-visit", Booked());
+        Assert.Equal(since, earliest); // read down to that day, and not before
     }
 
     [Fact]

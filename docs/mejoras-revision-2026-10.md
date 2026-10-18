@@ -15,8 +15,10 @@ De 50 hallazgos: 19 vigentes, 20 vigentes en parte, 9 falsos, 2 ya resueltos (ta
 - **OQ-6 migraciones:** autorizadas en Recepción (MR-39, MR-40) y la de idempotencia en Hospital (MR-41).
 - **S6 autoría:** las acciones del personal van a Hospital con el token del propio usuario; la cuenta
   de servicio queda solo para el agente (MR-11).
-- **Sigue abierta OQ-2 (bloqueante, clínica/administrativa):** qué es «primera vez» frente a
-  «subsecuente» (`AgentRuntime.cs:945`, `HospitalEndpoints.cs:48`). Hasta decidirlo, nada cambia ahí.
+- **OQ-2 decidida por el dueño (2026-10-17), MR-42:** una cita es «primera vez» (`first-visit`) si
+  Hospital no tiene **ninguna** cita del paciente anterior a la nueva, de cualquier fecha, sin contar
+  las canceladas (`cancelled-by-patient`, `cancelled-by-clinic`); si no, «subsecuente» (`follow-up`).
+  Si Hospital no responde, `follow-up`.
 
 ## Cómo se prueba
 
@@ -100,6 +102,7 @@ pasa en vacío.
 | MR-38 | Cada `recepcion-service-<tenant>` tiene su propio secreto; Recepción lo guarda cifrado por inquilino y ya no usa un secreto compartido. Rotar el de un hospital no afecta a los demás. | Hospital: prueba del reconciliador (secretos distintos por cliente); Recepción: `HospitalConnectionTests` con dos inquilinos y dos secretos. Diseño por `arquitecto`. | S3 |
 | MR-39 | `Jobs` tiene índice `(TenantId, Status, CreatedAt)`; un barrido diario borra `Jobs` terminados y `Receipts` de más de 30 días. | Migración aplicada en `test-backend.sh`; prueba del barrido con filas de 31 y 29 días. | D8 |
 | MR-40 | El estado pendiente del agente (propuesta, formulario de registro, pregunta en curso) vive en una tabla `PendingActions` con expiración, no en `Activity` ni en el texto del mensaje anterior; `Activity` deja de borrarse. | Pruebas existentes de agenda/registro siguen verdes; prueba nueva: cambiar el texto de una pregunta no cambia el flujo; ninguna `Activity` se borra. | D3, D4 |
+| MR-42 | El tipo de visita sigue OQ-2. El agente lo deriva al confirmar, salvo que el paciente dijera `procedure`, `results` o `paperwork`; quien se registra en esa misma confirmación es `first-visit` sin preguntar. El personal elige en el diálogo de cita entre los seis tipos publicados (`first-visit, follow-up, procedure, results, paperwork, same-day-urgent`), preseleccionado con la misma regla (`GET /api/hospital/contacts/{id}/visit-kind?before=`); sin `visitKind`, el POST aplica la regla; un tipo fuera de la lista se rechaza antes de gastar la clave. Hospital solo publica la agenda del paciente en ventanas de 31 días (`GET v1/agenda/patients/{id}?from&to`, `GetRangeViewQuery.MaxDaysPerQuery`), así que se recorre hacia atrás, de la más reciente a la más antigua, hasta `Hospital:Tenants:{id}:AgendaSince` (2020-01-01 si no está): una primera vez real cuesta una consulta por cada 31 días desde ahí. Una lectura de Hospital «¿tiene cita anterior?» lo dejaría en una (propuesta, no construida). | `VisitKindTests`: sin citas → `first-visit`; cita de hace 3 años no cancelada → `follow-up`; solo canceladas → `first-visit`; posterior a la nueva → no cuenta; el recorrido llega a `AgendaSince` y no pasa de ahí; Hospital caído → `follow-up`; el personal elige o se aplica la regla; tipo inválido → 400 sin recibo. | OQ-2 |
 | MR-41 | Hospital acepta `Idempotency-Key` en `POST v1/agenda` y `POST v1/patients` (por inquilino y llamador): la misma clave devuelve el resultado original sin crear otro; Recepción la envía. | Hospital: prueba del módulo con dos POST iguales → una cita. Recepción: el handler falso recibe la cabecera. | I2 |
 
 ## Anti-criterios
@@ -111,7 +114,7 @@ pasa en vacío.
 - Compartir el token en caché entre inquilinos o saltarse `ValidateTokenTenant`.
 - Probar una copia del manejador, de `Receive` o del bucle del worker; saltar en verde sin `TEST_DATABASE`.
 - `<Compile Remove>`, debilitar assertions o ampliar `known-failures.txt` para ir a verde.
-- Cambiar `visitKind` mientras OQ-2 siga abierta.
+- Contar como «cita previa» una cancelada, o limitar la búsqueda a una ventana fija (OQ-2).
 - Guardar el certificado del llavero o cualquier secreto en el repositorio o en el respaldo del dump.
 
 ## No se hace
