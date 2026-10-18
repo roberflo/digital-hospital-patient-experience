@@ -28,7 +28,7 @@ public static class HospitalEndpoints
     public static async Task<IResult> VisitKind(Guid id, DateTimeOffset? before, CrmDb db, HospitalClient h, TenantScope t)
     {
         var contact = await db.Contacts.SingleOrDefaultAsync(x => x.Id == id); if (contact?.PatientId is null) return Results.NotFound(new { title = "Vincula primero el paciente del hospital" });
-        return Results.Ok(new VisitKindAnswer(await h.FirstOrFollowUpAsync(t.Id, contact.PatientId.Value, contact.Phone, before ?? DateTimeOffset.UtcNow)));
+        return Results.Ok(new VisitKindAnswer(await h.FirstOrFollowUpAsync(t.Id, contact.PatientId.Value, before ?? DateTimeOffset.UtcNow)));
     }
     public static async Task<IResult> Appointment(AppointmentInput input, HttpContext ctx, CrmDb db, HospitalClient h, TenantScope t, CurrentUser u)
     {
@@ -43,7 +43,7 @@ public static class HospitalEndpoints
             var zone=await db.Tenants.Where(x=>x.Id==t.Id).Select(x=>x.TimeZone).SingleAsync();
             if(!await h.IsSlotAvailableAsync(t.Id,input.DoctorId,input.StartsAt,input.DurationMinutes,zone))return Results.Conflict(new{title="El horario ya no está disponible"});
         }
-        if (input.Action == "create") visit ??= await h.FirstOrFollowUpAsync(t.Id, contact.PatientId.Value, contact.Phone, input.StartsAt);
+        if (input.Action == "create") visit ??= await h.FirstOrFollowUpAsync(t.Id, contact.PatientId.Value, input.StartsAt);
         var key = Rules.Required(ctx.Request.Headers["Idempotency-Key"].ToString(), 100);
         if (await db.Receipts.AnyAsync(x => x.Key == "appointment:" + key)) return Results.Conflict(new { title = "Solicitud ya procesada. Comprueba la agenda antes de repetir." });
         db.Receipts.Add(new Receipt { TenantId = t.Id, Key = "appointment:" + key }); CrmEndpoints.Audit(db, t, u, "appointment.requested", contact.Id); await db.SaveChangesAsync();

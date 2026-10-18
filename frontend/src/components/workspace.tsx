@@ -2172,6 +2172,8 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
   const [doctor, setDoctor] = useState('');
   const [patient, setPatient] = useState('');
   const [slotStart, setSlotStart] = useState('');
+  // What the team picked; null until they touch the select, so the suggestion only preselects.
+  const [visitKind, setVisitKind] = useState<string | null>(null);
   const [cancel, setCancel] = useState<AgendaRow | null>(null);
   const [cancelReason, setCancelReason] = useState('');
   const appointmentBusy = useRef(false);
@@ -2387,6 +2389,7 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
             setModify(null);
             setPatient('');
             setSlotStart('');
+            setVisitKind(null);
           }
         }}
       >
@@ -2423,6 +2426,7 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
                 setModify(null);
                 setPatient('');
                 setSlotStart('');
+                setVisitKind(null);
                 mutate();
               } catch (err) {
                 toast.error((err as Error).message);
@@ -2532,8 +2536,8 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
                   <NativeSelect
                     id="appointment-visit-kind"
                     name="visitKind"
-                    key={suggested?.visitKind ?? 'none'}
-                    defaultValue={suggested?.visitKind ?? ''}
+                    value={visitKind ?? suggested?.visitKind ?? ''}
+                    onChange={(e) => setVisitKind(e.target.value)}
                   >
                     <NativeSelectOption value="">
                       Según su historial en el hospital

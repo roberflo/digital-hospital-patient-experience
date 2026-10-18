@@ -68,10 +68,12 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             return;
         }
         // The patient chose a person: with the button, or by saying yes to the offer just made. The team gets the reason the agent offered it for.
+        var legacy = await LegacyQuestion(history, prompt, ct);
         var offered = await Open("question").Where(x => x.Code == "person").OrderByDescending(x => x.CreatedAt).FirstOrDefaultAsync(ct);
-        if (latest.Body.Trim() is "PERSONA" || (offered is not null && offered.PromptMessageId == prompt && AgentGuard.Affirms(latest.Body)))
+        if (latest.Body.Trim() is "PERSONA" || (AgentGuard.Affirms(latest.Body) && ((prompt is not null && offered?.PromptMessageId == prompt) || legacy == "person")))
         {
-            var why = offered?.Body; if (offered is not null) await Consume(offered, ct);
+            var why = offered?.Body is { Length: > 0 } given ? given : legacy == "person" ? await db.Activities.Where(x => x.ConversationId == conv.Id && x.Kind == "handoff_offer" && x.CreatedAt > DateTimeOffset.UtcNow.AddHours(-24)).OrderByDescending(x => x.CreatedAt).Select(x => x.Body).FirstOrDefaultAsync(ct) : null;
+            if (offered is not null) await Consume(offered, ct);
             await Handoff(conv, why ?? "El paciente pidió hablar con una persona.", ct, offerDoctor: true); return;
         }
         if (latest.Body.Trim() is "MENU") { await conversations.Send(conv.Id, "Claro, aquí sigo.\n¿En qué te ayudo?", "agent", "agent:" + job.Id, ct: ct, choices: MenuNow); return; }
@@ -84,8 +86,9 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         // Asked in this conversation: the question went out and is still open, or it was answered.
         emergencyAsked = await db.PendingActions.AnyAsync(x => x.ConversationId == conv.Id && x.Kind == "question" && x.Code == "emergency" && x.PromptMessageId != null && (x.ConsumedAt != null || x.ExpiresAt > DateTimeOffset.UtcNow), ct);
         var asked = emergencyAsked || !emergencyLine;
-        if (prompt is not null && AgentGuard.Affirms(latest.Body) && await Open("question").FirstOrDefaultAsync(x => x.Code == "emergency" && x.PromptMessageId == prompt, ct) is { } answered)
-        { await Consume(answered, ct); await Handoff(conv, "El paciente indica que es una emergencia.", ct, urgent: true); return; }
+        var answered = prompt is null ? null : await Open("question").FirstOrDefaultAsync(x => x.Code == "emergency" && x.PromptMessageId == prompt, ct);
+        if (prompt is not null && AgentGuard.Affirms(latest.Body) && (answered is not null || legacy == "emergency"))
+        { if (answered is not null) await Consume(answered, ct); await Handoff(conv, "El paciente indica que es una emergencia.", ct, urgent: true); return; }
         if (ReminderRules.ConsentCommand(latest.Body) is {} consent)
         {
             await conversations.Send(conv.Id, consent=="on" ? "Registré tu autorización de recordatorios. Cuando tu expediente esté vinculado y el servicio activo, recibirás avisos a las 9:00 del día anterior y una hora antes. Puedes escribir BAJA para desactivarlos." : "Desactivé tus recordatorios de citas por WhatsApp.", "agent", "consent:"+job.Id, ct:ct);return;
@@ -294,6 +297,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             var body = content.TrimEnd() + "\n\n" + narrow.Text + (ask ? Urgent(options, tenant.EmergencyPhone) : "");
             body = body.Length > 4000 ? body[..4000] : body;
             if (body.Contains(AgentGuard.EmergencyQuestion)) Hold("question", "emergency", "", QuestionLife);
+            if (body.Contains(AgentGuard.PersonQuestion)) Hold("question", "person", "", QuestionLife);
             await Reply(body, ct, options); return;
         }
         // What the patient can tap: the confirmation of a proposal first, else the free slots just read, else the answer to the emergency question.
@@ -308,8 +312,21 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         content = content.Length > 4000 ? content[..4000] : content;
         // Asked here for nothing free soon or for symptoms, by the server or, once asked, repeated by the model: «sí» answers this message.
         if (content.Contains(AgentGuard.EmergencyQuestion)) Hold("question", "emergency", "", QuestionLife);
+        // The model may offer a person itself, in the canonical words (a price with prices off): «sí» answers that too.
+        if (content.Contains(AgentGuard.PersonQuestion)) Hold("question", "person", "", QuestionLife);
         await Reply(content, ct, choices);
     }
+    /// <summary>Deploy transition of MR-40: a question the agent sent before PendingActions existed has none. Within its 24 hours, a message the agent
+    /// sent before the cut (AGENT_LEGACY_QUESTIONS_BEFORE, ISO; set it to the deploy time) is read by its canonical words, as before.</summary>
+    // ponytail: retire this and the setting after 2026-11-17; a day after the deploy nothing can still match it.
+    async Task<string?> LegacyQuestion(List<Message> history, Guid? prompt, CancellationToken ct)
+    {
+        var cut = DateTimeOffset.TryParse(config["AGENT_LEGACY_QUESTIONS_BEFORE"], System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var set) ? set : LegacyCut;
+        if (prompt is null || history[^2].CreatedAt >= cut || history[^2].CreatedAt < DateTimeOffset.UtcNow - QuestionLife || await db.PendingActions.AnyAsync(x => x.PromptMessageId == prompt, ct)) return null;
+        return history[^2].Body.Contains(AgentGuard.EmergencyQuestion) ? "emergency" : history[^2].Body.Contains(AgentGuard.PersonQuestion) ? "person" : null;
+    }
+    /// <summary>When this change was committed (UTC); the deploy sets the real cut.</summary>
+    static readonly DateTimeOffset LegacyCut = new(2026, 10, 18, 1, 30, 0, TimeSpan.Zero);
     /// <summary>Something the agent now waits on in this conversation; it is matched to the next message the agent sends (<see cref="Reply"/>).</summary>
     PendingAction Hold(string kind, string code, string body, TimeSpan life)
     {
@@ -948,7 +965,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         if (action != "register") RequirePatient(contact);
         // Consume before the external write; never replay uncertain operations (INV-6). The proposal keeps none of its data once used,
         // and the history says a confirmation was processed, and of what.
-        db.Activities.Add(new Activity { TenantId = scope.Id, ContactId = contact.Id, ConversationId = conv.Id, Kind = "proposal_used:" + code, Actor = "Agente", ActorRole = "agent_ai", Body = new JsonObject { ["action"] = action }.ToJsonString() });
+        db.Activities.Add(new Activity { TenantId = scope.Id, ContactId = contact.Id, ConversationId = conv.Id, Kind = "proposal_used:" + code, Actor = "Agente", ActorRole = "agent_ai", Body = new JsonObject { ["action"] = action, ["startsAt"] = p.TryGetProperty("startsAt", out var at) ? at.GetString() : null, ["appointmentId"] = p.TryGetProperty("appointmentId", out var which) ? which.GetString() : null }.ToJsonString() });
         await Consume(proposal, ct);
         // MR-41: what Hospital will key this confirmation's writes by; one proposal, one operation.
         var idempotency = "agent:" + proposal.Id;
@@ -986,7 +1003,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             // What the patient said the appointment is for, when the proposal carries it; else a first visit when Hospital has no earlier appointment of
             // theirs (MR-42). Someone registered by this very confirmation has none, so Hospital is not asked. Only a read: nothing is written yet.
             var visit = action != "create" ? null : p.TryGetProperty("kind", out var kind) && kind.GetString() is { } said ? said
-                : registered ? "first-visit" : await FirstOrFollowUp(start, ct);
+                : registered ? "first-visit" : await hospital.FirstOrFollowUpAsync(scope.Id, contact.PatientId!.Value, start, ct);
             written = true;
             if (action == "cancel") await hospital.CancelAppointmentAsync(scope.Id, contact.PatientId!.Value, contact.Phone, p.GetProperty("appointmentId").GetGuid(), ct);
             else
@@ -1036,12 +1053,6 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         contact.PatientId = patient; contact.Name = $"{Field("givenNames")} {Field("familyNames")}"; // who the person said they are, confirmed by them
         db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "patient_registered", Actor = "Agente", ActorRole = "agent_ai", Body = $"Paciente registrado en Hospital por WhatsApp, con confirmación del paciente. Referencia Hospital: {patient}." }); await db.SaveChangesAsync(ct);
         return true;
-    }
-    /// <summary>An auxiliary read: when Hospital cannot say, the appointment is still booked, as the follow-up it was always booked as before MR-42.</summary>
-    async Task<string> FirstOrFollowUp(DateTimeOffset start, CancellationToken ct)
-    {
-        try { return await hospital.FirstOrFollowUpAsync(scope.Id, contact.PatientId!.Value, contact.Phone, start, ct); }
-        catch (Exception ex) when (ex is HttpRequestException or HospitalIntegrationException or KeyNotFoundException or InvalidOperationException or FormatException or JsonException) { return "follow-up"; }
     }
     static void RequirePatient(Contact c) { if (c.PatientId is null) throw new ArgumentException("Recepción debe vincular el expediente del paciente"); }
     /// <param name="offerDoctor">The patient asked for a person or a doctor: the doctors the hospital lets patients write to are offered too.</param>

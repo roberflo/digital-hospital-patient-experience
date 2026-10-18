@@ -75,7 +75,7 @@ public sealed class AgentIntakeTests : IAsyncLifetime
             var path = request.RequestUri!.AbsolutePath;
             if (path == "/v1/patients") return AgentHarness.Json(new { created = true, patientId = patient, duplicateCandidates = Array.Empty<object>() });
             if (path.StartsWith("/v1/patients/")) return AgentHarness.Json(new { patientId = patient, givenNames = "Ana Sintética", familyNames = "López Prueba", phone = h.Contact.Phone });
-            if (path.StartsWith("/v1/agenda/patients/")) return AgentHarness.Json(new { rows = Array.Empty<object>() }); // just registered: Hospital has no appointment of theirs (MR-42)
+            if (path.StartsWith("/v1/agenda/patients/")) return AgentHarness.Json(new { rows = Array.Empty<object>(), exists = false }); // just registered: Hospital has no appointment of theirs (MR-42)
             if (path == "/v1/agenda/booking-options") return AgentHarness.Json(new { clinicalDayFrom = "", clinicalDayTo = "", maxDaysPerQuery = 31, rollState = "open", professionals = new[] { new { clinicianId = doctor, clinicianName = "Dra. Sintética", placeName = "", defaultDurationMinutes = 30, days = new[] { new { clinicalDay = "", state = "open", takenSlotCount = 0, utcOffset = "-06:00", slots = new[] { new { slotId = "a", startsAt = start, durationMinutes = 30, takenBy = 0, offered = true } } } } } } });
             booking = JsonDocument.Parse(await request.Content!.ReadAsStringAsync()).RootElement.Clone();
             return AgentHarness.Json(new { appointmentId = Guid.NewGuid(), status = "booked", overlaps = false });

@@ -15,7 +15,7 @@ public sealed class AgentPendingActionsTests : IAsyncLifetime
     static string Today => DateTime.UtcNow.AddHours(-6).ToString("yyyy-MM-dd");
     static object Agenda(params DateTimeOffset[] starts) => new { clinicalDayFrom = "", clinicalDayTo = "", maxDaysPerQuery = 31, rollState = "open", professionals = new[] { new { clinicianId = Doctor, clinicianName = "Dra. Sintética", placeName = "", defaultDurationMinutes = 30, days = new[] { new { clinicalDay = "", state = "open", takenSlotCount = 0, utcOffset = "-06:00", slots = starts.Select((start, i) => new { slotId = "s" + i, startsAt = start, durationMinutes = 30, takenBy = 0, offered = true }).ToArray() } } } } };
     static string Tap(DateTimeOffset start) => $"CITA {start.ToOffset(TimeSpan.FromHours(-6)):yyyy-MM-ddTHH:mm:sszzz} {Doctor} 30 Dra. Sintética";
-    async Task Say(string text, HttpMessageHandler? model = null, HttpMessageHandler? hospital = null) { await h.Say("patient", text); await h.Runtime(model ?? NoModel, h.Sender(), hospital).Run(h.Job, CancellationToken.None); }
+    async Task Say(string text, HttpMessageHandler? model = null, HttpMessageHandler? hospital = null, Dictionary<string, string?>? extra = null) { await h.Say("patient", text); await h.Runtime(model ?? NoModel, h.Sender(), hospital, extra).Run(h.Job, CancellationToken.None); }
     Task<List<Activity>> Trail() => h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync();
     /// <summary>Someone rewrites the message the agent asked with: the flow must not notice.</summary>
     async Task RewriteLastAgentMessage()
@@ -23,6 +23,8 @@ public sealed class AgentPendingActionsTests : IAsyncLifetime
         var prompt = await h.Db.Messages.Where(m => m.ConversationId == h.Conversation.Id && m.Sender == "agent").OrderByDescending(m => m.CreatedAt).FirstAsync();
         prompt.Body = "Mensaje reescrito sin la pregunta."; await h.Db.SaveChangesAsync();
     }
+    /// <summary>The conversation's first message, moved back so that what is seeded after it in the past still follows it.</summary>
+    async Task Earlier(TimeSpan ago) { foreach (var m in await h.Db.Messages.Where(m => m.ConversationId == h.Conversation.Id).ToListAsync()) m.CreatedAt = DateTimeOffset.UtcNow - ago; await h.Db.SaveChangesAsync(); }
     async Task EmergencyLine() { (await h.Db.Tenants.SingleAsync(t => t.Id == h.Scope.Id)).EmergencyPhone = "2200 0000"; await h.Db.SaveChangesAsync(); }
 
     /// <summary>(b) Every way the agent asks, answered «sí» after the question's text was changed in the database.</summary>
@@ -32,6 +34,8 @@ public sealed class AgentPendingActionsTests : IAsyncLifetime
     [InlineData("emergency-list")]       // the turn's closing message with the list of hours
     [InlineData("emergency-symptoms")]   // the model told the symptoms apart: the server's question replaces the model's
     [InlineData("emergency-menu")]       // «Agendar cita» from the menu, nothing free in the next hours
+    [InlineData("emergency-narrow")]     // the model's question kept beside the choice of doctor (the narrowing question)
+    [InlineData("person-model")]         // the model asked, in the canonical words, whether to pass the patient to a person
     public async Task TheAnswerFollowsTheQuestionAskedNotTheTextOfTheMessage(string path)
     {
         await EmergencyLine();
@@ -43,8 +47,10 @@ public sealed class AgentPendingActionsTests : IAsyncLifetime
             case "emergency-list": await Say("Quiero una cita hoy", h.Model(AgentHarness.ToolCall("hospital_availability", new { date = Today }), AgentHarness.Reply("Esto es lo que encontré.")), h.Hospital(availability: Agenda(later))); break;
             case "emergency-symptoms": await Say("Me siento muy mal del estómago", h.Model(AgentHarness.Reply("Siento que te sientas así. ¿Es una emergencia?"))); break;
             case "emergency-menu": await Say("AGENDAR", hospital: h.Hospital(availability: Agenda(later))); break;
+            case "emergency-narrow": await Say("Me siento mal, quiero cita", h.Model(AgentHarness.ToolCall("hospital_availability", new { date = DateTime.UtcNow.AddHours(-6).AddDays(3).ToString("yyyy-MM-dd") }), AgentHarness.Reply("Siento que te sientas así. ¿Es una emergencia? Si no, te ayudo con la cita.")), h.Hospital(availability: TwoDoctors(DateTimeOffset.UtcNow.AddDays(3)))); break;
+            case "person-model": await Say("¿Cuánto cuesta una limpieza?", h.Model(AgentHarness.Reply("El precio lo confirma recepción.\n\n" + AgentGuard.PersonQuestion))); break;
         }
-        var person = path == "person";
+        var person = path.StartsWith("person");
         Assert.Contains(person ? AgentGuard.PersonQuestion : AgentGuard.EmergencyQuestion, h.Sent[^1]); // the question went out: the rest measures something
         var asked = Assert.Single(await h.Pending("question"));
         Assert.Equal(person ? "person" : "emergency", asked.Code);
@@ -54,9 +60,53 @@ public sealed class AgentPendingActionsTests : IAsyncLifetime
         await Say("Sí");
 
         Assert.Equal("human", (await h.Fresh()).Status);
-        if (person) { Assert.StartsWith("Le pasé tu consulta", h.Sent[^1]); Assert.Equal("El contacto pide su receta y no tiene expediente vinculado.", (await Trail()).Single(a => a.Kind == "handoff").Body); }
+        if (person) { Assert.StartsWith("Le pasé tu consulta", h.Sent[^1]); Assert.Equal(path == "person" ? "El contacto pide su receta y no tiene expediente vinculado." : "El paciente pidió hablar con una persona.", (await Trail()).Single(a => a.Kind == "handoff").Body); }
         else Assert.StartsWith("Si es una emergencia", h.Sent[^1]); // urgent: what to do now comes first
         Assert.Empty(await h.Pending("question")); // the answer used the question
+    }
+
+    static object TwoDoctors(DateTimeOffset at) => new { clinicalDayFrom = "", clinicalDayTo = "", maxDaysPerQuery = 31, rollState = "open", professionals = new[] { Guid.NewGuid(), Guid.NewGuid() }.Select((id, i) => new { clinicianId = id, clinicianName = i == 0 ? "Dra. Sintética" : "Dr. Modelo", placeName = "", defaultDurationMinutes = 30, days = new[] { new { clinicalDay = "", state = "open", takenSlotCount = 0, utcOffset = "-06:00", slots = new[] { new { slotId = "s" + i, startsAt = at.AddMinutes(30 * i), durationMinutes = 30, takenBy = 0, offered = true } } } } }).ToArray() };
+
+    /// <summary>I1, the deploy: a question the agent sent before PendingActions existed has none. Within 24 hours of it, and only for a message
+    /// the agent sent before the cut, its canonical words still say what it asked.</summary>
+    [Theory]
+    [InlineData(AgentGuard.EmergencyQuestion, 1, true)]     // sent before the cut: «sí» is an emergency
+    [InlineData(AgentGuard.EmergencyQuestion, -1, false)]   // sent after the cut with no PendingAction: the words alone are not the question
+    [InlineData(AgentGuard.PersonQuestion, 1, true)]
+    [InlineData(AgentGuard.PersonQuestion, -1, false)]
+    public async Task AQuestionSentBeforeTheDeployIsStillAnswered(string question, int cutAfterMinutes, bool derives)
+    {
+        await EmergencyLine(); await Earlier(TimeSpan.FromMinutes(60));
+        var sent = await h.Say("agent", "Mensaje anterior al despliegue.\n\n" + question, DateTimeOffset.UtcNow.AddMinutes(-30));
+        var extra = new Dictionary<string, string?> { ["AGENT_LEGACY_QUESTIONS_BEFORE"] = sent.CreatedAt.AddMinutes(cutAfterMinutes).ToString("O") };
+
+        await Say("Sí", h.Model(AgentHarness.Reply("Claro, dime en qué te ayudo.")), extra: extra);
+
+        Assert.Equal(derives ? "human" : "agent", (await h.Fresh()).Status);
+        if (derives && question == AgentGuard.EmergencyQuestion) Assert.StartsWith("Si es una emergencia", h.Sent[^1]);
+        if (derives && question == AgentGuard.PersonQuestion) Assert.StartsWith("Le pasé tu consulta", h.Sent[^1]);
+    }
+
+    [Fact]
+    public async Task AQuestionSentBeforeTheDeployIsOnlyAnsweredWithinTheDay()
+    {
+        await EmergencyLine(); await Earlier(TimeSpan.FromHours(26));
+        var sent = await h.Say("agent", AgentGuard.EmergencyQuestion, DateTimeOffset.UtcNow.AddHours(-25));
+
+        await Say("Sí", h.Model(AgentHarness.Reply("Claro, dime en qué te ayudo.")), extra: new() { ["AGENT_LEGACY_QUESTIONS_BEFORE"] = sent.CreatedAt.AddMinutes(1).ToString("O") });
+
+        Assert.Equal("agent", (await h.Fresh()).Status);
+    }
+
+    /// <summary>Nit1: a question that never went out (no message stamped) answers nothing, even right after another patient message.</summary>
+    [Fact]
+    public async Task AQuestionThatNeverWentOutIsNotAnswered()
+    {
+        h.Db.PendingActions.Add(new PendingAction { TenantId = h.Scope.Id, ConversationId = h.Conversation.Id, Kind = "question", Code = "person", Body = "Motivo sintético", ExpiresAt = DateTimeOffset.UtcNow.AddHours(1) }); await h.Db.SaveChangesAsync();
+
+        await Say("Sí", h.Model(AgentHarness.Reply("Claro, dime en qué te ayudo."))); // the message before it is the patient's own
+
+        Assert.Equal("agent", (await h.Fresh()).Status);
     }
 
     /// <summary>(c) A message of the team with the very same words asks nothing on the agent's behalf.</summary>
@@ -140,6 +190,7 @@ public sealed class AgentPendingActionsTests : IAsyncLifetime
         Assert.Equal(["/v1/agenda"], h.HospitalWrites);
         Assert.True(consumedFirst);
         Assert.Empty(await h.Pending("proposal"));
-        Assert.Single(await Trail(), a => a.Kind == "proposal_used:" + card.Code);
+        using var used = System.Text.Json.JsonDocument.Parse(Assert.Single(await Trail(), a => a.Kind == "proposal_used:" + card.Code).Body);
+        Assert.Equal(("create", start), (used.RootElement.GetProperty("action").GetString(), used.RootElement.GetProperty("startsAt").GetDateTimeOffset())); // the history says which appointment was confirmed
     }
 }

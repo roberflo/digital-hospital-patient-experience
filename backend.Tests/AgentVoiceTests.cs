@@ -16,7 +16,7 @@ public sealed class AgentVoiceTests : IAsyncLifetime
     {
         var path = request.RequestUri!.AbsolutePath;
         if (path.StartsWith("/v1/patients/")) return Task.FromResult(AgentHarness.Json(new { patientId = h.Contact.PatientId, phone = h.Contact.Phone }));
-        if (path.StartsWith("/v1/agenda/patients/")) return Task.FromResult(AgentHarness.Json(new { rows = Array.Empty<object>() })); // a read, not a write (MR-42)
+        if (path.StartsWith("/v1/agenda/patients/")) return Task.FromResult(AgentHarness.Json(new { rows = Array.Empty<object>(), exists = false })); // a read, not a write (MR-42)
         if (path == "/v1/agenda/booking-options") return Task.FromResult(AgentHarness.Json(new { clinicalDayFrom = "", clinicalDayTo = "", maxDaysPerQuery = 31, rollState = "open", professionals = new[] { new { clinicianId = doctor, clinicianName = "Dra. Sintética Rivas", placeName = "Consultorio 1", defaultDurationMinutes = 30, days = new[] { new { clinicalDay = "", state = "open", takenSlotCount = 0, utcOffset = "-06:00", slots = new[] { new { slotId = "a", startsAt = start, durationMinutes = 30, takenBy = 0, offered = true } } } } } } }));
         writes.Add(path); return Task.FromResult(AgentHarness.Json(new { appointmentId = Guid.NewGuid(), status = "booked", overlaps = false }));
     });

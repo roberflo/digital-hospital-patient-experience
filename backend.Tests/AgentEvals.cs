@@ -41,7 +41,8 @@ public sealed class AgentEvals(ITestOutputHelper output)
         await using var h = new AgentHarness();
         await h.Start(spec.TryGetProperty("guide", out var guide) ? guide.GetString()! : Guide, turns[0].Text);
         if (turns[0].At is { } first) { (await h.Db.Messages.SingleAsync(m => m.ConversationId == h.Conversation.Id)).CreatedAt = first; await h.Db.SaveChangesAsync(); }
-        // A question the agent asked in the history is recorded as the runtime records it (MR-40): the answer follows the question, not its text.
+        // Seeded histories only: a case's JSON writes the agent's past question as text, which the runtime no longer reads (MR-40). Here, and
+        // nowhere else, that canonical text is turned into the PendingAction the runtime would have recorded when it asked; live turns are untouched.
         foreach (var turn in turns.Skip(1))
             if (turn.From == "agent" && (turn.Text.Contains(AgentGuard.EmergencyQuestion) || turn.Text.Contains(AgentGuard.PersonQuestion))) await h.Asked(turn.Text.Contains(AgentGuard.EmergencyQuestion) ? "emergency" : "person", turn.Text, turn.At);
             else await h.Say(turn.From, turn.Text, turn.At);

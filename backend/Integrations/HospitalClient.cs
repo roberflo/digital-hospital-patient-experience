@@ -65,22 +65,16 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
     /// <summary>The visit kinds Hospital publishes for a new appointment.</summary>
     public static readonly string[] VisitKinds = ["first-visit", "follow-up", "procedure", "results", "paperwork", "same-day-urgent"];
     /// <summary>MR-42 (decided by the owner 2026-10-17): «first-visit» when Hospital has no appointment of this patient, of any date, before
-    /// <paramref name="before"/>, else «follow-up». A cancelled appointment (cancelled-by-patient, cancelled-by-clinic) does not count.</summary>
-    public async Task<string> FirstOrFollowUpAsync(Guid tenantId, Guid patientId, string phone, DateTimeOffset before, CancellationToken ct = default)
+    /// <paramref name="before"/> (Hospital leaves out cancelled and entered-in-error ones), else «follow-up». One read. A suggestion, not a
+    /// write: when Hospital cannot answer (no such route yet, an error, no answer in time) it is «follow-up», as every appointment was before.</summary>
+    public async Task<string> FirstOrFollowUpAsync(Guid tenantId, Guid patientId, DateTimeOffset before, CancellationToken ct = default)
     {
-        await GetVerifiedPatientAsync(tenantId, patientId, phone, ct);
-        // Hospital answers 31 days per query and publishes no earlier read (openapi.v1.json: v1/agenda/patients/{id}, from/to only), so the
-        // agenda is walked back to the first day this hospital can hold an appointment: AgendaSince per tenant, 2020-01-01 if unset.
-        // ponytail: a true first visit costs one query per 31 days since then, in order, newest first (about 80 from 2020); a follow-up stops at
-        // its last appointment. One Hospital read «has an earlier appointment» would make it one request (proposed to Hospital, not built).
-        var since = DateOnly.TryParse(Tenant(tenantId)["AgendaSince"], System.Globalization.CultureInfo.InvariantCulture, out var floor) ? floor : new DateOnly(2020, 1, 1);
-        for (var to = DateOnly.FromDateTime(before.UtcDateTime).AddDays(1); to >= since; to = to.AddDays(-31))
+        try
         {
-            var from = to.AddDays(-30) < since ? since : to.AddDays(-30);
-            var page = await ReadAsync<JsonElement>(tenantId, $"v1/agenda/patients/{patientId:D}?from={from:yyyy-MM-dd}&to={to:yyyy-MM-dd}", ct);
-            if (page.GetProperty("rows").EnumerateArray().Any(row => row.GetProperty("status").GetString()?.StartsWith("cancelled") != true && row.GetProperty("scheduledStart").GetDateTimeOffset() < before)) return "follow-up";
+            var answer = await ReadAsync<JsonElement>(tenantId, $"v1/agenda/patients/{patientId:D}/earlier?before={Uri.EscapeDataString(before.ToString("O"))}", ct);
+            return answer.GetProperty("exists").GetBoolean() ? "follow-up" : "first-visit";
         }
-        return "first-visit";
+        catch (Exception ex) when (!ct.IsCancellationRequested && ex is HttpRequestException or HospitalIntegrationException or TaskCanceledException or JsonException or KeyNotFoundException or InvalidOperationException) { return "follow-up"; }
     }
 
     /// <summary>Only ever the patient-scoped agenda: the whole day's agenda carries every other patient (MR-12).</summary>
