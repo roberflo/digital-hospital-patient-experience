@@ -43,18 +43,26 @@ public static class HospitalEndpoints
         }
         var key = Rules.Required(ctx.Request.Headers["Idempotency-Key"].ToString(), 100);
         if (await db.Receipts.AnyAsync(x => x.Key == "appointment:" + key)) return Results.Conflict(new { title = "Solicitud ya procesada. Comprueba la agenda antes de repetir." });
-        db.Receipts.Add(new Receipt { TenantId = t.Id, Key = "appointment:" + key }); CrmEndpoints.Audit(db, t, u, "appointment.requested", contact.Id); await db.SaveChangesAsync();
+        var receipt = new Receipt { TenantId = t.Id, Key = "appointment:" + key };
+        db.Receipts.Add(receipt); CrmEndpoints.Audit(db, t, u, "appointment.requested", contact.Id); await db.SaveChangesAsync();
+        try { return await Apply(input, db, h, t, u, contact, contact.PatientId.Value); }
+        // Hospital refused the person (401/403), or their token was refused before it was sent: nothing was applied, so the key is not spent.
+        catch (HospitalIntegrationException e) when (e.Code is "hospital.user_forbidden" or "hospital.user_token_rejected")
+        { db.Receipts.Remove(receipt); await db.SaveChangesAsync(); throw; }
+    }
+    static async Task<IResult> Apply(AppointmentInput input, CrmDb db, HospitalClient h, TenantScope t, CurrentUser u, Contact contact, Guid patientId)
+    {
         void Record(string text){db.Activities.Add(new Activity{TenantId=t.Id,ContactId=contact.Id,Kind="appointment",Actor=u.Name,ActorRole=u.Role,ActorSubject=u.Subject,Body=text});}
         if (input.Action == "cancel")
         {
             var cancellation = AppointmentCancellation.From(input.CancelReason);
-            await h.CancelAppointmentAsync(t.Id, contact.PatientId.Value, contact.Phone, input.AppointmentId ?? throw new ArgumentException("Cita requerida"), reason: cancellation.Reason); Record(cancellation.CancelledByPatient ? "Cita cancelada en Hospital a petición del paciente." : "Cita cancelada en Hospital por el hospital.");await db.SaveChangesAsync();return Results.Ok(new { status = "cancelled" });
+            await h.CancelAppointmentAsync(t.Id, patientId, contact.Phone, input.AppointmentId ?? throw new ArgumentException("Cita requerida"), reason: cancellation.Reason); Record(cancellation.CancelledByPatient ? "Cita cancelada en Hospital a petición del paciente." : "Cita cancelada en Hospital por el hospital.");await db.SaveChangesAsync();return Results.Ok(new { status = "cancelled" });
         }
         if (input.Action == "reschedule")
         {
-            await h.RescheduleAppointmentAsync(t.Id, contact.PatientId.Value, contact.Phone, input.AppointmentId ?? throw new ArgumentException("Cita requerida"), input.DoctorId, input.StartsAt, input.DurationMinutes); Record("Cita reprogramada en Hospital.");await db.SaveChangesAsync();return Results.Ok(new { status = "rescheduled" });
+            await h.RescheduleAppointmentAsync(t.Id, patientId, contact.Phone, input.AppointmentId ?? throw new ArgumentException("Cita requerida"), input.DoctorId, input.StartsAt, input.DurationMinutes); Record("Cita reprogramada en Hospital.");await db.SaveChangesAsync();return Results.Ok(new { status = "rescheduled" });
         }
-        var result=await h.CreateAppointmentAsync(t.Id, contact.Phone, new(contact.PatientId.Value, input.DoctorId, input.StartsAt, input.DurationMinutes, "follow-up"));
+        var result=await h.CreateAppointmentAsync(t.Id, contact.Phone, new(patientId, input.DoctorId, input.StartsAt, input.DurationMinutes, "follow-up"));
         Record(result.Overlaps?"Cita registrada en Hospital con solapamiento; requiere revisión.":"Cita registrada en Hospital.");await db.SaveChangesAsync();return Results.Ok(result);
     }
 }

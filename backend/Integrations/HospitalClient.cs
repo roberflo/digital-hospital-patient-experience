@@ -362,7 +362,7 @@ public sealed class HospitalIntegrationException(string code, HttpStatusCode sta
         "hospital.not_configured" => "Tu cuenta del Hospital está reconocida. El administrador debe habilitar la agenda para este hospital desde la configuración de la plataforma.",
         "hospital.credentials_missing" or "hospital.token_request_failed" or "hospital.token_missing" or "hospital.token_tenant_or_expiry_invalid" => "No pudimos acceder a Hospital. Tu cuenta sigue vinculada; pide al administrador que revise la conexión.",
         "hospital.patient_phone_mismatch" => "El teléfono del expediente no coincide con el contacto. Corrige los datos en Hospital antes de vincular.",
-        "hospital.user_forbidden" => "Tu usuario no tiene permiso para esto en Hospital",
+        "hospital.user_forbidden" => "Tu usuario no tiene permiso para esto en Hospital.",
         "hospital.user_token_rejected" => "Hospital no aceptó tu sesión. Recarga la página; si continúa, consulta al administrador.",
         "hospital.http_403" or "hospital.clinical_delivery_not_authorized" => "Tu cuenta no tiene permiso para esta operación en Hospital. Consulta al administrador.",
         "hospital.http_404" or "hospital.prescription_unavailable" or "hospital.appointment_unavailable" => "No encontramos la cita o el documento en Hospital. Actualiza la información y vuelve a intentar.",

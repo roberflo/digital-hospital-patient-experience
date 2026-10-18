@@ -13,11 +13,11 @@ public static class HospitalConnectionEndpoints
         api.MapGet("/connection", Read).WithMetadata(new PlatformOperable());
         api.MapPost("/connection/check", Check).WithMetadata(new PlatformOperable());
         // POST keeps patient search terms out of browser history and proxy request URLs.
-        api.MapPost("/contacts/{id:guid}/patients/search", async (Guid id, HospitalPatientSearchInput input, CrmDb db, TenantScope t, CurrentUser u, HospitalClient h, CancellationToken ct) =>
+        api.MapPost("/contacts/{id:guid}/patients/search", async (Guid id, HospitalPatientSearchInput input, HttpContext ctx, CrmDb db, TenantScope t, CurrentUser u, HospitalClient h, CancellationToken ct) =>
         {
             CommercialService.RequireOperator(u);
             if (!await db.Contacts.AnyAsync(x => x.Id == id, ct)) return Results.NotFound();
-            var results = await h.SearchPatients(t.Id, input.QueryShape, input.Term ?? "", ct);
+            var results = await h.AsUser(Identity.Bearer(ctx)).SearchPatients(t.Id, input.QueryShape, input.Term ?? "", ct);
             CrmEndpoints.Audit(db, t, u, "patient.searched", id);
             await db.SaveChangesAsync(ct);
             return Results.Ok(new { results });

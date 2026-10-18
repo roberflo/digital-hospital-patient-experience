@@ -613,6 +613,8 @@ public sealed class AgentHarness(Guid? tenant = null, string phone = "5037000000
         await Db.SaveChangesAsync();
     }
     public async Task Link() { Contact.PatientId = Guid.NewGuid(); await Db.SaveChangesAsync(); }
+    /// <summary>Another context on the same database and keys, for a host that resolves its own per request.</summary>
+    public CrmDb NewDb(TenantScope scope) => new(options, scope, protection);
     public async Task<Conversation> Fresh() { await using var other = new CrmDb(options, Scope, protection); return await other.Conversations.AsNoTracking().SingleAsync(x => x.Id == Conversation.Id); }
 
     public AgentRuntime Runtime(HttpMessageHandler model, Fake sender, HttpMessageHandler? hospital = null, Dictionary<string, string?>? extra = null)

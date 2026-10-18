@@ -7,6 +7,8 @@ namespace Recepcion;
 public sealed class CommercialService(CrmDb db,TenantScope scope,HospitalClient hospital,ConversationService locks)
 {
     static readonly JsonSerializerOptions Json=new(JsonSerializerDefaults.Web);
+    /// <summary>For a person's request (MR-11): Hospital sees their token. The commercial sync worker never calls this.</summary>
+    public CommercialService AsUser(string bearer)=>new(db,scope,hospital.AsUser(bearer),locks);
     public static void RequireOperator(CurrentUser user){if(user.Role is not("admin" or "agent"))throw new AccessDeniedException();}
     public async Task<HospitalCustomer> Link(Contact contact,Guid customerId,CurrentUser user,CancellationToken ct=default)
     {

@@ -8,6 +8,8 @@ namespace Recepcion.Integrations;
 
 public sealed class GoogleCalendarClient(HttpClient http, IConfiguration config, CrmDb db, TenantScope scope, HospitalClient hospital)
 {
+    /// <summary>For a sync a person starts (MR-11): Hospital sees their token. The calendar worker never calls this.</summary>
+    public GoogleCalendarClient AsUser(string bearer) => new(http, config, db, scope, hospital.AsUser(bearer));
     public string AuthorizationUrl(string state) => "https://accounts.google.com/o/oauth2/v2/auth?" + Query(new() { ["client_id"] = Required("GOOGLE_CLIENT_ID"), ["redirect_uri"] = Required("GOOGLE_REDIRECT_URI"), ["response_type"] = "code", ["scope"] = "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.calendarlist.readonly", ["access_type"] = "offline", ["prompt"] = "consent", ["state"] = state });
     public async Task<string?> Exchange(string code, CancellationToken ct) { var j = await Token(new() { ["code"] = code, ["redirect_uri"] = Required("GOOGLE_REDIRECT_URI"), ["grant_type"] = "authorization_code" }, ct); return j.TryGetProperty("refresh_token", out var refresh) ? refresh.GetString() : null; }
     async Task<JsonElement> Token(Dictionary<string, string> form, CancellationToken ct)
@@ -109,7 +111,7 @@ public static class GoogleEndpoints
         });
         app.MapGet("/api/google/calendars", async (CurrentUser u, GoogleCalendarClient g, CancellationToken ct) => { u.RequireAdmin(); return Results.Ok(await g.Calendars(ct)); }).RequireAuthorization();
         app.MapPut("/api/google/calendar", async (CalendarSelection b, CurrentUser u, GoogleCalendarClient g, CancellationToken ct) => { u.RequireAdmin(); await g.SelectCalendar(b.Id, ct); return Results.Ok(); }).RequireAuthorization();
-        app.MapPost("/api/google/sync", async (CalendarSync b, CurrentUser u, GoogleCalendarClient g) => { u.RequireAdmin(); return Results.Ok(new { synced = await g.Sync(b.From, b.Days) }); }).RequireAuthorization();
+        app.MapPost("/api/google/sync", async (CalendarSync b, HttpContext ctx, CurrentUser u, GoogleCalendarClient g) => { u.RequireAdmin(); return Results.Ok(new { synced = await g.AsUser(Identity.Bearer(ctx)).Sync(b.From, b.Days) }); }).RequireAuthorization();
         app.MapDelete("/api/google", async (CrmDb db, TenantScope t, CurrentUser u) => { u.RequireAdmin(); var row = await db.Tenants.SingleAsync(x => x.Id == t.Id); row.GoogleRefreshToken = null; row.GoogleStateHash = null; row.GoogleStateExpires = null; await db.SaveChangesAsync(); return Results.Ok(); }).RequireAuthorization();
     }
     static string Hash(string input) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(input)));

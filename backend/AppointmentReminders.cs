@@ -32,6 +32,8 @@ public static class ReminderRules
 
 public sealed class AppointmentReminderService(CrmDb db,TenantScope scope,HospitalClient hospital,KapsoClient kapso,ConversationService conversations,IConfiguration config)
 {
+    /// <summary>For a sync a person starts (MR-11): Hospital sees their token. The reminder worker never calls this.</summary>
+    public AppointmentReminderService AsUser(string bearer)=>new(db,scope,hospital.AsUser(bearer),kapso,conversations,config);
     /// <param name="contactBudget">How long one contact's Hospital read may take before it counts as a failure (20 s).</param>
     public async Task Sync(DateTimeOffset now, CancellationToken ct = default, TimeSpan? contactBudget = null)
     {
