@@ -44,7 +44,8 @@ public sealed class AgentEvals(ITestOutputHelper output)
         // Seeded histories only: a case's JSON writes the agent's past question as text, which the runtime no longer reads (MR-40). Here, and
         // nowhere else, that canonical text is turned into the PendingAction the runtime would have recorded when it asked; live turns are untouched.
         foreach (var turn in turns.Skip(1))
-            if (turn.From == "agent" && (turn.Text.Contains(AgentGuard.EmergencyQuestion) || turn.Text.Contains(AgentGuard.PersonQuestion))) await h.Asked(turn.Text.Contains(AgentGuard.EmergencyQuestion) ? "emergency" : "person", turn.Text, turn.At);
+            if (turn.From == "agent" && (turn.Text.Contains(AgentGuard.EmergencyQuestion) ? "emergency" : turn.Text.Contains(AgentGuard.PersonQuestion) ? "person"
+                : turn.Text.Contains("contacto de emergencia", StringComparison.OrdinalIgnoreCase) ? "emergency-contact" : null) is { } asked) await h.Asked(asked, turn.Text, turn.At);
             else await h.Say(turn.From, turn.Text, turn.At);
         if (spec.TryGetProperty("memory", out var kept)) { foreach (var fact in kept.EnumerateObject()) h.Db.ContactMemories.Add(new ContactMemory { TenantId = h.Scope.Id, ContactId = h.Contact.Id, Key = fact.Name, Value = fact.Value.GetString()! }); await h.Db.SaveChangesAsync(); }
         if (spec.GetProperty("linked").GetBoolean()) await h.Link();
