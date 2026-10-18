@@ -22,16 +22,19 @@ public sealed class HospitalConnectionStore(CrmDb db, IConfiguration config)
     // MR-38: this hospital's own credential for `recepcion-service-<tenant>` (Keycloak client-jwt). The private
     // half lives only in the encrypted HospitalConnection; Keycloak reads the public half from /hospital-jwks/<tenant>.
     // Created on first need, before the first token request makes Keycloak fetch it. Null for a hospital with no row.
-    // ponytail: no lock — two first calls at once may each create a key; the loser's one token request fails and the
-    // next signs with the stored key. A per-tenant advisory lock if that ever shows in the logs.
+    // Creating and rotating take the tenant's advisory lock (the one Save takes) and re-read under it, so concurrent
+    // first uses agree on one key. A rotation keeps the previous public key published for one more rotation.
     public async Task<ECDsa?> SigningKeyAsync(Guid tenant, bool rotate = false, CancellationToken ct = default)
     {
-        var key = ECDsa.Create();
-        if (!rotate && Section(tenant)["SigningKey"] is { Length: > 0 } stored) { key.ImportPkcs8PrivateKey(Convert.FromBase64String(stored), out _); return key; }
+        if (!rotate && Section(tenant)["SigningKey"] is { Length: > 0 } cached) return Import(cached);
+        using var lease = await ConversationService.Lock(db, tenant, ct);
         var row = await db.Tenants.AsNoTracking().Where(x => x.Id == tenant).Select(x => new { x.HospitalConnection }).SingleOrDefaultAsync(ct);
-        if (row is null) { key.Dispose(); return null; }
+        if (row is null) return null;
         var values = row.HospitalConnection is null ? new() : JsonSerializer.Deserialize<Dictionary<string,string?>>(row.HospitalConnection)!;
-        key.GenerateKey(ECCurve.NamedCurves.nistP256);
+        var stored = values.GetValueOrDefault("SigningKey");
+        if (!rotate && stored is { Length: > 0 }) { cache.Remove(tenant); return Import(stored); }
+        var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        if (stored is { Length: > 0 }) values["PreviousSigningKey"] = stored;
         values["SigningKey"] = Convert.ToBase64String(key.ExportPkcs8PrivateKey());
         var json = JsonSerializer.Serialize(values);
         // Outside the request's change tracker: a token request never flushes what the handler has pending.
@@ -48,13 +51,11 @@ public sealed class HospitalConnectionStore(CrmDb db, IConfiguration config)
         var kid = B64(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes($"{{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"{x}\",\"y\":\"{y}\"}}")));
         return new() { ["kty"] = "EC", ["crv"] = "P-256", ["x"] = x, ["y"] = y, ["kid"] = kid, ["use"] = "sig", ["alg"] = "ES256" };
     }
-    /// <summary>What /hospital-jwks/<tenant> publishes: the current public key, or nothing. Never creates one.</summary>
-    public Dictionary<string,string>[] PublicKeys(Guid tenant)
-    {
-        if (Section(tenant)["SigningKey"] is not { Length: > 0 } stored) return [];
-        using var key = ECDsa.Create(); key.ImportPkcs8PrivateKey(Convert.FromBase64String(stored), out _);
-        return [Jwk(key)];
-    }
+    static ECDsa Import(string pkcs8) { var key = ECDsa.Create(); key.ImportPkcs8PrivateKey(Convert.FromBase64String(pkcs8), out _); return key; }
+    /// <summary>What /hospital-jwks/<tenant> publishes: the current public key and the one before it, or nothing. Never creates one.</summary>
+    public Dictionary<string,string>[] PublicKeys(Guid tenant) =>
+        new[] { Section(tenant)["SigningKey"], Section(tenant)["PreviousSigningKey"] }.OfType<string>().Where(x => x.Length > 0)
+            .Select(x => { using var key = Import(x); return Jwk(key); }).ToArray();
     // What makes a hospital connect by signing in: one installation-wide Hospital API and the
     // service account Hospital's realm job declares for every tenant, `recepcion-service-<tenant>`, which
     // authenticates with this hospital's own key (SigningKeyAsync). Nobody types a UUID, a URL or a secret.
@@ -71,6 +72,7 @@ public sealed class HospitalConnectionStore(CrmDb db, IConfiguration config)
         };
         // ponytail: MR-38 transition only — the shared secret is the fallback HospitalClient tries after invalid_client.
         // Retired in deploy step 3 (docs/hospital-integration.md «MR-38»): remove HOSPITAL_SERVICE_CLIENT_SECRET, then this line.
+        // The fallback itself stays: it serves explicit per-hospital secrets (Hospital__Tenants__<id>__ClientSecret, PUT connection).
         if (config["HOSPITAL_SERVICE_CLIENT_SECRET"] is { Length: > 0 } shared) values["ClientSecret"] = shared;
         return values;
     }

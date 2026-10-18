@@ -17,7 +17,9 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
 
     /// <summary>A copy that speaks to Hospital as the signed-in person (MR-11): their own Keycloak token, so Hospital's permissions and
     /// audit name them. Never cached and never refreshed here; the agent, which never calls this, keeps the service account.</summary>
-    public HospitalClient AsUser(string bearer) => new(http, configuration, connections, log) { userBearer = bearer, correlation = correlation };
+    public HospitalClient AsUser(string bearer) => new(http, configuration, connections, log) { userBearer = bearer, correlation = correlation, KeysOnly = KeysOnly };
+    /// <summary>A candidate connection (Save): the connection comes from <c>configuration</c>, only the signing key from the store.</summary>
+    public bool KeysOnly { get; init; }
     string? userBearer;
     /// <summary>Refuses up front work that would outlive the person's token: midway it would fail request after request. No-op on the service account, which renews itself.</summary>
     public void RequireUserTokenFor(Guid tenantId, TimeSpan needed)
@@ -243,7 +245,7 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
     private IConfigurationSection Tenant(Guid tenantId)
     {
         if (tenantId == Guid.Empty) throw new ArgumentException("A tenant is required.");
-        return connections?.Section(tenantId) ?? configuration.GetSection($"Hospital:Tenants:{tenantId:D}");
+        return connections is not null && !KeysOnly ? connections.Section(tenantId) : configuration.GetSection($"Hospital:Tenants:{tenantId:D}");
     }
 
     private async Task<T> ReadAsync<T>(Guid tenantId, string path, CancellationToken ct)
@@ -336,10 +338,14 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
         if (signing is not null)
         {
             response = await PostTokenAsync(endpoint, new(form) { ["client_assertion_type"] = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer", ["client_assertion"] = ClientAssertion(signing, clientId, configuration["Auth:Authority"]!) }, ct);
-            // ponytail: MR-38 transition — the account is still a secret client until Hospital's reconciler runs (deploy step 2). Only
-            // invalid_client, and only while HOSPITAL_SERVICE_CLIENT_SECRET exists; deploy step 3 removes the variable, then this branch.
+            // A secret client (an account not yet turned into client-jwt by Hospital's reconciler, deploy step 2, or an explicit
+            // per-hospital Hospital__Tenants__<id>__ClientSecret / PUT connection) answers the key with invalid_client: only then,
+            // and only if this hospital has a secret, it is tried. Deploy step 3 removes the shared one; this branch stays.
             if (!string.IsNullOrWhiteSpace(secret) && await IsInvalidClientAsync(response, ct))
-            { response.Dispose(); response = await PostTokenAsync(endpoint, new(form) { ["client_secret"] = secret }, ct); }
+            {
+                log?.LogWarning("hospital.token_fallback {Tenant}", tenantId);
+                response.Dispose(); response = await PostTokenAsync(endpoint, new(form) { ["client_secret"] = secret }, ct);
+            }
         }
         else response = await PostTokenAsync(endpoint, new(form) { ["client_secret"] = secret! }, ct);
         using (response)

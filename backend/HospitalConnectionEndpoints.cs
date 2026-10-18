@@ -14,7 +14,7 @@ public static class HospitalConnectionEndpoints
         api.MapPost("/connection/check", Check).WithMetadata(new PlatformOperable());
         // Not PlatformOperable: the platform owner's list is the spec's (docs/platform-owner.md). The hospital's Administrador rotates.
         api.MapPost("/connection/key", RotateKey);
-        app.MapGet("/hospital-jwks/{tenant:guid}", Jwks).AllowAnonymous();
+        app.MapGet("/hospital-jwks/{tenant:guid}", Jwks).AllowAnonymous().RequireRateLimiting("jwks");
         // POST keeps patient search terms out of browser history and proxy request URLs.
         api.MapPost("/contacts/{id:guid}/patients/search", async (Guid id, HospitalPatientSearchInput input, HttpContext ctx, CrmDb db, TenantScope t, CurrentUser u, HospitalClient h, CancellationToken ct) =>
         {
@@ -31,7 +31,8 @@ public static class HospitalConnectionEndpoints
     public static object Jwks(Guid tenant, HospitalConnectionStore store) => new { keys = store.PublicKeys(tenant) };
     public static async Task<IResult> RotateKey(CurrentUser u, TenantScope t, CrmDb db, HospitalConnectionStore store, CancellationToken ct)
     {
-            u.RequireAdminOrPlatform();
+            u.RequireAdmin();
+            // The store takes the tenant's advisory lock (the one Save takes) around the rotation.
             (await store.SigningKeyAsync(t.Id, rotate: true, ct))?.Dispose();
             CrmEndpoints.Audit(db, t, u, "hospital.key_rotated", t.Id);
             await db.SaveChangesAsync(ct);
@@ -53,16 +54,20 @@ public static class HospitalConnectionEndpoints
     {
             u.RequireAdminOrPlatform();
             var values = HospitalConnectionRules.Validate(input, config);
-            var candidateConfig = new ConfigurationBuilder().AddInMemoryCollection(values.Select(x=>new KeyValuePair<string,string?>($"Hospital:Tenants:{t.Id}:"+x.Key,x.Value))).Build();
+            var candidateConfig = new ConfigurationBuilder().AddInMemoryCollection(values.Select(x=>new KeyValuePair<string,string?>($"Hospital:Tenants:{t.Id}:"+x.Key,x.Value)).Append(new("Auth:Authority",config["Auth:Authority"]))).Build();
             using var http = factory.CreateClient("hospital-setup");
-            var candidate = new HospitalClient(http, candidateConfig);
+            // Signs with the hospital's key like every other token request (after deploy step 2 the account accepts
+            // nothing else); the typed secret is only the fallback on invalid_client.
+            var candidate = new HospitalClient(http, candidateConfig, new HospitalConnectionStore(db, config)) { KeysOnly = true };
             using var lease = await locks.Lock(t.Id);
             var tenant = await db.Tenants.SingleAsync(x=>x.Id==t.Id,ct);
             var day = HospitalClient.ClinicalDay(DateTimeOffset.UtcNow,tenant.TimeZone);
             // No persistence until Hospital accepts the credentials and exact authenticated tenant.
             await candidate.GetAvailabilityAsync(t.Id,day,day,ct:ct);
-            // The hospital's signing key survives a re-connection: Keycloak keeps trusting the published one (MR-38).
-            if (tenant.HospitalConnection is { } previous && JsonSerializer.Deserialize<Dictionary<string,string?>>(previous)!.TryGetValue("SigningKey", out var signing)) values["SigningKey"] = signing;
+            // The hospital's signing keys survive a re-connection: Keycloak keeps trusting the published ones (MR-38).
+            // Read after the check, which may have just created the first one.
+            if (await db.Tenants.AsNoTracking().Where(x=>x.Id==t.Id).Select(x=>x.HospitalConnection).SingleAsync(ct) is { } current)
+                foreach (var kept in JsonSerializer.Deserialize<Dictionary<string,string?>>(current)!.Where(x=>x.Key is "SigningKey" or "PreviousSigningKey")) values[kept.Key] = kept.Value;
             tenant.HospitalConnection = JsonSerializer.Serialize(values);
             CrmEndpoints.Audit(db,t,u,"hospital.connected",t.Id);
             await db.SaveChangesAsync(ct);

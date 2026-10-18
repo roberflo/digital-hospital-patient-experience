@@ -52,7 +52,9 @@ public sealed class ConversationService(CrmDb db, TenantScope scope, KapsoClient
         kapso.RequireSending(manual);
         return channel;
     }
-    public async Task<IDisposable> Lock(Guid id, CancellationToken ct = default)
+    public Task<IDisposable> Lock(Guid id, CancellationToken ct = default) => Lock(db, id, ct);
+    /// <summary>Session-level advisory lock on <paramref name="id"/>; re-entrant on the same context's connection.</summary>
+    public static async Task<IDisposable> Lock(CrmDb db, Guid id, CancellationToken ct = default)
     {
         await db.Database.OpenConnectionAsync(ct);
         var conn = db.Database.GetDbConnection(); var cmd = conn.CreateCommand(); cmd.CommandText = "SELECT pg_advisory_lock(@id)";
