@@ -7,8 +7,8 @@ using Recepcion;
 using Recepcion.Integrations;
 using Xunit;
 
-/// <summary>MR-42 (decided by the owner 2026-10-17): an appointment is a «first-visit» when the patient has no earlier appointment in Hospital,
-/// of any date, cancelled and entered-in-error ones aside; else a «follow-up». Hospital answers that in one read
+/// <summary>MR-42/MR-43 (decided by the owner 2026-10-17): an appointment is a «first-visit» when the patient has no earlier appointment in Hospital
+/// they came to, of any date; else a «follow-up». Hospital answers that in one read
 /// (GET v1/agenda/patients/{id}/earlier?before=, the rule's own tests live with it); when it cannot, the appointment is a follow-up, as before.
 /// The agent derives it on confirming; the team's form proposes the same and may choose any kind Hospital publishes.</summary>
 public sealed class VisitKindTests : IAsyncLifetime

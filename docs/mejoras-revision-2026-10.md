@@ -19,6 +19,11 @@ De 50 hallazgos: 19 vigentes, 20 vigentes en parte, 9 falsos, 2 ya resueltos (ta
   Hospital no tiene **ninguna** cita del paciente anterior a la nueva, de cualquier fecha, sin contar
   las canceladas (`cancelled-by-patient`, `cancelled-by-clinic`); si no, «subsecuente» (`follow-up`).
   Si Hospital no responde, `follow-up`.
+- **MR-43, decisión del dueño (2026-10-17), sustituye «cualquiera, sin canceladas» de OQ-2:** «primera
+  vez» = el paciente no tiene ninguna cita anterior **a la que llegó**. Si no llegó a su primera cita
+  (no-show, sin registrar o cancelada), la siguiente sigue siendo primera vez. Lo decide Hospital en
+  `GET v1/agenda/patients/{id}/earlier`; Recepción no cambia su llamada. Las citas ya creadas no se
+  recalculan.
 
 ## Cómo se prueba
 
@@ -103,6 +108,8 @@ pasa en vacío.
 | MR-39 | `Jobs` tiene índice `(TenantId, Status, CreatedAt)`; un barrido diario borra `Jobs` terminados y `Receipts` de más de 30 días. | Migración aplicada en `test-backend.sh`; prueba del barrido con filas de 31 y 29 días. | D8 |
 | MR-40 | El estado pendiente del agente (propuesta, formulario de registro, pregunta en curso: `emergency`, `person` o `emergency-contact`, que hace de «Emergencia: …» en la respuesta la etiqueta de ese dato y no una urgencia, mientras la pregunta o el formulario que la hizo sigan abiertos) vive en una tabla `PendingActions` con expiración, emparejado con el mensaje que preguntó, no en `Activity` ni en el texto del mensaje anterior; `Activity` deja de borrarse, salvo el `DELETE` único de la migración `PendingActions` (filas de estado `intake`, `visit_kind`, `proposal:%`; `proposal_used:%` se queda, y desde ahora guarda acción, hora y cita, sin datos personales). Transición: un «sí» a una pregunta enviada antes del despliegue (sin `PendingAction`) se empareja por su texto canónico durante 24 h, solo para mensajes del agente anteriores a `AGENT_LEGACY_QUESTIONS_BEFORE` (poner la hora del despliegue; se retira tras 2026-11-17). | Pruebas existentes de agenda/registro siguen verdes; prueba nueva (`AgentPendingActionsTests`): cambiar el texto de una pregunta no cambia el flujo, en cada camino que pregunta; el mismo texto del personal no deriva; ninguna `Activity` se borra; la propuesta se consume antes del POST; pregunta anterior al corte → deriva, posterior sin `PendingAction` → no. | D3, D4 |
 | MR-42 | El tipo de visita sigue OQ-2. El agente lo deriva al confirmar, salvo que el paciente dijera `procedure`, `results` o `paperwork`; quien se registra en esa misma confirmación es `first-visit` sin preguntar. El personal elige en el diálogo de cita entre los seis tipos publicados (`first-visit, follow-up, procedure, results, paperwork, same-day-urgent`), preseleccionado con la misma regla (`GET /api/hospital/contacts/{id}/visit-kind?before=`) mientras no toque el selector; sin `visitKind`, el POST aplica la regla; un tipo fuera de la lista se rechaza antes de gastar la clave. La regla es una sola lectura de Hospital, `GET v1/agenda/patients/{id}/earlier?before=<ISO>` → `{ "exists": bool }` (Hospital excluye canceladas y `entered-in-error`); si Hospital no la tiene (404), falla o no responde a tiempo, `follow-up` y la cita se agenda igual, para el agente y para el personal. | Recepción, `VisitKindTests`: `exists=false` → `first-visit`, `true` → `follow-up`, 404/500/timeout → `follow-up` sin derivar; una sola lectura con `before` = inicio de la nueva cita; el personal elige o se aplica la regla, también con la lectura fallando; tipo inválido → 400 sin recibo. Hospital: la regla (cita de hace 3 años → sí; solo canceladas → no) se prueba con su endpoint. | OQ-2 |
+| MR-43 | «Primera vez» = sin citas anteriores **a las que el paciente llegó** (decisión del dueño 2026-10-17; sustituye «cualquiera, sin canceladas» de MR-42). Una cita anterior con no-show, sin registrar o cancelada no la convierte en subsecuente. Lo decide Hospital en `GET v1/agenda/patients/{id}/earlier?before=` (misma forma `{ "exists": bool }`); Recepción no cambia su llamada (`FirstOrFollowUpAsync`) ni recalcula citas ya creadas. El texto del diálogo de cita lo dice. | Hospital: la regla con su endpoint (solo un no-show anterior → `exists=false`; una a la que llegó → `true`). Recepción: `VisitKindTests` sigue verde sin cambios (el contrato no cambia). | OQ-2 |
+| MR-44 | El perfil del contacto muestra los no-show del paciente vinculado: «No asistió N vez/veces» y, si hay al menos uno seguido, «· M seguida(s)»; con 0 no muestra nada. Lectura en nombre de la persona (MR-11): `GET /api/hospital/contacts/{id}/attendance` → Hospital `GET v1/agenda/patients/{id}/attendance` → `{ "noShows": int, "consecutiveNoShows": int }` (Hospital cuenta solo la aserción explícita «no vino»; «sin registrar» nunca cuenta; seguidos = los más recientes hasta la última cita a la que llegó, canceladas y sin registrar se saltan). 401/403 de Hospital → `hospital.user_*`. Sin paciente vinculado, 404 sin llamar a Hospital. Si la lectura falla, el perfil se ve igual, sin la línea y sin toast. | `AttendanceTests`: ruta y token del usuario, 404 sin llamada, 403/401 → `hospital.user_forbidden`/`hospital.user_token_rejected`. `server-tests/format.test.ts`: `noShowLine` (0 → nada, singular y plural). Recepción no tiene prueba de contrato de rutas consumidas: la ruta queda en `hospital-integration.md`. | Dueño |
 | MR-41 | Hospital acepta `Idempotency-Key` en `POST v1/agenda` y `POST v1/patients` (por inquilino y llamador): la misma clave devuelve el resultado original sin crear otro; Recepción la envía. | Hospital: prueba del módulo con dos POST iguales → una cita. Recepción: el handler falso recibe la cabecera. | I2 |
 
 ## Estado (2026-10-17)
@@ -126,7 +133,9 @@ Commits de Recepción salvo «Hospital». Fecha de todos: 2026-10-17.
 | MR-39 | Hecho | `2deb945`, `834079f` |
 | MR-40 | Hecho; nits de revisión en `mr/rec-d` | `4aabc9d`, `5a3c5d0`, `1e16e28` |
 | MR-41 | Hecho. Recepción envía `Idempotency-Key` en `POST v1/agenda` y `POST v1/patients`. Lo que protege: la **creación de cita del personal** que vence por tiempo libera su recibo, y repetirla con la misma clave (el navegador la reusa para el mismo cuerpo) devuelve la cita original en Hospital, sin duplicado; cancelar y reprogramar no llevan clave y siguen gastando el recibo. En el agente (`agent:`/`agent-register:` + id de la propuesta) es defensa en profundidad: la propuesta se consume antes de escribir, así que no hay reenvío, y un resultado incierto sigue yendo a conciliación. Un 409 `*.idempotency_key_reused` se concilia, nunca se reintenta | Hospital `4daedd9d`, `71187473`, `c1655713`; Recepción rama `mr/rec-41`, `HospitalIdempotencyTests` |
-| MR-42 | Hecho | `4aabc9d`, `91a4f25`, `5a3c5d0`; Hospital `c971eab7`, `fe0fd635` |
+| MR-42 | Hecho; la regla la refina MR-43 | `4aabc9d`, `91a4f25`, `5a3c5d0`; Hospital `c971eab7`, `fe0fd635` |
+| MR-43 | Hecho en Recepción (documentación y texto del diálogo); la regla, en Hospital (`earlier`) | Recepción rama `mr/rec-43` |
+| MR-44 | Hecho en Recepción contra el contrato fijado; requiere Hospital con `attendance` (antes, la lectura falla y el perfil no muestra la línea) | Recepción rama `mr/rec-43`, `AttendanceTests` |
 
 ## Anti-criterios
 
@@ -137,7 +146,8 @@ Commits de Recepción salvo «Hospital». Fecha de todos: 2026-10-17.
 - Compartir el token en caché entre inquilinos o saltarse `ValidateTokenTenant`.
 - Probar una copia del manejador, de `Receive` o del bucle del worker; saltar en verde sin `TEST_DATABASE`.
 - `<Compile Remove>`, debilitar assertions o ampliar `known-failures.txt` para ir a verde.
-- Contar como «cita previa» una cancelada, o limitar la búsqueda a una ventana fija (OQ-2).
+- Contar como «cita previa» una a la que el paciente no llegó (cancelada, no-show, sin registrar), o limitar la búsqueda a una ventana fija (OQ-2, MR-43).
+- Recalcular el tipo de visita de citas ya creadas (MR-43); contar «sin registrar» como no-show o mostrar un error si la lectura de asistencia falla (MR-44).
 - Guardar el certificado del llavero o cualquier secreto en el repositorio o en el respaldo del dump.
 
 ## No se hace

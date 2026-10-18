@@ -2204,7 +2204,7 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
     fetcher,
     { shouldRetryOnError: false },
   );
-  // First visit or follow-up by whether Hospital has an earlier appointment of the patient; the team may choose another kind.
+  // First visit or follow-up by whether the patient came to an earlier appointment in Hospital (MR-43); the team may choose another kind.
   const { data: suggested } = useSWR<{ visitKind: string }>(
     create && patient
       ? `/hospital/contacts/${patient}/visit-kind` +
@@ -2549,7 +2549,7 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
                     ))}
                   </NativeSelect>
                   <FieldDescription>
-                    Primera vez si el paciente no tiene citas anteriores en el hospital.
+                    Primera vez si el paciente no ha llegado a ninguna cita anterior en el hospital.
                   </FieldDescription>
                 </UiField>
               )}

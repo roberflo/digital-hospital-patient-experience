@@ -80,8 +80,8 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
 
     /// <summary>The visit kinds Hospital publishes for a new appointment.</summary>
     public static readonly string[] VisitKinds = ["first-visit", "follow-up", "procedure", "results", "paperwork", "same-day-urgent"];
-    /// <summary>MR-42 (decided by the owner 2026-10-17): «first-visit» when Hospital has no appointment of this patient, of any date, before
-    /// <paramref name="before"/> (Hospital leaves out cancelled and entered-in-error ones), else «follow-up». One read. A suggestion, not a
+    /// <summary>MR-42/MR-43 (decided by the owner 2026-10-17): «first-visit» when Hospital has no appointment of this patient, of any date, before
+    /// <paramref name="before"/> that the patient came to (Hospital decides it: no-shows, unrecorded and cancelled ones do not count), else «follow-up». One read. A suggestion, not a
     /// write: when Hospital cannot answer (no such route yet, an error, no answer in time) it is «follow-up», as every appointment was before.</summary>
     public async Task<string> FirstOrFollowUpAsync(Guid tenantId, Guid patientId, DateTimeOffset before, CancellationToken ct = default)
     {
@@ -93,6 +93,10 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
         // A person Hospital refused is told so (MR-11); anything else Hospital could not answer is a follow-up (MR-42).
         catch (Exception ex) when (!ct.IsCancellationRequested && ex is HttpRequestException or HospitalIntegrationException { Code: not ("hospital.user_forbidden" or "hospital.user_token_rejected") } or TaskCanceledException or JsonException or KeyNotFoundException or InvalidOperationException) { return "follow-up"; }
     }
+
+    /// <summary>MR-44: Hospital's count of this patient's explicit no-shows, total and since the last appointment they came to.</summary>
+    public Task<HospitalAttendance> GetPatientAttendanceAsync(Guid tenantId, Guid patientId, CancellationToken ct = default) =>
+        ReadAsync<HospitalAttendance>(tenantId, $"v1/agenda/patients/{patientId:D}/attendance", ct);
 
     /// <summary>Only ever the patient-scoped agenda: the whole day's agenda carries every other patient (MR-12).</summary>
     public async Task<JsonElement> GetPatientAppointmentsAsync(Guid tenantId, Guid patientId,

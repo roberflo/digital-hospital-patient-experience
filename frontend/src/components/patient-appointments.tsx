@@ -3,6 +3,7 @@ import { useState } from 'react';
 import useSWR from 'swr';
 import { AlertCircle, CalendarDays, RefreshCw } from 'lucide-react';
 import { fetcher, type Contact, type Me } from '@/lib/api';
+import { noShowLine } from '@/lib/format';
 import { Alert, AlertDescription } from './ui/alert';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -30,6 +31,13 @@ export function PatientAppointments({ contact, me }: { contact: Contact; me: Me 
     fetcher,
     { shouldRetryOnError: false },
   );
+  // MR-44: a failed read (Hospital down, 403) leaves the profile as it was, without the line and without a toast.
+  const { data: attendance } = useSWR<{ noShows: number; consecutiveNoShows: number }>(
+    contact.patientId ? `/hospital/contacts/${contact.id}/attendance` : null,
+    fetcher,
+    { shouldRetryOnError: false },
+  );
+  const noShows = attendance && noShowLine(attendance);
   return (
     <section className="flex flex-col gap-3">
       <div className="flex items-center justify-between gap-2">
@@ -42,6 +50,7 @@ export function PatientAppointments({ contact, me }: { contact: Contact; me: Me 
         </p>
       ) : (
         <>
+          {noShows && <p className="text-xs text-muted-foreground">{noShows}</p>}
           <Button
             variant="outline"
             size="sm"

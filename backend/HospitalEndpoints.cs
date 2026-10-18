@@ -20,6 +20,7 @@ public static class HospitalEndpoints
         api.MapGet("/contacts/{id:guid}/prescriptions", (CurrentUser u) => LegacyClinical(u));
         api.MapGet("/contacts/{id:guid}/prescriptions/{prescriptionId:guid}", (CurrentUser u) => LegacyClinical(u));
         api.MapGet("/contacts/{id:guid}/visit-kind", VisitKind);
+        api.MapGet("/contacts/{id:guid}/attendance", ContactAttendance);
         api.MapPost("/appointments", ChangeAppointment);
     }
     /// <summary>The visit kind the team's form proposes for a new appointment of this contact (MR-42).</summary>
@@ -27,6 +28,13 @@ public static class HospitalEndpoints
     {
         var contact = await db.Contacts.SingleOrDefaultAsync(x => x.Id == id); if (contact?.PatientId is null) return Results.NotFound(new { title = "Vincula primero el paciente del hospital" });
         return Results.Ok(new VisitKindAnswer(await h.AsUser(Identity.Bearer(ctx)).FirstOrFollowUpAsync(t.Id, contact.PatientId.Value, before ?? DateTimeOffset.UtcNow)));
+    }
+
+    /// <summary>MR-44: the linked patient's no-shows, as Hospital counts them, read as the person (MR-11).</summary>
+    public static async Task<IResult> ContactAttendance(Guid id, HttpContext ctx, CrmDb db, HospitalClient h, TenantScope t)
+    {
+        var contact = await db.Contacts.SingleOrDefaultAsync(x => x.Id == id); if (contact?.PatientId is null) return Results.NotFound(new { title = "Vincula primero el paciente del hospital" });
+        return Results.Ok(await h.AsUser(Identity.Bearer(ctx)).GetPatientAttendanceAsync(t.Id, contact.PatientId.Value));
     }
 
     public static async Task<IResult> ContactAppointments(Guid id, DateOnly from, DateOnly to, HttpContext ctx, CrmDb db, HospitalClient h, TenantScope t)
@@ -82,4 +90,5 @@ public static class HospitalEndpoints
     }
 }
 public sealed record VisitKindAnswer(string VisitKind);
+public sealed record HospitalAttendance(int NoShows, int ConsecutiveNoShows);
 public record AppointmentInput(Guid ContactId, string Action, Guid? AppointmentId, Guid DoctorId, DateTimeOffset StartsAt, int DurationMinutes, string? CancelReason = null, string? VisitKind = null);

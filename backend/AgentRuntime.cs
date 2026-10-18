@@ -1021,8 +1021,8 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
                 await conversations.Send(conv.Id, $"Esa cita ya pasó, así que no se puede {(action == "cancel" ? "cancelar" : "cambiar")}.\n¿Quieres agendar una nueva?", "agent", "confirm:" + job.Id, ct: ct, choices: new([new("AGENDAR", "Agendar cita"), new("MENU", "Seguir aquí")]));
                 return;
             }
-            // What the patient said the appointment is for, when the proposal carries it; else a first visit when Hospital has no earlier appointment of
-            // theirs (MR-42). Someone registered by this very confirmation has none, so Hospital is not asked. Only a read: nothing is written yet.
+            // What the patient said the appointment is for, when the proposal carries it; else a first visit when Hospital has no earlier appointment
+            // the patient came to (MR-42, MR-43). Someone registered by this very confirmation has none, so Hospital is not asked. Only a read: nothing is written yet.
             var visit = action != "create" ? null : p.TryGetProperty("kind", out var kind) && kind.GetString() is { } said ? said
                 : registered ? "first-visit" : await hospital.FirstOrFollowUpAsync(scope.Id, contact.PatientId!.Value, start, ct);
             written = true;

@@ -54,6 +54,8 @@ Para pruebas se admite `AccessToken` en lugar de client credentials, pero expira
 | Buscar paciente | `GET /v1/patients/search?queryShape=...&term=...` | Sólo `dui`, `record-number`, `name-tokens`; **no existe búsqueda por teléfono**. |
 | Disponibilidad | `GET /v1/agenda/booking-options?from=YYYY-MM-DD&to=YYYY-MM-DD&clinicianId=UUID` | `professionals[].days[].slots[]`: `offered`, `takenBy`, `startsAt`, `durationMinutes`. Respetar `maxDaysPerQuery` y estados de día. |
 | Citas de paciente | `GET /v1/agenda/patients/{patientId}?from=YYYY-MM-DD&to=YYYY-MM-DD` | Nueva ruta aplicada en Hospital, máximo 31 días; ver `integrations/hospital/PATIENT-AGENDA.md`. |
+| ¿Llegó antes? | `GET /v1/agenda/patients/{patientId}/earlier?before=ISO` | `{exists}`: alguna cita anterior **a la que el paciente llegó** (MR-43); `false` → `first-visit`, si no `follow-up`. Si falla, `follow-up`. Las citas ya creadas no se recalculan. |
+| Asistencia | `GET /v1/agenda/patients/{patientId}/attendance` | `{noShows, consecutiveNoShows}` (MR-44): solo «no vino» explícito; «sin registrar» no cuenta; seguidos hasta la última cita a la que llegó. Con el token del usuario; el perfil del contacto lo muestra. |
 | Agenda | `GET /v1/agenda/day?clinicalDay=YYYY-MM-DD` | Vista de personal; no pasar filas de otros pacientes al LLM de una conversación. |
 | Comprobar cita | `GET /v1/agenda/{id}?patientId=UUID` | Hospital valida pertenencia exacta. El adaptador repite comparación antes de mutar. |
 | Agendar | `POST /v1/agenda` | `{patientId, clinicianId, startsAt, durationMinutes, visitKind}` → `{appointmentId,status,overlaps}`. |
