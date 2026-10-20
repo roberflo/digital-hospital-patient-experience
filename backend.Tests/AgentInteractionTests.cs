@@ -30,6 +30,30 @@ public sealed class AgentInteractionTests : IAsyncLifetime
     public void TappedChoiceReadsAsTheCommandOrItsLabel(string kind, string id, string title, string expected) =>
         Assert.Equal(expected, WhatsAppContent.Inbound(Msg(new { type = "interactive", interactive = new Dictionary<string, object> { ["type"] = kind, [kind] = new { id, title } } }), default));
 
+    // Criterio 5. Synthetic fixture (plan §4): WhatsApp Cloud API's reply to a template QUICK_REPLY, as Kapso is assumed to
+    // forward it. Not yet captured from the sandbox; replace it with the captured body before switching on (S4).
+    const string TemplateTap = """
+        {"phone_number_id":"synthetic-phone-number-id","conversation":{"id":"conv-synthetic","phone_number":"50370000000","contact_name":"Paciente Sintético"},
+         "message":{"id":"wamid.synthetic-tap","from":"50370000000","timestamp":"1760000000","type":"button","context":{"from":"50300000000","id":"wamid.synthetic-reminder"},
+          "button":{"payload":"PAYLOAD","text":"Confirmo"},
+          "kapso":{"direction":"inbound","status":"received","origin":"cloud_api","has_media":false,"content":"Confirmo"}}}
+        """;
+    [Theory]
+    [InlineData("ASISTO 00000000-0000-4000-8000-000000000001", true, "ASISTO 00000000-0000-4000-8000-000000000001")]
+    [InlineData("MOVER 00000000-0000-4000-8000-000000000001", true, "MOVER 00000000-0000-4000-8000-000000000001")]
+    [InlineData("CANCELAR 00000000-0000-4000-8000-000000000001", true, "CANCELAR 00000000-0000-4000-8000-000000000001")]
+    [InlineData("ASISTO 00000000-0000-4000-8000-000000000001", false, "ASISTO 00000000-0000-4000-8000-000000000001")]
+    [InlineData("DROP TABLE", true, "Confirmo")]   // a payload that is not one of ours reads as the button's visible text
+    [InlineData("DROP TABLE", false, "Confirmo")]
+    public void TemplateButtonReadsAsTheCommandOrItsText(string payload, bool kapsoContent, string expected)
+    {
+        var message = System.Text.Json.Nodes.JsonNode.Parse(TemplateTap)!["message"]!.AsObject();
+        message["button"]!["payload"] = payload;
+        if (!kapsoContent) message["kapso"]!.AsObject().Remove("content");
+        var json = JsonSerializer.SerializeToElement(message);
+        Assert.Equal(expected, WhatsAppContent.Inbound(json, json.GetProperty("kapso")));
+    }
+
     [Fact]
     public void TextAndMediaKeepTheirPreviousReading()
     {

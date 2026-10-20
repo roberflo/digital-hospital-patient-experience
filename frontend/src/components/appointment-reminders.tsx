@@ -1,7 +1,7 @@
 'use client';
 import { useState } from 'react';
 import useSWR from 'swr';
-import { AlertCircle, Bell, RefreshCw } from 'lucide-react';
+import { AlertCircle, ArrowUpRight, Bell, CalendarCheck, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { api, fetcher, type Channel, type Me } from '@/lib/api';
 import { Alert, AlertDescription } from './ui/alert';
@@ -43,10 +43,12 @@ type Settings = {
   error?: string;
   rows: Reminder[];
 };
+const dayTemplateV2 = 'recepcion_cita_dia_anterior_v2';
 const statuses: Record<string, string> = {
   pending: 'Programado',
   sending: 'Enviando',
   sent: 'Enviado',
+  confirmed: 'Confirmó',
   delivered: 'Entregado',
   read: 'Leído',
   failed: 'Fallido',
@@ -55,6 +57,7 @@ const statuses: Record<string, string> = {
   skipped: 'Omitido',
 };
 const tones: Record<string, 'secondary' | 'destructive'> = {
+  confirmed: 'secondary',
   sent: 'secondary',
   delivered: 'secondary',
   read: 'secondary',
@@ -62,6 +65,9 @@ const tones: Record<string, 'secondary' | 'destructive'> = {
   uncertain: 'destructive',
 };
 const hint = 'text-sm text-muted-foreground';
+// A confirmation outranks how WhatsApp delivered the reminder that asked for it.
+const shown = (r: { status: string; deliveryStatus?: string }) =>
+  r.status === 'confirmed' ? r.status : (r.deliveryStatus ?? r.status);
 export function AppointmentReminders({ me }: { me: Me }) {
   const { data, error, mutate } = useSWR<Settings>('/appointment-reminders', fetcher, {
     refreshInterval: 15000,
@@ -69,12 +75,13 @@ export function AppointmentReminders({ me }: { me: Me }) {
   const { data: channels } = useSWR<Channel[]>('/channels', fetcher);
   const [busy, setBusy] = useState(false);
   const [templates, setTemplates] = useState<{ name: string; status: string; ready: boolean }[]>();
-  async function save(enabled: boolean, channelId?: string) {
+  async function save(enabled: boolean, channelId?: string, dayTemplate?: string) {
     setBusy(true);
     try {
       await api('/appointment-reminders/settings', 'PUT', {
         enabled,
         channelId: channelId || null,
+        ...(dayTemplate && { dayTemplate }),
       });
       await mutate();
       toast.success('Recordatorios actualizados');
@@ -183,8 +190,26 @@ export function AppointmentReminders({ me }: { me: Me }) {
               >
                 Comprobar plantillas
               </Button>
+              {data.dayTemplate !== dayTemplateV2 && (
+                <Button
+                  variant="outline"
+                  disabled={busy || !data.channelId}
+                  onClick={() => {
+                    setTemplates(undefined);
+                    void save(data.enabled, data.channelId, dayTemplateV2);
+                  }}
+                >
+                  Usar plantilla con botones
+                </Button>
+              )}
             </div>
             <div className="flex flex-col gap-2">
+              {data.dayTemplate !== dayTemplateV2 && (
+                <p className={hint}>
+                  El aviso del día anterior necesita la plantilla con botones (Confirmo, Cambiar
+                  fecha, Cancelar cita). Mientras no esté aprobada, ese aviso no se envía.
+                </p>
+              )}
               {!data.sendEnabled && (
                 <p className={hint}>
                   Envío de notificaciones pausado en la instalación. La cola se puede consultar sin
@@ -251,8 +276,8 @@ export function AppointmentReminders({ me }: { me: Me }) {
                       )}
                     </ItemContent>
                     <ItemActions>
-                      <Badge variant={tones[r.deliveryStatus ?? r.status] ?? 'outline'}>
-                        {statuses[r.deliveryStatus ?? r.status] ?? r.status}
+                      <Badge variant={tones[shown(r)] ?? 'outline'}>
+                        {statuses[shown(r)] ?? r.status}
                       </Badge>
                     </ItemActions>
                   </Item>
@@ -261,6 +286,127 @@ export function AppointmentReminders({ me }: { me: Me }) {
             </ItemGroup>
           </>
         )}
+      </CardContent>
+    </Card>
+  );
+}
+type Tomorrow = {
+  id: string;
+  startsAt: string;
+  contactName?: string;
+  status: string;
+  deliveryStatus?: string;
+  conversationId?: string;
+};
+// «Sin respuesta» is a fact about the reminder, never a prediction: nothing here says the patient will not come.
+// A send WhatsApp reported as failed never reached the patient, so it is to review, not «no answer».
+const failedSend = (r: Tomorrow) => r.status === 'sent' && r.deliveryStatus === 'failed';
+const tomorrowGroups: {
+  title: string;
+  has: (r: Tomorrow) => boolean;
+  empty?: string;
+}[] = [
+  {
+    title: 'Confirmaron',
+    has: (r) => r.status === 'confirmed',
+    empty: 'Nadie ha confirmado todavía.',
+  },
+  {
+    title: 'Sin respuesta',
+    has: (r) => r.status === 'sent' && !failedSend(r),
+    empty: 'No hay recordatorios sin respuesta.',
+  },
+  { title: 'Aún no enviado', has: (r) => r.status === 'pending' || r.status === 'sending' },
+  {
+    title: 'Revisar',
+    has: (r) => failedSend(r) || ['uncertain', 'failed', 'skipped', 'cancelled'].includes(r.status),
+  },
+];
+const tomorrowLabels: Record<string, string> = {
+  ...statuses,
+  confirmed: 'Confirmó',
+  sent: 'Sin respuesta',
+};
+/** Tomorrow's day-before reminders for the desk: who confirmed and whom to call. Hour, name and state only. */
+export function TomorrowReminders({ me }: { me: Me }) {
+  const { data, error } = useSWR<Tomorrow[]>('/appointment-reminders/tomorrow', fetcher, {
+    refreshInterval: 30000,
+  });
+  const time = (value: string) =>
+    new Date(value).toLocaleTimeString('es-SV', {
+      timeZone: me.tenant.timeZone,
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          <h2 className="flex items-center gap-2">
+            <CalendarCheck className="size-4" /> Recordatorios de mañana
+          </h2>
+        </CardTitle>
+        {data && data.length > 0 && (
+          <CardAction>
+            <Badge variant="secondary">
+              {data.length} {data.length === 1 ? 'cita' : 'citas'}
+            </Badge>
+          </CardAction>
+        )}
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        {error && (
+          <Alert variant="destructive">
+            <AlertCircle />
+            <AlertDescription>
+              No se pudo consultar los recordatorios de mañana. Revisa la agenda antes de llamar.
+            </AlertDescription>
+          </Alert>
+        )}
+        {data && !data.length && (
+          <p className={hint}>No hay recordatorios del día anterior para citas de mañana.</p>
+        )}
+        {data &&
+          data.length > 0 &&
+          tomorrowGroups.map((group) => {
+            const rows = data.filter(group.has);
+            if (!group.empty && !rows.length) return null;
+            return (
+              <section key={group.title} aria-label={group.title} className="flex flex-col gap-1">
+                <h3 className="text-sm font-medium">
+                  {group.title} · {rows.length}
+                </h3>
+                {!rows.length && <p className={hint}>{group.empty}</p>}
+                <ItemGroup>
+                  {rows.map((r, index) => (
+                    <div key={r.id} role="listitem" className="flex flex-col">
+                      {index > 0 && <ItemSeparator />}
+                      <Item size="sm" className="flex-wrap px-0">
+                        <ItemContent className="min-w-0">
+                          <ItemTitle>{r.contactName ?? 'Paciente'}</ItemTitle>
+                          <ItemDescription>{time(r.startsAt)}</ItemDescription>
+                        </ItemContent>
+                        <ItemActions className="flex-wrap">
+                          <Badge variant={failedSend(r) ? 'destructive' : 'outline'}>
+                            {failedSend(r)
+                              ? statuses.failed
+                              : (tomorrowLabels[r.status] ?? r.status)}
+                          </Badge>
+                          {r.conversationId && (
+                            <Button variant="link" size="sm" asChild>
+                              <a href={`/?view=inbox&conversationId=${r.conversationId}`}>
+                                Abrir conversación <ArrowUpRight />
+                              </a>
+                            </Button>
+                          )}
+                        </ItemActions>
+                      </Item>
+                    </div>
+                  ))}
+                </ItemGroup>
+              </section>
+            );
+          })}
       </CardContent>
     </Card>
   );

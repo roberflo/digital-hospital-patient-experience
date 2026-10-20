@@ -1026,13 +1026,22 @@ public sealed class AgentHarness(Guid? tenant = null, string phone = "5037000000
 
     /// <summary>The Hospital client this tenant's runtime gets, for what the team does through the endpoints.</summary>
     public HospitalClient Client(HttpMessageHandler hospital) => new(new HttpClient(hospital), Config());
+    /// <summary>A second context over the same database and keys, as another request would have.</summary>
+    public CrmDb NewContext() => new(options, Scope, protection);
+    /// <summary>The reminder service over this tenant, with WhatsApp and Hospital doubles.</summary>
+    public AppointmentReminderService Reminders(HttpMessageHandler kapso, HttpMessageHandler hospital, Dictionary<string, string?>? extra = null)
+    {
+        var config = Config(extra); var client = new KapsoClient(new HttpClient(kapso), config);
+        return new(Db, Scope, new HospitalClient(new HttpClient(hospital), config), client, new ConversationService(Db, Scope, client), config);
+    }
     public AgentRuntime Runtime(HttpMessageHandler model, Fake sender, HttpMessageHandler? hospital = null, Dictionary<string, string?>? extra = null)
     {
         var config = Config(extra);
         var kapso = new KapsoClient(new HttpClient(sender), config);
         return new(new HttpClient(model), config, Db, Scope, new HospitalClient(new HttpClient(hospital ?? new Fake(_ => throw new InvalidOperationException("Unexpected hospital request"))), config), new ConversationService(Db, Scope, kapso), kapso);
     }
-    IConfiguration Config(Dictionary<string, string?>? extra = null)
+    /// <summary>The installation settings every double shares: sending on, a synthetic model and this tenant's Hospital connection.</summary>
+    public IConfiguration Config(Dictionary<string, string?>? extra = null)
     {
         var token = "e30." + Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(new { tenant_id = Scope.Id, exp = DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds() })).TrimEnd('=').Replace('+', '-').Replace('/', '_') + ".synthetic";
         var prefix = $"Hospital:Tenants:{Scope.Id}:";

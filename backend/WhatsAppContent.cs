@@ -13,10 +13,17 @@ public static partial class WhatsAppContent
             foreach (var kind in (string[])["button_reply", "list_reply"])
                 if (interactive.TryGetProperty(kind, out var reply))
                     return Text(reply, "id")?.Trim() is { } id && Command().IsMatch(id) ? id : Text(reply, "title") ?? "[Archivo recibido]";
+        // A quick reply of an approved template (the reminder's buttons). Read before kapso.content, which holds only the visible text.
+        if (message.ValueKind == JsonValueKind.Object && message.TryGetProperty("button", out var button) && button.ValueKind == JsonValueKind.Object)
+            return Text(button, "payload")?.Trim() is { } payload && Command().IsMatch(payload) ? payload : Text(button, "text") ?? "[Archivo recibido]";
         return Text(kapso, "content") ?? (message.TryGetProperty("text", out var text) ? Text(text, "body") : null) ?? "[Archivo recibido]";
     }
+    /// <summary>How the inbox shows a patient's message: a reminder button reads as what the patient tapped, never as its command and id.</summary>
+    public static string Shown(string body) => ReminderTap().Match(body.Trim()) is { Success: true } m
+        ? "Tocó: " + m.Groups[1].Value switch { "ASISTO" => "Confirmo", "MOVER" => "Cambiar fecha", _ => "Cancelar cita" } : body;
+    [GeneratedRegex(@"^(ASISTO|MOVER|CANCELAR) [0-9a-fA-F-]{36}$")] private static partial Regex ReminderTap();
     static string? Text(JsonElement value, string name) => value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out var found) && found.ValueKind == JsonValueKind.String ? found.GetString() : null;
-    [GeneratedRegex(@"^(?:CONFIRMAR [0-9A-F]{6}|CORREGIR [0-9A-F]{6}|EMERGENCIA|ACTIVAR RECORDATORIOS|BAJA|AGENDAR|RECETA|PERSONA|MENU|MISCITAS|(?:VERCITA|CANCELAR) [0-9a-fA-F-]{36}|MOVER [0-9a-fA-F-]{36}(?: \S{10,40} [0-9a-fA-F-]{36} \d{1,3}(?: .{1,60})?)?|CITA \S{10,40} [0-9a-fA-F-]{36} \d{1,3}(?: .{1,60})?|VER \d{4}-\d{2}-\d{2} (?:[0-9a-fA-F-]{36}|[*+?]) [MT?])$")] private static partial Regex Command();
+    [GeneratedRegex(@"^(?:CONFIRMAR [0-9A-F]{6}|CORREGIR [0-9A-F]{6}|EMERGENCIA|ACTIVAR RECORDATORIOS|BAJA|AGENDAR|RECETA|PERSONA|MENU|MISCITAS|(?:VERCITA|CANCELAR|ASISTO) [0-9a-fA-F-]{36}|MOVER [0-9a-fA-F-]{36}(?: \S{10,40} [0-9a-fA-F-]{36} \d{1,3}(?: .{1,60})?)?|CITA \S{10,40} [0-9a-fA-F-]{36} \d{1,3}(?: .{1,60})?|VER \d{4}-\d{2}-\d{2} (?:[0-9a-fA-F-]{36}|[*+?]) [MT?])$")] private static partial Regex Command();
 }
 
 /// <summary>Options the patient can tap instead of typing. Up to three short ones are reply buttons; more, or any with a description, are a list.</summary>

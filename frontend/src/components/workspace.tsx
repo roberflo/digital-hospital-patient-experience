@@ -139,7 +139,7 @@ import { cn } from '@/lib/utils';
 import { inZone } from '@/lib/format';
 import { defaultInboxFilters, filtersActive, inboxQuery } from '@/lib/inbox-filters';
 import { ConfirmAction } from './confirm-action';
-import { AppointmentReminders, ReminderConsent } from './appointment-reminders';
+import { AppointmentReminders, ReminderConsent, TomorrowReminders } from './appointment-reminders';
 import { AttentionSettings } from './attention-settings';
 import {
   HospitalCompanies,
@@ -2801,6 +2801,7 @@ function AgentView({ me }: { me: Me }) {
           </CardContent>
         </Card>
       </div>
+      {(admin || me.role === 'agent') && <TomorrowReminders me={me} />}
       {admin && <AppointmentReminders me={me} />}
       {admin && (
         <Alert>

@@ -304,6 +304,44 @@ public sealed partial class AgentIntegrationTests:IAsyncLifetime {
         start=start.AddDays(1);await service.Sync(now);Assert.Equal(2,await db.AppointmentReminders.CountAsync(r=>r.Status=="cancelled"));Assert.Equal(2,await db.AppointmentReminders.CountAsync(r=>r.Status=="pending"));
         state="cancelled-by-patient";await service.Sync(now);Assert.All(await db.AppointmentReminders.ToListAsync(),r=>Assert.Equal("cancelled",r.Status));Assert.Equal(0,k.Calls);
     }
+    // Criterio 11 (characterization: born green). A confirmation is for (appointment, start): a move starts the new start unanswered.
+    [Fact] public async Task ReminderSyncNeverReopensOrCopiesAConfirmation()
+    {
+        var now=new DateTimeOffset(2026,10,3,15,0,0,TimeSpan.Zero);var start=ReminderRules.Instant(now.AddDays(1).AddHours(1));var appointment=Guid.NewGuid();
+        var tenant=await db.Tenants.SingleAsync(t=>t.Id==scope.Id);tenant.ReminderChannelId=conversation.ChannelId;
+        contact.PatientId=Guid.NewGuid();contact.ReminderConsentAt=now;await db.SaveChangesAsync();
+        var cfg=GoogleConfig();var h=new HospitalClient(new HttpClient(new Fake(req=>Task.FromResult(req.RequestUri!.AbsolutePath.StartsWith("/v1/patients/")?Json(new{patientId=contact.PatientId,phone=contact.Phone}):Json(new{rows=new[]{new{appointmentId=appointment,scheduledStart=start,status="booked"}}})))),cfg);
+        var k=new Fake(_=>throw new Exception("Sync must not send"));var service=new AppointmentReminderService(db,scope,h,new KapsoClient(new HttpClient(k),cfg),Service(k),cfg);
+        await service.Sync(now);
+        var confirmed=await db.AppointmentReminders.SingleAsync(r=>r.Window=="day_before");confirmed.Status="confirmed";await db.SaveChangesAsync();
+        var old=start;start=ReminderRules.Instant(start.AddDays(1));await service.Sync(now);
+        await db.Entry(confirmed).ReloadAsync();Assert.Equal("confirmed",confirmed.Status);Assert.Equal(old,confirmed.StartsAt);
+        var fresh=await db.AppointmentReminders.Where(r=>r.StartsAt==start).ToListAsync();
+        Assert.Equal(2,fresh.Count);Assert.All(fresh,r=>Assert.Equal("pending",r.Status));
+        Assert.Equal(1,await db.AppointmentReminders.CountAsync(r=>r.Status=="confirmed"));Assert.Equal(0,k.Calls);
+    }
+    // Criterio 12 (characterization: born green). Sync leaves a confirmation alone and the hour-before reminder still goes (A5).
+    [Fact] public async Task ConfirmedDayBeforeKeepsTheHourBefore()
+    {
+        var now=DateTimeOffset.UtcNow;var start=ReminderRules.Instant(now.AddMinutes(50));var appointment=Guid.NewGuid();
+        var tenant=await db.Tenants.SingleAsync(t=>t.Id==scope.Id);tenant.ReminderChannelId=conversation.ChannelId;tenant.RemindersEnabled=true;
+        contact.PatientId=Guid.NewGuid();contact.ReminderConsentAt=now;
+        var day=new AppointmentReminder{TenantId=scope.Id,ContactId=contact.Id,PatientId=contact.PatientId.Value,ChannelId=conversation.ChannelId,AppointmentId=appointment,StartsAt=start,DueAt=start.AddDays(-1),Window="day_before",Status="confirmed",AttemptedAt=now.AddDays(-1)};
+        var hour=new AppointmentReminder{TenantId=scope.Id,ContactId=contact.Id,PatientId=contact.PatientId.Value,ChannelId=conversation.ChannelId,AppointmentId=appointment,StartsAt=start,DueAt=start.AddHours(-1),Window="hour_before"};
+        db.AddRange(day,hour);await db.SaveChangesAsync();
+        var cfg=new ConfigurationBuilder().AddConfiguration(GoogleConfig()).AddConfiguration(config).AddInMemoryCollection(new Dictionary<string,string?>{{"REMINDERS_SEND_ENABLED","true"}}).Build();
+        var h=new HospitalClient(new HttpClient(new Fake(req=>Task.FromResult(req.RequestUri!.AbsolutePath.StartsWith("/v1/patients/")?Json(new{patientId=contact.PatientId,phone=contact.Phone}):Json(new{rows=new[]{new{appointmentId=appointment,scheduledStart=start,status="booked"}}})))),cfg);
+        var sends=0;var k=new Fake(req=>{
+            if(req.Method==HttpMethod.Get)return Task.FromResult(req.RequestUri!.AbsolutePath.Contains("phone_numbers")?Json(new{data=new{business_account_id="synthetic-waba"}}):Json(new{data=new[]{new{name=tenant.ReminderHourTemplate,language="es",status="APPROVED",category="UTILITY",parameter_format="NAMED",components=new[]{new{type="BODY",text="Cita en {{hospital}} el {{fecha}} a las {{hora}}. BAJA"}}}}}));
+            sends++;return Task.FromResult(Json(new{messages=new[]{new{id="reminder-"+Guid.NewGuid()}}}));
+        });
+        var service=new AppointmentReminderService(db,scope,h,new KapsoClient(new HttpClient(k),cfg),Service(k),cfg);
+        await service.Sync(now);
+        await db.Entry(day).ReloadAsync();Assert.Equal("confirmed",day.Status);
+        await service.Dispatch(hour.Id,now);await service.Dispatch(hour.Id,now);
+        await db.Entry(hour).ReloadAsync();Assert.Equal("sent",hour.Status);Assert.Equal(1,sends);
+        await db.Entry(day).ReloadAsync();Assert.Equal("confirmed",day.Status);
+    }
     [Fact] public async Task InterruptedReminderShowsUncertainDeliveryWithoutRetry()
     {
         var now=DateTimeOffset.UtcNow;
@@ -315,26 +353,102 @@ public sealed partial class AgentIntegrationTests:IAsyncLifetime {
         await service.Sync(now);await service.Dispatch(row.Id,now);
         await db.Entry(message).ReloadAsync();Assert.Equal("uncertain",row.Status);Assert.Equal("uncertain",message.Status);Assert.Equal(0,never.Calls);
     }
-    [Theory][InlineData("sent")][InlineData("timeout")][InlineData("cancelled")][InlineData("consent")][InlineData("template")][InlineData("paused")][InlineData("phone")]
+    [Theory][InlineData("sent")][InlineData("timeout")][InlineData("cancelled")][InlineData("consent")][InlineData("template")][InlineData("paused")][InlineData("phone")][InlineData("day_before")][InlineData("day_v1")][InlineData("day_v2_pending")]
     public async Task ReminderDispatchVerifiesCurrentFactsAndDoesNotReplay(string scenario)
     {
         var now=DateTimeOffset.UtcNow;var start=now.AddHours(1);var appointment=Guid.NewGuid();
         var tenant=await db.Tenants.SingleAsync(t=>t.Id==scope.Id);tenant.ReminderChannelId=conversation.ChannelId;tenant.RemindersEnabled=true;contact.Name="PRIVATE PATIENT SENTINEL";
         contact.PatientId=Guid.NewGuid();contact.ReminderConsentAt=scenario=="consent"?null:now;
-        var reminder=new AppointmentReminder{TenantId=scope.Id,ContactId=contact.Id,PatientId=contact.PatientId.Value,ChannelId=conversation.ChannelId,AppointmentId=appointment,StartsAt=start,DueAt=now,Window="hour_before"};db.Add(reminder);await db.SaveChangesAsync();
+        var window=scenario.StartsWith("day")?"day_before":"hour_before";tenant.ReminderDayTemplate=scenario=="day_v1"?"recepcion_cita_dia_anterior_v1":"recepcion_cita_dia_anterior_v2";
+        var reminder=new AppointmentReminder{TenantId=scope.Id,ContactId=contact.Id,PatientId=contact.PatientId.Value,ChannelId=conversation.ChannelId,AppointmentId=appointment,StartsAt=start,DueAt=now,Window=window};db.Add(reminder);await db.SaveChangesAsync();
         var cfg=new ConfigurationBuilder().AddConfiguration(GoogleConfig()).AddConfiguration(config).AddInMemoryCollection(new Dictionary<string,string?>{{"REMINDERS_SEND_ENABLED",scenario=="paused"?"false":"true"}}).Build();
         var h=new HospitalClient(new HttpClient(new Fake(req=>Task.FromResult(req.RequestUri!.AbsolutePath.StartsWith("/v1/patients/")?Json(new{patientId=contact.PatientId,phone=scenario=="phone"?"50370000999":contact.Phone}):Json(new{rows=new[]{new{appointmentId=appointment,scheduledStart=start,status=scenario=="cancelled"?"cancelled-by-patient":"booked"}}})))),cfg);
-        var sends=0;var k=new Fake(async req=>{
-            if(req.Method==HttpMethod.Get)return req.RequestUri!.AbsolutePath.Contains("phone_numbers")?Json(new{data=new{business_account_id="synthetic-waba"}}):Json(new{data=new[]{new{name=tenant.ReminderHourTemplate,language="es",status=scenario=="template"?"PENDING":"APPROVED",category="UTILITY",parameter_format="NAMED",components=new[]{new{type="BODY",text="Cita en {{hospital}} el {{fecha}} a las {{hora}}. BAJA"}}}}});
-            sends++;using var payload=JsonDocument.Parse(await req.Content!.ReadAsStringAsync());Assert.Equal("template",payload.RootElement.GetProperty("type").GetString());Assert.Equal(contact.Phone,payload.RootElement.GetProperty("to").GetString());Assert.DoesNotContain(contact.Name,payload.RootElement.GetRawText());
+        var sends=0;JsonElement sent=default;var k=new Fake(async req=>{
+            if(req.Method==HttpMethod.Get){
+                if(req.RequestUri!.AbsolutePath.Contains("phone_numbers"))return Json(new{data=new{business_account_id="synthetic-waba"}});
+                var name=Uri.UnescapeDataString(req.RequestUri.Query.Split('&')[0]["?name=".Length..]);
+                var components=new List<object>{new{type="BODY",text="Cita en {{hospital}} el {{fecha}} a las {{hora}}. BAJA"}};
+                if(name.EndsWith("_v2"))components.Add(new{type="BUTTONS",buttons=new[]{new{type="QUICK_REPLY",text="Confirmo"},new{type="QUICK_REPLY",text="Cambiar fecha"},new{type="QUICK_REPLY",text="Cancelar cita"}}});
+                return Json(new{data=new[]{new{name,language="es",status=scenario is "template" or "day_v2_pending"?"PENDING":"APPROVED",category="UTILITY",parameter_format="NAMED",components}}});
+            }
+            sends++;using var payload=JsonDocument.Parse(await req.Content!.ReadAsStringAsync());sent=payload.RootElement.Clone();Assert.Equal("template",payload.RootElement.GetProperty("type").GetString());Assert.Equal(contact.Phone,payload.RootElement.GetProperty("to").GetString());Assert.DoesNotContain(contact.Name,payload.RootElement.GetRawText());
             if(scenario=="timeout")throw new HttpRequestException("Synthetic timeout");return Json(new{messages=new[]{new{id="reminder-"+Guid.NewGuid()}}});
         });
         var service=new AppointmentReminderService(db,scope,h,new KapsoClient(new HttpClient(k),cfg),Service(k),cfg);
         if(scenario=="phone") {await Assert.ThrowsAsync<HospitalIntegrationException>(()=>service.Dispatch(reminder.Id,now));Assert.Equal(0,sends);return;}
         await service.Dispatch(reminder.Id,now);await service.Dispatch(reminder.Id,now);
-        Assert.Equal(scenario is "sent" or "timeout"?1:0,sends);
-        Assert.Equal(scenario switch{"sent"=>"sent","timeout"=>"uncertain","cancelled" or "consent"=>"cancelled",_=>"pending"},reminder.Status);
+        Assert.Equal(scenario is "sent" or "timeout" or "day_before"?1:0,sends);
+        Assert.Equal(scenario switch{"sent" or "day_before"=>"sent","timeout"=>"uncertain","cancelled" or "consent"=>"cancelled",_=>"pending"},reminder.Status);
         if(sends==1)Assert.Single(await db.Activities.Where(a=>a.Kind=="appointment_reminder").ToListAsync());
+        // Criterio 13: while v2 is not approved nothing leaves for the day before, neither v1 in its place nor free text.
+        if(scenario is "day_v1" or "day_v2_pending")Assert.Equal("Plantilla pendiente de aprobación o incompatible.",reminder.Reason);
+        if(sends==0)return;
+        // Criterios 3–4: the day before carries the three quick replies, verb and reminder id only; the hour before carries none.
+        var parts=sent.GetProperty("template").GetProperty("components").EnumerateArray().ToArray();
+        Assert.Equal("body",parts[0].GetProperty("type").GetString());
+        Assert.Equal(["hospital","fecha","hora"],parts[0].GetProperty("parameters").EnumerateArray().Select(p=>p.GetProperty("parameter_name").GetString()!));
+        if(window=="hour_before"){Assert.Single(parts);return;}
+        Assert.Equal(4,parts.Length);
+        var verbs=new[]{"ASISTO","MOVER","CANCELAR"};
+        for(var i=0;i<3;i++)
+        {
+            var button=parts[i+1];
+            Assert.Equal("button",button.GetProperty("type").GetString());Assert.Equal("quick_reply",button.GetProperty("sub_type").GetString());Assert.Equal(i.ToString(),button.GetProperty("index").GetString());
+            var parameter=Assert.Single(button.GetProperty("parameters").EnumerateArray().ToArray());Assert.Equal("payload",parameter.GetProperty("type").GetString());
+            var value=parameter.GetProperty("payload").GetString()!;
+            Assert.Equal($"{verbs[i]} {reminder.Id}",value); // I-1: the reminder that was sent, never the appointmentAssert.Matches("^(ASISTO|MOVER|CANCELAR) [0-9a-f-]{36}$",value);
+        }
+    }
+    // Criterio 13: the day-before template is the administrator's setting, audited; only a Meta template name is accepted.
+    [Fact] public async Task OnlyTheAdministratorChoosesTheDayBeforeTemplate()
+    {
+        var tenant=await db.Tenants.SingleAsync(t=>t.Id==scope.Id);tenant.ReminderDayTemplate="recepcion_cita_dia_anterior_v1";await db.SaveChangesAsync();
+        var admin=new CurrentUser{Role="admin",Subject="admin-sintetico",Name="Admin"};var locks=Service(new Fake(_=>throw new Exception("Must not send")));
+        foreach(var role in new[]{"agent","doctor"})
+            await Assert.ThrowsAsync<AccessDeniedException>(()=>ReminderEndpoints.Configure(new(false,conversation.ChannelId,ReminderRules.DayTemplateV2),db,new CurrentUser{Role=role,Subject=role,Name=role},scope,locks));
+        foreach(var bad in new[]{"Recepcion V2","plantilla;DROP","",new string('a',513)})
+            await Assert.ThrowsAsync<ArgumentException>(()=>ReminderEndpoints.Configure(new(false,conversation.ChannelId,bad),db,admin,scope,locks));
+        await db.Entry(tenant).ReloadAsync();Assert.Equal("recepcion_cita_dia_anterior_v1",tenant.ReminderDayTemplate);
+        await ReminderEndpoints.Configure(new(false,conversation.ChannelId,ReminderRules.DayTemplateV2),db,admin,scope,locks);
+        await db.Entry(tenant).ReloadAsync();Assert.Equal(ReminderRules.DayTemplateV2,tenant.ReminderDayTemplate);Assert.Equal(conversation.ChannelId,tenant.ReminderChannelId);
+        Assert.Single(await db.Audits.Where(a=>a.Action=="appointment_reminders.configured"&&a.Actor=="admin-sintetico").ToListAsync());
+        await ReminderEndpoints.Configure(new(false,conversation.ChannelId),db,admin,scope,locks); // pause or channel only: the template stays
+        await db.Entry(tenant).ReloadAsync();Assert.Equal(ReminderRules.DayTemplateV2,tenant.ReminderDayTemplate);
+    }
+    // Criterio 14: tomorrow's day-before reminders of this tenant, for the administrator and reception, not for doctors.
+    [Fact] public async Task TomorrowListIsForAdminAndReceptionOfThisTenantOnly()
+    {
+        var now=new DateTimeOffset(2026,10,3,15,0,0,TimeSpan.Zero); // 09:00 on 3 October in El Salvador: tomorrow is the 4th, local
+        contact.Name="Paciente Sintética Mañana";contact.PatientId=Guid.NewGuid();
+        var message=new Message{TenantId=scope.Id,ConversationId=conversation.Id,Sender="system",Type="template",Status="read",Body="Recordatorio sintético"};db.Add(message);
+        AppointmentReminder Row(DateTimeOffset start,string status,string window="day_before",Guid? messageId=null)=>new(){TenantId=scope.Id,ContactId=contact.Id,PatientId=contact.PatientId.Value,ChannelId=conversation.ChannelId,AppointmentId=Guid.NewGuid(),StartsAt=start,DueAt=start.AddDays(-1),Window=window,Status=status,MessageId=messageId};
+        var tomorrow=new[]{
+            Row(DateTimeOffset.Parse("2026-10-04T14:00:00Z"),"confirmed",messageId:message.Id),Row(DateTimeOffset.Parse("2026-10-04T15:00:00Z"),"sent"),
+            Row(DateTimeOffset.Parse("2026-10-04T16:00:00Z"),"uncertain"),Row(DateTimeOffset.Parse("2026-10-04T17:00:00Z"),"failed"),
+            Row(DateTimeOffset.Parse("2026-10-04T18:00:00Z"),"skipped"),Row(DateTimeOffset.Parse("2026-10-05T05:30:00Z"),"cancelled")}; // 23:30 local, still the 4th
+        db.AddRange(tomorrow);
+        db.Add(Row(DateTimeOffset.Parse("2026-10-05T06:30:00Z"),"sent")); // 00:30 local on the 5th
+        db.Add(Row(DateTimeOffset.Parse("2026-10-04T16:00:00Z"),"sent","hour_before"));
+        await db.SaveChangesAsync();
+        var otherScope=new TenantScope{Id=Guid.NewGuid()};
+        await using(var other=new CrmDb(options,otherScope,protection))
+        {
+            other.Tenants.Add(new Tenant{Id=otherScope.Id,Name="Otro Hospital Sintético"});
+            var c=new Contact{TenantId=otherScope.Id,Name="Paciente De Otro Hospital",Phone="50370000222",PhoneHash=Guid.NewGuid().ToString(),PatientId=Guid.NewGuid()};var ch=new Channel{TenantId=otherScope.Id,Name="Synthetic",PhoneNumberId=Guid.NewGuid().ToString("N"),Enabled=true};
+            other.AddRange(c,ch);other.Add(new AppointmentReminder{TenantId=otherScope.Id,ContactId=c.Id,PatientId=c.PatientId.Value,ChannelId=ch.Id,AppointmentId=Guid.NewGuid(),StartsAt=DateTimeOffset.Parse("2026-10-04T16:00:00Z"),DueAt=now,Window="day_before",Status="confirmed"});
+            await other.SaveChangesAsync();
+        }
+        foreach(var role in new[]{"admin","agent"})
+        {
+            var list=await ReminderEndpoints.Tomorrow(db,new CurrentUser{Role=role,Subject=role,Name=role},scope,now);
+            Assert.Equal(tomorrow.Select(r=>r.Id),list.Select(r=>r.Id));
+            Assert.All(list,r=>{Assert.Equal("Paciente Sintética Mañana",r.ContactName);Assert.Equal(conversation.Id,r.ConversationId);});
+            Assert.Equal(["confirmed","sent","uncertain","failed","skipped","cancelled"],list.Select(r=>r.Status));
+            Assert.Equal("read",list[0].DeliveryStatus);
+            var wire=JsonSerializer.SerializeToElement(list[0],new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            Assert.Equal(["id","startsAt","contactName","status","deliveryStatus","conversationId"],wire.EnumerateObject().Select(p=>p.Name));
+        }
+        await Assert.ThrowsAsync<AccessDeniedException>(()=>ReminderEndpoints.Tomorrow(db,new CurrentUser{Role="doctor",Subject="doctor",Name="doctor"},scope,now));
     }
     [Theory][InlineData("create")][InlineData("reschedule")][InlineData("cancel")]
     public async Task AgentAppointmentActionsWaitForConfirmationAndReachHospital(string action)

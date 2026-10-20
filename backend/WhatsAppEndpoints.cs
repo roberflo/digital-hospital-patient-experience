@@ -34,7 +34,7 @@ public static class WhatsAppEndpoints
             var channels = await db.Channels.ToDictionaryAsync(x => x.Id);
             return conv.Select(x => new { conversation = x, contact = contacts.GetValueOrDefault(x.ContactId), channel = channels.GetValueOrDefault(x.ChannelId),unreadCount=unread.GetValueOrDefault(x.Id) });
         });
-        api.MapGet("/conversations/{id:guid}/messages", async (Guid id, CrmDb db) => await db.Conversations.AnyAsync(x => x.Id == id) ? Results.Ok(await db.Messages.Where(x => x.ConversationId == id).OrderByDescending(x => x.CreatedAt).Take(200).OrderBy(x => x.CreatedAt).ToListAsync()) : Results.NotFound());
+        api.MapGet("/conversations/{id:guid}/messages", async (Guid id, CrmDb db) => await Messages(id, db) is { } messages ? Results.Ok(messages) : Results.NotFound());
         api.MapPost("/conversations/{id:guid}/messages", SendMessage);
         api.MapPost("/conversations/{id:guid}/media", async (Guid id, HttpContext ctx, CrmDb db, TenantScope t, CurrentUser u, KapsoClient kapso, ConversationService svc) =>
         {
@@ -100,7 +100,7 @@ public static class WhatsAppEndpoints
         }
         row.Enabled = b.Enabled; CrmEndpoints.Audit(db, t, u, u.Platform && !b.Enabled ? "channel.paused" : "channel.enabled", id); await db.SaveChangesAsync(); return Results.Ok(row);
     }
-    static async Task<IResult> Receive(HttpContext ctx, CrmDb db, TenantScope scope, IConfiguration config, ILoggerFactory logs)
+    public static async Task<IResult> Receive(HttpContext ctx, CrmDb db, TenantScope scope, IConfiguration config, ILoggerFactory logs)
     {
         if (ctx.Request.ContentLength > 2 * 1024 * 1024) return Results.StatusCode(413);
         using var buffer = new MemoryStream(); var bytes = new byte[8192]; int read;
@@ -171,7 +171,7 @@ public static class WhatsAppEndpoints
         string? media = null; if (msg.TryGetProperty(type, out var typeData)) media = Get(typeData, "id");
         var timestamp = long.TryParse(Get(msg, "timestamp"), out var unix) && unix > 0 && unix <= DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeSeconds() ? DateTimeOffset.FromUnixTimeSeconds(unix) : DateTimeOffset.UtcNow;
         db.Add(new Message { TenantId = scope.Id, ConversationId = conv.Id, ExternalId = external, Sender = outbound ? "human" : "patient", Body = content, Type = type, MediaId = media, MediaName=msg.TryGetProperty(type,out var mediaContent)?Get(mediaContent,"filename"):null, Status = status, CreatedAt = timestamp, IsHistory=history });
-        if(!history){conv.LastMessage=content.Length>160?content[..160]:content;conv.UpdatedAt = DateTimeOffset.UtcNow;} conv.Revision++;
+        if(!history){var shown=outbound?content:WhatsAppContent.Shown(content);conv.LastMessage=shown.Length>160?shown[..160]:shown;conv.UpdatedAt = DateTimeOffset.UtcNow;} conv.Revision++;
         if (outbound && origin is "business_app" or "other_app" or "meta_business_agent" || passive || evt == "whatsapp.thread.standby")
         {
             conv.Status = "human"; db.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "handoff", Actor = "WhatsApp", ActorRole = "external", Body = "Atención externa detectada. Agente automático en pausa." });
@@ -184,6 +184,12 @@ public static class WhatsAppEndpoints
         }
         return null;
     }
+    /// <summary>The last 200 messages of a conversation, oldest first, as the inbox shows them; null if the conversation is not this tenant's.</summary>
+    public static async Task<List<Message>?> Messages(Guid id, CrmDb db) =>
+        await db.Conversations.AnyAsync(x => x.Id == id)
+            ? (await db.Messages.AsNoTracking().Where(x => x.ConversationId == id).OrderByDescending(x => x.CreatedAt).Take(200).OrderBy(x => x.CreatedAt).ToListAsync())
+                .Select(m => { if (m.Sender == "patient") m.Body = WhatsAppContent.Shown(m.Body); return m; }).ToList()
+            : null;
     internal static string? Get(JsonElement e, string key) => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(key, out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
 }
 public record SendInput(string Body);

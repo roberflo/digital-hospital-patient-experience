@@ -24,11 +24,28 @@ public static class ReminderRules
         return new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(local,tz));
     }
     public static bool Booked(string? status) => status == "booked";
+    public const string DayTemplateV2 = "recepcion_cita_dia_anterior_v2";
+    /// <summary>The command a «Confirmo» tap carries: <c>ASISTO {reminderId}</c>, exactly.</summary>
+    public static Guid? Acknowledgement(string body) =>
+        System.Text.RegularExpressions.Regex.Match(body.Trim(),"^ASISTO ([0-9a-fA-F-]{36})$") is {Success:true} m&&Guid.TryParse(m.Groups[1].Value,out var id)?id:null;
+    /// <summary>Hospital still has this appointment booked at the reminder's start.</summary>
+    public static bool StillBooked(JsonElement agenda,AppointmentReminder row) =>
+        agenda.GetProperty("rows").EnumerateArray().Any(a=>a.GetProperty("appointmentId").GetGuid()==row.AppointmentId&&Instant(a.GetProperty("scheduledStart").GetDateTimeOffset())==row.StartsAt&&Booked(a.GetProperty("status").GetString()));
+    public static (string Date,string Time) Local(DateTimeOffset start,string zone)
+    {
+        var local=TimeZoneInfo.ConvertTime(start,TimeZoneInfo.FindSystemTimeZoneById(zone));
+        return (local.ToString("dd/MM/yyyy",CultureInfo.InvariantCulture),local.ToString("HH:mm",CultureInfo.InvariantCulture));
+    }
+    /// <summary>Payloads of the day-before buttons (Confirmo, Cambiar fecha, Cancelar cita): verb and the id of the reminder sent, nothing else.
+    /// The reminder, not the appointment, so a tap answers exactly that send: after a move, the old reminder no longer confirms the new start (owner, I-1).</summary>
+    public static string[] Payloads(Guid reminder) => [$"ASISTO {reminder}", $"MOVER {reminder}", $"CANCELAR {reminder}"];
     public static string? ConsentCommand(string text) => text.Trim().ToUpperInvariant() switch
     {
         "BAJA" or "STOP" or "CANCELAR RECORDATORIOS" => "off", "ACTIVAR RECORDATORIOS" => "on", _ => null
     };
 }
+
+public enum ReminderAck { Confirmed, AlreadyConfirmed, Rejected, Unverified }
 
 public sealed class AppointmentReminderService(CrmDb db,TenantScope scope,HospitalClient hospital,KapsoClient kapso,ConversationService conversations,IConfiguration config)
 {
@@ -98,6 +115,47 @@ public sealed class AppointmentReminderService(CrmDb db,TenantScope scope,Hospit
         await db.SaveChangesAsync(ct);
     }
 
+    /// <summary>The patient tapped «Confirmo» on one reminder (criterios 6–7, INV-6, I-1). Accepted only for that very send: a day-before reminder
+    /// of this tenant, sent to this contact, still linked to the same patient, still ahead, and re-read now in Hospital as booked at that same
+    /// start. Hospital is read outside the reminders lock; a refusal or an unreachable Hospital leaves a note for the desk and nothing for the patient.</summary>
+    public async Task<(ReminderAck Result,string? Date,string? Time)> Acknowledge(Guid contactId,Guid reminderId,Guid conversationId,DateTimeOffset now,CancellationToken ct=default)
+    {
+        var contact=await db.Contacts.AsNoTracking().SingleOrDefaultAsync(c=>c.Id==contactId,ct);
+        async Task<(ReminderAck,string?,string?)> Note(ReminderAck result,string kind,string body)
+        {
+            db.Activities.Add(new(){TenantId=scope.Id,ContactId=contact?.Id,ConversationId=conversationId,Actor="Recordatorios",ActorRole="system",Kind=kind,Body=body});
+            await db.SaveChangesAsync(ct);return (result,null,null);
+        }
+        Task<(ReminderAck,string?,string?)> Reject(string body="El paciente tocó «Confirmo», pero no se registró: la cita ya no está programada a esa hora en Hospital, ya pasó o no corresponde a este contacto.")=>
+            Note(ReminderAck.Rejected,"appointment_confirmation_rejected",body);
+        var tenant=await db.Tenants.AsNoTracking().SingleAsync(t=>t.Id==scope.Id,ct);
+        var row=await db.AppointmentReminders.AsNoTracking().SingleOrDefaultAsync(r=>r.Id==reminderId&&r.Window=="day_before",ct);
+        if(row is null||contact is null||row.ContactId!=contact.Id||contact.PatientId!=row.PatientId)return await Reject();
+        if(row.Status=="confirmed")return (ReminderAck.AlreadyConfirmed,null,null);
+        if(row.Status=="uncertain")return await Reject("El paciente tocó «Confirmo» en un recordatorio cuya entrega no se confirmó; no se registró. Confirma la cita con el paciente.");
+        if(row.Status!="sent"||row.StartsAt<=now)return await Reject();
+        bool booked;
+        try
+        {
+            var day=HospitalClient.ClinicalDay(row.StartsAt,tenant.TimeZone);
+            booked=ReminderRules.StillBooked(await hospital.GetPatientAppointmentRangeAsync(scope.Id,row.PatientId,contact.Phone,day,day,ct),row);
+        }
+        catch(HospitalIntegrationException ex) when(ex.Code=="hospital.patient_phone_mismatch") { booked=false; } // the tap is not from the patient's number
+        catch(Exception ex) when(ex is HttpRequestException or HospitalIntegrationException||ex is TaskCanceledException&&!ct.IsCancellationRequested)
+        { return await Note(ReminderAck.Unverified,"appointment_confirmation_unverified","Confirmación recibida, sin verificar con Hospital. Confirma la cita con el paciente."); }
+        if(!booked)return await Reject();
+        using(await conversations.Lock(ReminderRules.LockId(scope.Id),ct))
+        {
+            var fresh=await db.AppointmentReminders.SingleAsync(r=>r.Id==row.Id,ct);await db.Entry(fresh).ReloadAsync(ct);
+            if(fresh.Status=="confirmed")return (ReminderAck.AlreadyConfirmed,null,null);
+            if(fresh.Status!="sent"||fresh.StartsAt!=row.StartsAt)return await Reject();
+            fresh.Status="confirmed";
+            await Note(ReminderAck.Confirmed,"appointment_confirmed","El paciente confirmó su asistencia desde el recordatorio.");
+        }
+        var (date,time)=ReminderRules.Local(row.StartsAt,tenant.TimeZone);
+        return (ReminderAck.Confirmed,date,time);
+    }
+
     public async Task Dispatch(Guid id,DateTimeOffset now,CancellationToken ct=default)
     {
         using var lease=await conversations.Lock(ReminderRules.LockId(scope.Id),ct);
@@ -113,17 +171,16 @@ public sealed class AppointmentReminderService(CrmDb db,TenantScope scope,Hospit
         // Re-read the current Hospital appointment and recipient immediately before dispatch.
         var day=HospitalClient.ClinicalDay(row.StartsAt,tenant.TimeZone);
         var agenda=await hospital.GetPatientAppointmentRangeAsync(scope.Id,row.PatientId,contact.Phone,day,day,ct);
-        if(!agenda.GetProperty("rows").EnumerateArray().Any(a=>a.GetProperty("appointmentId").GetGuid()==row.AppointmentId&&ReminderRules.Instant(a.GetProperty("scheduledStart").GetDateTimeOffset())==row.StartsAt&&ReminderRules.Booked(a.GetProperty("status").GetString())))
+        if(!ReminderRules.StillBooked(agenda,row))
         {await Stop("cancelled","Cita cancelada o reprogramada en Hospital.");return;}
         var template=row.Window=="day_before"?tenant.ReminderDayTemplate:tenant.ReminderHourTemplate;
-        if(!await kapso.ReminderTemplateApproved(channel.PhoneNumberId,template,tenant.ReminderLanguage,ct)){row.Reason="Plantilla pendiente de aprobación o incompatible.";await db.SaveChangesAsync(ct);return;}
+        if(!await kapso.ReminderTemplateApproved(channel.PhoneNumberId,template,tenant.ReminderLanguage,row.Window,ct)){row.Reason="Plantilla pendiente de aprobación o incompatible.";await db.SaveChangesAsync(ct);return;}
         // Consent edits and dispatch share this lock; external phone changes are verified above.
         var conv=await db.Conversations.SingleOrDefaultAsync(c=>c.ContactId==contact.Id&&c.ChannelId==channel.Id,ct);
         if(conv is null){conv=new(){TenantId=scope.Id,ContactId=contact.Id,ChannelId=channel.Id,Status="human"};db.Add(conv);await db.SaveChangesAsync(ct);}
         using var conversationLease=await conversations.Lock(conv.Id,ct);
         await db.Entry(conv).ReloadAsync(ct);
-        var local=TimeZoneInfo.ConvertTime(row.StartsAt,TimeZoneInfo.FindSystemTimeZoneById(tenant.TimeZone));
-        var date=local.ToString("dd/MM/yyyy",CultureInfo.InvariantCulture);var time=local.ToString("HH:mm",CultureInfo.InvariantCulture);
+        var (date,time)=ReminderRules.Local(row.StartsAt,tenant.TimeZone);
         var body=$"Recordatorio de cita en {tenant.Name}, el {date} a las {time}.";
         var message=new Message{TenantId=scope.Id,ConversationId=conv.Id,Sender="system",Type="template",Body=body,Status="sending",RequestKey="reminder:"+row.Id};
         db.Add(message);row.MessageId=message.Id;row.Status="sending";row.AttemptedAt=now;row.Reason=null;
@@ -131,7 +188,7 @@ public sealed class AppointmentReminderService(CrmDb db,TenantScope scope,Hospit
         await db.SaveChangesAsync(ct); // Durable attempt before external I/O, never automatically replay.
         try
         {
-            message.ExternalId=await kapso.SendReminder(channel.PhoneNumberId,contact.Phone,template,tenant.ReminderLanguage,tenant.Name,date,time,ct);
+            message.ExternalId=await kapso.SendReminder(channel.PhoneNumberId,contact.Phone,template,tenant.ReminderLanguage,tenant.Name,date,time,ct,row.Window=="day_before"?ReminderRules.Payloads(row.Id):null);
             message.Status="sent";row.Status="sent";
         }
         catch(Exception ex) when(ex is HttpRequestException or TaskCanceledException or ArgumentException)

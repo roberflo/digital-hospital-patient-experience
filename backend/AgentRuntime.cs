@@ -37,6 +37,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         var tenant = await db.Tenants.SingleAsync(x => x.Id == scope.Id, ct); attention = Attention.Read(tenant.Attention); zone = TimeZoneInfo.FindSystemTimeZoneById(tenant.TimeZone);
         conv = await db.Conversations.SingleAsync(x => x.Id == job.ConversationId, ct);
         channel = await db.Channels.SingleAsync(x => x.Id == conv.ChannelId, ct);
+        if (await ReminderReply(tenant, ct)) return;
         if (!kapso.CanSend(false) || !tenant.AgentEnabled || !channel.Enabled || conv.State != "open") return;
         // Handed over by the agent and not yet answered by anyone: the patient is not left in silence (criterios 62–64).
         var waitingSince = conv.Status == "human" ? await HandedOverUnanswered(ct) : null;
@@ -62,13 +63,15 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         // Each message on its own, so a negation in one does not swallow the sign in another; and joined, for a sign split across them
         // («me duele» + «el pecho») or in a message whose job a newer one coalesced.
         var alarm = turn.Append(latest.Body).Append(string.Join("\n", turn)).Any(text => AgentGuard.NamesEmergency(text, registering));
+        // A reminder's «Cambiar fecha» / «Cancelar cita» carries the reminder (I-1): the existing flow acts on the appointment it was about.
+        var tappedChoice = await TappedReminder(latest.Body, ct) is { } fromReminder ? $"{fromReminder.Verb} {fromReminder.Row.AppointmentId}" : latest.Body;
         if (waitingSince is { } since)
         {
             // An emergency always gets the number. A tap of a registered patient is still served below, with no model.
             // Anything else is for the person who will answer: the patient is told so once it has been a while.
             var tap = latest.Body.Trim();
             if (alarm) { await Handoff(conv, AgentGuard.Inbound(latest.Body, latest.Type, registering, alarm)!, ct, true); return; }
-            if (contact.PatientId is null || !(tap is "AGENDAR" or "MISCITAS" or "RECETA" || tap.StartsWith("CONFIRMAR ", StringComparison.OrdinalIgnoreCase) || AgentGuard.SlotChoice(tap) is not null || AgentGuard.AppointmentChoice(tap) is not null)) { await StillWaiting(since, tenant.EmergencyPhone, ct); return; }
+            if (contact.PatientId is null || !(tap is "AGENDAR" or "MISCITAS" or "RECETA" || tap.StartsWith("CONFIRMAR ", StringComparison.OrdinalIgnoreCase) || AgentGuard.SlotChoice(tap) is not null || AgentGuard.AppointmentChoice(tappedChoice) is not null)) { await StillWaiting(since, tenant.EmergencyPhone, ct); return; }
         }
         else if (AgentGuard.Inbound(latest.Body, latest.Type, registering, alarm) is { } reason)
         {
@@ -132,7 +135,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         if (AgentGuard.GuideChoice(latest.Body) is { } step) { await Guide(step, ct); return; }
         // The patient's own appointments: see them, change one, cancel one. Each step is a tap and none needs the model.
         if (latest.Body.Trim() is "MISCITAS") { await MyAppointments(ct); return; }
-        if (contact.PatientId is not null && AgentGuard.AppointmentChoice(latest.Body) is { } choice) { await AppointmentAction(choice, ct); return; }
+        if (contact.PatientId is not null && AgentGuard.AppointmentChoice(tappedChoice) is { } choice) { await AppointmentAction(choice, ct); return; }
         if (contact.PatientId is null && latest.Body.Trim() is "RECETA") { await OfferPerson("El contacto pide su receta y no tiene expediente vinculado.", "Para enviarte recetas, recepción tiene que vincular primero tu expediente.", ct); return; }
         // The menu requests are complete on their own: they are served here, with no model call, so they keep working while the AI provider
         // is down or rate-limited. «Agendar cita» shows the free hours to anyone: without a record, tapping one opens the registration form.
@@ -388,6 +391,47 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             + "llamarlo antes cambia tu respuesta por una oferta genérica y el paciente no sabe si el servicio existe.";
     static readonly Choices Menu = new([new("AGENDAR", "Agendar cita", "Ver horarios libres"), new("MISCITAS", "Mis citas", "Consultar, cambiar o cancelar"), new("RECETA", "Mi receta", "Recibir mi última receta"), new("PERSONA", "Hablar con persona", "Pasar con recepción")], "Ver opciones");
 
+    /// <summary>A tap on a day-before reminder (recordatorios-whatsapp.spec.md, criterios 6, 8, 10; I-1: the payload is the reminder's id).
+    /// Runs before every gate of the agent, so it counts with the agent or with a person, and reads this job's own message, so a «gracias»
+    /// typed right after does not hide it. «Confirmo» ends here: the model never sees the command, and the thanks goes only if the agent
+    /// still owns the conversation after the Hospital re-read. «Cambiar fecha» / «Cancelar cita» with nobody automatic to answer leave one
+    /// note per send, and only for a reminder that reached the patient.</summary>
+    async Task<bool> ReminderReply(Tenant tenant, CancellationToken ct)
+    {
+        if (!job.Key.StartsWith("agent:", StringComparison.Ordinal)) return false;
+        var externalId = job.Key[6..];
+        var body = await db.Messages.Where(x => x.ConversationId == conv.Id && x.ExternalId == externalId && x.Sender == "patient").Select(x => x.Body).FirstOrDefaultAsync(ct);
+        if (body is null) return false;
+        var agentAnswers = kapso.CanSend(false) && tenant.AgentEnabled && channel.Enabled && conv.State == "open" && conv.Status == "agent";
+        if (ReminderRules.Acknowledgement(body) is { } reminder)
+        {
+            hospital.CallAs($"Recepcion-Recordatorios/1.0 (conversacion {conv.Id}; trabajo {job.Id})", job.Id);
+            var (result, date, time) = await new AppointmentReminderService(db, scope, hospital, kapso, conversations, config).Acknowledge(conv.ContactId, reminder, conv.Id, DateTimeOffset.UtcNow, ct);
+            if (result == ReminderAck.Confirmed && agentAnswers)
+            {
+                // A person may have taken the conversation while Hospital was being read: as in Confirm, the agent speaks only if it still owns it.
+                using var lease = await conversations.Lock(conv.Id, ct); await db.Entry(conv).ReloadAsync(ct);
+                if (await Active(conv.Id, conv.Revision, ct)) await conversations.Send(conv.Id, $"Gracias, te esperamos el {date} a las {time}.", "agent", "asisto:" + job.Id, ct: ct);
+            }
+            return true;
+        }
+        if (!agentAnswers && await TappedReminder(body, ct) is { } tapped && tapped.Row.Status is "sent" or "confirmed" or "uncertain")
+        {
+            var note = $"El paciente pidió {(tapped.Verb == "MOVER" ? "cambiar" : "cancelar")} la cita desde el recordatorio.";
+            var since = tapped.Row.AttemptedAt ?? tapped.Row.CreatedAt;
+            if (!(await db.Activities.Where(x => x.ConversationId == conv.Id && x.Kind == "reminder_change_request" && x.CreatedAt >= since).Select(x => x.Body).ToListAsync(ct)).Contains(note))
+            {
+                db.Activities.Add(new() { TenantId = scope.Id, ContactId = conv.ContactId, ConversationId = conv.Id, Actor = "Recordatorios", ActorRole = "system", Kind = "reminder_change_request", Body = note });
+                await db.SaveChangesAsync(ct);
+            }
+        }
+        return false;
+    }
+    /// <summary>«Cambiar fecha» / «Cancelar cita» of a day-before reminder sent to this contact: the verb and that reminder.</summary>
+    async Task<(string Verb, AppointmentReminder Row)?> TappedReminder(string body, CancellationToken ct) =>
+        AgentGuard.AppointmentChoice(body) is { Verb: "MOVER" or "CANCELAR", StartsAt: null } change
+        && await db.AppointmentReminders.AsNoTracking().SingleOrDefaultAsync(r => r.Id == change.Appointment && r.Window == "day_before" && r.ContactId == conv.ContactId, ct) is { } row
+            ? (change.Verb, row) : null;
     /// <summary>When the agent handed this conversation to the team, if no person has answered or acted on it since. A conversation
     /// the team took by itself, or one that stopped on an error, is theirs alone.</summary>
     async Task<DateTimeOffset?> HandedOverUnanswered(CancellationToken ct)

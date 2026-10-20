@@ -50,23 +50,35 @@ public sealed class KapsoClient(HttpClient http, IConfiguration config)
         var payload = await res.Content.ReadFromJsonAsync<JsonElement>(ct);
         return payload.GetProperty("data").EnumerateArray().FirstOrDefault(t => t.GetProperty("name").GetString() == name && t.GetProperty("language").GetString() == language);
     }
-    public static bool ValidReminderTemplate(JsonElement template)
+    static readonly string[] DayButtons=["Confirmo","Cambiar fecha","Cancelar cita"];
+    /// <summary>The shape a reminder template must have for its window: the hour before is one BODY; the day before is a BODY
+    /// plus exactly the three quick replies, in that order. Anything else (a header, a URL or phone button, another parameter) is refused.</summary>
+    public static bool ValidReminderTemplate(JsonElement template, string window)
     {
         if (template.ValueKind != JsonValueKind.Object || !template.TryGetProperty("status",out var status) || status.GetString() != "APPROVED"
             || !template.TryGetProperty("category",out var category) || category.GetString() != "UTILITY"
-            || !template.TryGetProperty("parameter_format",out var format) || format.GetString() != "NAMED") return false;
-        if(!template.TryGetProperty("components",out var components)||components.GetArrayLength()!=1)return false;
+            || !template.TryGetProperty("parameter_format",out var format) || format.GetString() != "NAMED"
+            || !template.TryGetProperty("components",out var components) || components.ValueKind != JsonValueKind.Array) return false;
+        var count=window switch{"hour_before"=>1,"day_before"=>2,_=>0};
+        if(count==0||components.GetArrayLength()!=count)return false;
         var body=components[0];if(body.GetProperty("type").GetString()!="BODY")return false;
         var text=body.GetProperty("text").GetString()??"";
         var parameters=System.Text.RegularExpressions.Regex.Matches(text,@"\{\{([a-z_]+)\}\}").Select(m=>m.Groups[1].Value).Order().ToArray();
-        return parameters.SequenceEqual(new[]{"fecha","hora","hospital"})&&text.Contains("BAJA",StringComparison.Ordinal);
+        if(!parameters.SequenceEqual(new[]{"fecha","hora","hospital"})||!text.Contains("BAJA",StringComparison.Ordinal))return false;
+        if(count==1)return true;
+        var buttons=components[1];
+        return buttons.GetProperty("type").GetString()=="BUTTONS"&&buttons.TryGetProperty("buttons",out var list)&&list.ValueKind==JsonValueKind.Array
+            &&list.EnumerateArray().Select(b=>b.GetProperty("type").GetString()=="QUICK_REPLY"?b.GetProperty("text").GetString():null).SequenceEqual(DayButtons);
     }
-    public async Task<bool> ReminderTemplateApproved(string number,string name,string language,CancellationToken ct=default) => ValidReminderTemplate(await ReminderTemplate(number,name,language,ct));
-    public async Task<string> SendReminder(string number,string phone,string name,string language,string hospital,string date,string time,CancellationToken ct=default)
+    public async Task<bool> ReminderTemplateApproved(string number,string name,string language,string window,CancellationToken ct=default) => ValidReminderTemplate(await ReminderTemplate(number,name,language,ct),window);
+    /// <summary>Sends an approved reminder. <paramref name="buttons"/> are the quick-reply payloads, in the template's button order; the caller composes them.</summary>
+    public async Task<string> SendReminder(string number,string phone,string name,string language,string hospital,string date,string time,CancellationToken ct=default,IReadOnlyList<string>? buttons=null)
     {
         if(config["REMINDERS_SEND_ENABLED"]!="true")throw new ArgumentException("Recordatorios en pausa");
         using var req=Request(HttpMethod.Post,$"{number}/messages");
-        req.Content=JsonContent.Create(new{messaging_product="whatsapp",to=Rules.Phone(phone),type="template",template=new{name,language=new{code=language},components=new[]{new{type="body",parameters=new[]{new{type="text",parameter_name="hospital",text=hospital},new{type="text",parameter_name="fecha",text=date},new{type="text",parameter_name="hora",text=time}}}}}});
+        var components=new List<object>{new{type="body",parameters=new[]{new{type="text",parameter_name="hospital",text=hospital},new{type="text",parameter_name="fecha",text=date},new{type="text",parameter_name="hora",text=time}}}};
+        components.AddRange((buttons??[]).Select((payload,i)=>new{type="button",sub_type="quick_reply",index=i.ToString(System.Globalization.CultureInfo.InvariantCulture),parameters=new[]{new{type="payload",payload}}}));
+        req.Content=JsonContent.Create(new{messaging_product="whatsapp",to=Rules.Phone(phone),type="template",template=new{name,language=new{code=language},components}});
         using var res=await http.SendAsync(req,ct);res.EnsureSuccessStatusCode();
         // A 2xx without a message id may still have been delivered: uncertain, like a 5xx, never retried.
         JsonElement sent;
