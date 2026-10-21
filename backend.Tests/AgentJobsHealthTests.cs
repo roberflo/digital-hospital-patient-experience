@@ -70,6 +70,18 @@ public sealed partial class AgentIntegrationTests {
         await using var fresh=Other();
         Assert.Equal("uncertain",(await fresh.Messages.SingleAsync(x=>x.Id==stuck.Id)).Status);Assert.Equal("sending",(await fresh.Messages.SingleAsync(x=>x.Id==live.Id)).Status);
     }
+    [Fact]public async Task ATurnInFlightHoldsBackOnlyItsOwnConversation(){
+        // Otro proceso está a mitad de un turno de esta conversación: el de otra conversación del mismo hospital sale igual, el suyo espera.
+        var channel=new Channel{TenantId=scope.Id,Name="Another synthetic number",PhoneNumberId="turn-"+Guid.NewGuid(),Enabled=true};db.Add(channel);
+        var second=new Conversation{TenantId=scope.Id,ContactId=contact.Id,ChannelId=channel.Id,Status="agent"};db.Add(second);
+        var other=new Job{TenantId=scope.Id,ConversationId=second.Id,Key="agent:other-"+scope.Id,CreatedAt=DateTimeOffset.UtcNow.AddMinutes(1)};db.Add(other);await db.SaveChangesAsync();
+        await using var gate=Other();using var inFlight=await ConversationService.TryLock(gate,AgentWorker.TurnLockId(conversation.Id));Assert.NotNull(inFlight);
+        var ai=Never();var k=Never();
+        await AgentWorker.RunTenant(Tenant(ai,k),scope.Id,NullLogger.Instance,CancellationToken.None);
+        await using var fresh=Other();
+        Assert.Equal("pending",(await fresh.Jobs.SingleAsync(x=>x.Id==job.Id)).Status);Assert.Equal("done",(await fresh.Jobs.SingleAsync(x=>x.Id==other.Id)).Status);
+        Assert.Null(await ConversationService.TryLock(Other(),AgentWorker.TurnLockId(conversation.Id)));
+    }
     [Fact]public async Task ClaimIsWonByOneWorker(){
         await using var other=Other();
         var won=await Task.WhenAll(AgentWorker.Claim(db,job.Id,CancellationToken.None),AgentWorker.Claim(other,job.Id,CancellationToken.None));

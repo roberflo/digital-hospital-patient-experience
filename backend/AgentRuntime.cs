@@ -1176,12 +1176,14 @@ public sealed class AgentWorker(IServiceScopeFactory scopes, ILogger<AgentWorker
 {
     public const int AbandonedAfterMinutes = 5;
     public const string AbandonedNote = "Atención automática interrumpida. Revisa el historial antes de responder.";
-    public const int TenantsAtOnce = 4;
+    // ponytail: TurnsAtOnce is per process and every tenant is listed each tick; list only tenants with work if hundreds of hospitals make that cost.
+    public const int TurnsPerTenant = 3, TurnsAtOnce = 8;
     public static readonly TimeSpan TurnDeadline = TimeSpan.FromMinutes(2);
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        // One turn in flight per tenant and up to four tenants at once, each in its own scope: a hung turn holds back only its own tenant.
-        var running = new Dictionary<Guid, Task>();
+        // Up to three turns of one tenant at once, on different conversations, and eight in all, each in its own scope: ten patients writing
+        // at 8:00 do not queue behind one another, and a hung turn holds back only its own slot. Slot 0 also does the tenant's housekeeping.
+        var running = new Dictionary<(Guid Tenant, int Slot), Task>();
         void Prune() { foreach (var done in running.Where(x => x.Value.IsCompleted).Select(x => x.Key).ToList()) running.Remove(done); }
         try
         {
@@ -1191,12 +1193,15 @@ public sealed class AgentWorker(IServiceScopeFactory scopes, ILogger<AgentWorker
                 {
                     using var root = scopes.CreateScope(); var db = root.ServiceProvider.GetRequiredService<CrmDb>();
                     var tenants = await db.Tenants.Select(x => x.Id).ToListAsync(stoppingToken);
+                    var pending = await db.Jobs.IgnoreQueryFilters().Where(x => x.Status == "pending").GroupBy(x => x.TenantId).Select(g => new { g.Key, Count = g.Count() }).ToDictionaryAsync(x => x.Key, x => x.Count, stoppingToken);
                     foreach (var tid in tenants)
-                    {
-                        Prune(); if (running.ContainsKey(tid)) continue;
-                        while (running.Count >= TenantsAtOnce) { await Task.WhenAny(running.Values).WaitAsync(stoppingToken); Prune(); }
-                        running[tid] = Task.Run(() => Turn(tid, stoppingToken), CancellationToken.None);
-                    }
+                        for (var slot = 0; slot < Math.Min(TurnsPerTenant, Math.Max(1, pending.GetValueOrDefault(tid))); slot++)
+                        {
+                            Prune(); if (running.ContainsKey((tid, slot))) continue;
+                            while (running.Count >= TurnsAtOnce) { await Task.WhenAny(running.Values).WaitAsync(stoppingToken); Prune(); }
+                            var housekeeping = slot == 0;
+                            running[(tid, slot)] = Task.Run(() => Turn(tid, housekeeping, stoppingToken), CancellationToken.None);
+                        }
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning("Worker unavailable {ErrorType}", ex.GetType().Name); }
                 await Task.Delay(1500, stoppingToken);
@@ -1204,24 +1209,34 @@ public sealed class AgentWorker(IServiceScopeFactory scopes, ILogger<AgentWorker
         }
         finally { await Task.WhenAll(running.Values); }
     }
-    async Task Turn(Guid tid, CancellationToken stoppingToken)
+    async Task Turn(Guid tid, bool housekeeping, CancellationToken stoppingToken)
     {
-        try { await using var s = scopes.CreateAsyncScope(); await RunTenant(s.ServiceProvider, tid, log, stoppingToken); }
+        try { await using var s = scopes.CreateAsyncScope(); await RunTenant(s.ServiceProvider, tid, log, stoppingToken, housekeeping); }
         catch (Exception ex) when (!stoppingToken.IsCancellationRequested) { log.LogWarning("Worker unavailable {ErrorType}", ex.GetType().Name); }
         catch (OperationCanceledException) { }
     }
     /// <summary>The tenant's turn, then the daily retention sweep: the sweep runs after the claim, and its failure never holds the turn back (MR-39).</summary>
-    public static async Task RunTenant(IServiceProvider sp, Guid tid, ILogger log, CancellationToken stoppingToken)
+    public static async Task RunTenant(IServiceProvider sp, Guid tid, ILogger log, CancellationToken stoppingToken, bool housekeeping = true)
     {
-        await Turn(sp, tid, log, stoppingToken); await Retention.Daily(sp.GetRequiredService<CrmDb>(), tid, log, stoppingToken);
+        await Turn(sp, tid, log, stoppingToken, housekeeping); if (housekeeping) await Retention.Daily(sp.GetRequiredService<CrmDb>(), tid, log, stoppingToken);
     }
-    static async Task Turn(IServiceProvider sp, Guid tid, ILogger log, CancellationToken stoppingToken)
+    /// <summary>The lock a turn holds from its claim to its end: never two turns of one conversation at once, whatever slot runs them.</summary>
+    public static Guid TurnLockId(Guid conversation) => new(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("agent-turn:" + conversation)).AsSpan(0, 16));
+    static async Task Turn(IServiceProvider sp, Guid tid, ILogger log, CancellationToken stoppingToken, bool housekeeping)
     {
         var scope = sp.GetRequiredService<TenantScope>(); scope.Id = tid; var d = sp.GetRequiredService<CrmDb>(); var service = sp.GetRequiredService<ConversationService>();
-        await InboxWorkflow.WakeDue(d,scope,service,stoppingToken);
-        await RetireAbandoned(d, scope, service, stoppingToken);
-        var job = await d.Jobs.Where(x => x.Status == "pending").OrderBy(x => x.CreatedAt).FirstOrDefaultAsync(stoppingToken); if (job is null) return;
-        if (await Claim(d, job.Id, stoppingToken) == 0) return;
+        if (housekeeping) { await InboxWorkflow.WakeDue(d,scope,service,stoppingToken); await RetireAbandoned(d, scope, service, stoppingToken); }
+        var candidates = await d.Jobs.Where(x => x.Status == "pending" && !d.Jobs.Any(r => r.ConversationId == x.ConversationId && r.Status == "running")).OrderBy(x => x.CreatedAt).Take(TurnsPerTenant).ToListAsync(stoppingToken);
+        Job? job = null; IDisposable? turn = null;
+        foreach (var candidate in candidates)
+        {
+            if (await ConversationService.TryLock(d, TurnLockId(candidate.ConversationId), stoppingToken) is not { } held) continue;
+            // Under the turn lock a running job of this conversation can only be a dead process's, which RetireAbandoned retires.
+            if (!await d.Jobs.AnyAsync(r => r.ConversationId == candidate.ConversationId && r.Status == "running", stoppingToken) && await Claim(d, candidate.Id, stoppingToken) == 1) { (job, turn) = (candidate, held); break; }
+            held.Dispose();
+        }
+        if (job is null) return;
+        using var lease = turn;
         job.Status = "running"; job.StartedAt = DateTimeOffset.UtcNow; var wasAgent = false;
         try { using var deadline = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken); deadline.CancelAfter(TurnDeadline); await sp.GetRequiredService<AgentRuntime>().Run(job, deadline.Token); job.Status = "done"; }
         catch (Exception ex) when (ex is not OperationCanceledException || !stoppingToken.IsCancellationRequested)

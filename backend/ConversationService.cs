@@ -61,6 +61,14 @@ public sealed class ConversationService(CrmDb db, TenantScope scope, KapsoClient
         var p = cmd.CreateParameter(); p.ParameterName = "id"; p.Value = BitConverter.ToInt64(id.ToByteArray(), 0); cmd.Parameters.Add(p); await cmd.ExecuteNonQueryAsync(ct); cmd.Dispose();
         return new Lease(conn, (long)p.Value);
     }
+    /// <summary>Like <see cref="Lock(CrmDb, Guid, CancellationToken)"/>, but null at once when someone else holds it.</summary>
+    public static async Task<IDisposable?> TryLock(CrmDb db, Guid id, CancellationToken ct = default)
+    {
+        await db.Database.OpenConnectionAsync(ct);
+        var conn = db.Database.GetDbConnection(); using var cmd = conn.CreateCommand(); cmd.CommandText = "SELECT pg_try_advisory_lock(@id)";
+        var p = cmd.CreateParameter(); p.ParameterName = "id"; p.Value = BitConverter.ToInt64(id.ToByteArray(), 0); cmd.Parameters.Add(p);
+        return await cmd.ExecuteScalarAsync(ct) is true ? new Lease(conn, (long)p.Value) : null;
+    }
     sealed class Lease(System.Data.Common.DbConnection connection, long key) : IDisposable
     {
         public void Dispose() { if (connection.State == ConnectionState.Open) { using var cmd = connection.CreateCommand(); cmd.CommandText = "SELECT pg_advisory_unlock(@id)"; var p = cmd.CreateParameter(); p.ParameterName = "id"; p.Value = key; cmd.Parameters.Add(p); cmd.ExecuteNonQuery(); } }
