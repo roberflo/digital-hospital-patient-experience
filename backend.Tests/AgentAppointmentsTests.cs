@@ -76,6 +76,49 @@ public sealed class AgentAppointmentsTests : IAsyncLifetime
         Assert.Contains(appointment.ToString(), (await h.Db.Activities.SingleAsync(a => a.ConversationId == h.Conversation.Id && a.Kind == "appointment")).Body);
     }
 
+    [Fact]
+    public async Task ANewCardRetiresTheOneBeforeIt()
+    {
+        // Dos tarjetas abiertas a la vez se podían confirmar las dos: dos operaciones en Hospital por una sola decisión.
+        await h.Link(); var first = Guid.NewGuid(); var second = Guid.NewGuid(); var hospital = h.Hospital(appointments: [Booked(first, 3), Booked(second, 6)]);
+        await Say($"CANCELAR {first}", hospital); var old = Options()[0].Id;
+        await Say($"CANCELAR {second}", hospital);
+
+        Assert.Contains("ya venció", await Say(old, hospital));
+        Assert.Empty(h.HospitalWrites);
+        Assert.Single(await h.Pending("proposal"));
+    }
+
+    [Fact]
+    public async Task AnOldReminderDoesNotActOnAnAppointmentThatMoved()
+    {
+        // El recordatorio era de la cita a las 10:00 del día 3; desde entonces se movió al día 4. Su «Cancelar» no la cancela: se le muestra como está ahora.
+        await h.Link(); var appointment = Guid.NewGuid();
+        var reminder = new AppointmentReminder { TenantId = h.Scope.Id, ContactId = h.Contact.Id, PatientId = h.Contact.PatientId!.Value, ChannelId = h.Conversation.ChannelId, AppointmentId = appointment, StartsAt = In(3, 16), DueAt = In(2, 16), Window = "day_before", Status = "sent", AttemptedAt = DateTimeOffset.UtcNow };
+        h.Db.Add(reminder); await h.Db.SaveChangesAsync();
+
+        var reply = await Say($"CANCELAR {reminder.Id}", h.Hospital(appointments: [Booked(appointment, 4)]));
+
+        Assert.StartsWith("Tu cita cambió desde ese recordatorio.", reply);
+        Assert.Equal([$"MOVER {appointment}", $"CANCELAR {appointment}", "MENU"], Options().Select(o => o.Id));
+        Assert.Empty(await h.Pending("proposal"));
+    }
+
+    [Fact]
+    public async Task TheDoctorIsNamedAsHospitalNamesThemNotAsTheTapSays()
+    {
+        // El texto de un toque lo puede escribir el paciente: el nombre del doctor de la tarjeta y del historial sale de Hospital.
+        await h.Link(); var hospital = h.Hospital(availability: Agenda());
+
+        var card = await Say($"CITA {In(5, 15).ToOffset(TimeSpan.FromHours(-6)):yyyy-MM-ddTHH:mm:sszzz} {doctor} 30 Dr. Inventado", hospital);
+        Assert.Contains("*Con:* Dra. Sintética Rivas", card); Assert.DoesNotContain("Inventado", card);
+
+        await Say(Options()[0].Id, hospital);
+
+        var booked = (await h.Db.Activities.SingleAsync(a => a.ConversationId == h.Conversation.Id && a.Kind == "appointment")).Body;
+        Assert.Contains("con Dra. Sintética Rivas", booked); Assert.DoesNotContain("Inventado", booked);
+    }
+
     object Past(Guid id) => new { appointmentId = id, clinicianId = doctor, clinicianName = "Dra. Sintética Rivas", scheduledStart = DateTimeOffset.UtcNow.AddHours(-2), durationMinutes = 30, status = "booked" };
 
     [Theory]

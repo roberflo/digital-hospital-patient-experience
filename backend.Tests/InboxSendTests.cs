@@ -80,4 +80,20 @@ public sealed class InboxSendTests
         var conversation = await h.Fresh();
         Assert.Equal(("agent", (string?)null), (conversation.Status, conversation.AssignedTo));
     }
+    [Fact]
+    public async Task A_file_without_key_changes_nothing()
+    {
+        // Antes la subida pausaba al agente y asignaba la conversación, y sólo después respondía 400 por la clave.
+        await using var h = new AgentHarness();
+        await h.Start();
+        var sender = h.Sender(); var kapso = new KapsoClient(new HttpClient(sender), new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["KAPSO_API_KEY"] = "synthetic", ["KAPSO_MANUAL_SEND_ENABLED"] = "true" }).Build());
+        var ctx = new DefaultHttpContext(); var pdf = new MemoryStream("%PDF-synthetic"u8.ToArray());
+        ctx.Request.Form = new FormCollection([], new FormFileCollection { new FormFile(pdf, 0, pdf.Length, "file", "receta.pdf") { Headers = new HeaderDictionary(), ContentType = "application/pdf" } });
+
+        await Assert.ThrowsAsync<ArgumentException>(() => WhatsAppEndpoints.SendMedia(h.Conversation.Id, ctx, h.Db, h.Scope, new CurrentUser { Subject = "staff-1", Role = "reception", Name = "Recepción Sintética" }, kapso, new ConversationService(h.Db, h.Scope, kapso)));
+
+        var conversation = await h.Fresh();
+        Assert.Equal(("agent", (string?)null), (conversation.Status, conversation.AssignedTo));
+        Assert.Equal(0, sender.Calls); // nothing uploaded
+    }
 }

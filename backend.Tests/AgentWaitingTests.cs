@@ -37,6 +37,34 @@ public sealed class AgentWaitingTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task AnHourChosenWhileWaitingIsBookedWhenThePatientConfirms()
+    {
+        // Criterio 62: la tarjeta salió durante la espera; antes su Confirmar no hacía nada y el paciente quedaba sin respuesta.
+        var doctor = Guid.NewGuid(); var start = new DateTimeOffset(DateTime.UtcNow.Date.AddDays(5).AddHours(15), TimeSpan.Zero);
+        var hospital = h.Hospital(availability: new { clinicalDayFrom = "", clinicalDayTo = "", maxDaysPerQuery = 31, rollState = "open", professionals = new[] { new { clinicianId = doctor, clinicianName = "Dra. Sintética Rivas", placeName = "Consultorio 1", defaultDurationMinutes = 30, days = new[] { new { clinicalDay = "", state = "open", takenSlotCount = 0, utcOffset = "-06:00", slots = new[] { new { slotId = "a", startsAt = start, durationMinutes = 30, takenBy = 0, offered = true } } } } } } });
+        async Task Tap(string text) { await h.Say("patient", text); await h.Runtime(NoModel, h.Sender(), hospital).Run(h.Job, CancellationToken.None); }
+
+        await Tap("AGENDAR"); await Tap(AgentHarness.Options(h.Interactive[^1])[0].Id);
+        await Tap(AgentHarness.Options(h.Interactive[^1])[0].Id); // Confirmar
+
+        Assert.Equal("/v1/agenda", Assert.Single(h.HospitalWrites));
+        Assert.Contains("quedó agendada", h.Sent[^1]);
+        Assert.Equal("human", (await h.Fresh()).Status);
+    }
+
+    [Fact]
+    public async Task TheNoticeOffersOnlyWhatTheHospitalMenuShows()
+    {
+        // Lo que el hospital ocultó en su menú (aquí, la receta) tampoco aparece en el aviso de espera.
+        var tenant = await h.Db.Tenants.SingleAsync(t => t.Id == h.Scope.Id); tenant.Attention = new Attention(Menu: ["AGENDAR", "PERSONA"]).Write(); await h.Db.SaveChangesAsync();
+        await Wait(TimeSpan.FromMinutes(11));
+
+        await Say("¿Hola? ¿Hay alguien?");
+
+        Assert.Equal(["AGENDAR"], AgentHarness.Options(h.Interactive[^1]).Select(o => o.Id));
+    }
+
+    [Fact]
     public async Task FreeTextAfterTenMinutesGetsOneNoticeAndRaisesThePriority()
     {
         await Wait(TimeSpan.FromMinutes(11));

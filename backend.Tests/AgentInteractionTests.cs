@@ -190,13 +190,13 @@ public sealed class AgentInteractionTests : IAsyncLifetime
         // Found booking against the real Hospital: its overlap probe ignores status, so a slot that once held a cancelled
         // appointment answers «overlaps» forever while the agenda shows it free. The patient was left without an answer.
         await h.Link();
-        var doctor = Guid.NewGuid(); var start = new DateTimeOffset(DateTime.UtcNow.Date.AddDays(3).AddHours(15), TimeSpan.Zero); var booked = false;
+        var doctor = Guid.NewGuid(); var start = new DateTimeOffset(DateTime.UtcNow.Date.AddDays(3).AddHours(15), TimeSpan.Zero); var booked = false; var created = Guid.NewGuid();
         var hospital = new AgentHarness.Fake(request =>
         {
             var path = request.RequestUri!.AbsolutePath;
             if (path.StartsWith("/v1/patients/")) return Task.FromResult(AgentHarness.Json(new { patientId = h.Contact.PatientId, phone = h.Contact.Phone }));
             if (path == "/v1/agenda/booking-options") return Task.FromResult(AgentHarness.Json(Agenda(start, doctor, booked ? activeInSlotAfterBooking : 0)));
-            booked = true; return Task.FromResult(AgentHarness.Json(new { appointmentId = Guid.NewGuid(), status = "booked", overlaps = true }));
+            booked = true; return Task.FromResult(AgentHarness.Json(new { appointmentId = created, status = "booked", overlaps = true }));
         });
         await h.Say("patient", $"CITA {start.ToOffset(TimeSpan.FromHours(-6)):yyyy-MM-ddTHH:mm:sszzz} {doctor} 30 Dra. Sintética Rivas");
         await h.Runtime(h.Model(AgentHarness.Reply("No debe consultarse")), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
@@ -207,6 +207,9 @@ public sealed class AgentInteractionTests : IAsyncLifetime
 
         Assert.Equal(confirmed ? "agent" : "human", (await h.Fresh()).Status);
         Assert.Equal(confirmed, h.Sent.Any(text => text.Contains("quedó agendada")));
+        // Agendada en Hospital en los dos casos: el historial la registra con su referencia, y la derivación la nombra (antes no quedaba ninguna de las dos).
+        Assert.Contains($"Referencia Hospital: {created}.", (await h.Db.Activities.SingleAsync(a => a.ConversationId == h.Conversation.Id && a.Kind == "appointment")).Body);
+        if (!confirmed) Assert.EndsWith($"Referencia Hospital: {created}.", (await h.Db.Activities.SingleAsync(a => a.ConversationId == h.Conversation.Id && a.Kind == "handoff")).Body);
     }
 
     [Fact]

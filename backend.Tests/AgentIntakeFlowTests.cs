@@ -85,6 +85,22 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task AFormWhoseQuestionNeverWentOutTakesNoAnswer()
+    {
+        // La pregunta del formulario no llegó a enviarse (p. ej. una persona tomó la conversación justo antes): el siguiente mensaje no la responde.
+        var noModel = new AgentHarness.Fake(_ => throw new InvalidOperationException("The model must not be consulted"));
+        await h.Say("patient", $"CITA {new DateTimeOffset(DateTime.UtcNow.Date.AddDays(3).AddHours(15), TimeSpan.Zero).ToOffset(TimeSpan.FromHours(-6)):yyyy-MM-ddTHH:mm:sszzz} {Guid.NewGuid()} 30 Dra. Sintética Rivas");
+        await h.Runtime(noModel, h.Sender()).Run(h.Job, CancellationToken.None);
+        var form = Assert.Single(await h.Pending("intake")); form.PromptMessageId = null; await h.Db.SaveChangesAsync();
+        var model = h.Model(AgentHarness.Reply("Con gusto te ayudo."));
+
+        await h.Say("patient", "Ana Sintética"); await h.Runtime(model, h.Sender()).Run(h.Job, CancellationToken.None);
+
+        Assert.Empty(await h.Pending("intake"));
+        Assert.True(model.Calls > 0); // the message went to the agent as any other, not into the form
+    }
+
+    [Fact]
     public async Task ALabelledEmergencyContactInTheFormIsNotAnEmergency()
     {
         // The guard lets «emergencia» through only because the question before it says «contacto de emergencia» (AgentRuntime, `registering`).

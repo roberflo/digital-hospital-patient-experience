@@ -15,6 +15,20 @@ public static class WhatsAppEndpoints
         using (var teamLease = await svc.Lock(t.Id)) using (var l = await svc.Lock(id)) { await db.Entry(conv).ReloadAsync(); TeamEndpoints.RequireEditable(conv,u); if (!await db.Messages.AnyAsync(x => x.RequestKey == key)) await svc.RequireSendable(conv, manual: true); InboxWorkflow.SetState(conv,"open"); conv.Status = "human"; conv.AssignedTo = u.Subject; conv.Revision++; await db.SaveChangesAsync(); }
         var msg = await svc.Send(id, body, "human", key, actingSubject: u.Subject, actor: u); CrmEndpoints.Audit(db, t, u, "message.sent", msg.Id); await db.SaveChangesAsync(); return Results.Ok(msg);
     }
+    public static async Task<IResult> SendMedia(Guid id, HttpContext ctx, CrmDb db, TenantScope t, CurrentUser u, KapsoClient kapso, ConversationService svc)
+    {
+        // A send without its key is refused before the upload and before the agent is paused or the conversation reassigned (INV-5).
+        var key = ctx.Request.Headers["Idempotency-Key"].ToString(); ConversationService.RequireKey(key);
+        var conv = await db.Conversations.SingleOrDefaultAsync(x => x.Id == id); if (conv is null) return Results.NotFound();
+        TeamEndpoints.RequireEditable(conv,u);
+        var form = await ctx.Request.ReadFormAsync(); var file = form.Files.GetFile("file"); if (file is null || file.Length == 0 || file.Length > 16 * 1024 * 1024) throw new ArgumentException("Archivo requerido, máximo 16 MB");
+        var allowed = new[] { "application/pdf", "image/jpeg", "image/png", "audio/ogg", "audio/mpeg", "audio/mp4", "video/mp4" }; if (!allowed.Contains(file.ContentType)) throw new ArgumentException("Formato no permitido");
+        var channel = await svc.RequireSendable(conv, manual: true);
+        await using var stream = file.OpenReadStream(); var mid = await kapso.Upload(channel.PhoneNumberId, stream, file.FileName, file.ContentType);
+        using (var teamLease = await svc.Lock(t.Id)) using (var l = await svc.Lock(id)) { await db.Entry(conv).ReloadAsync(); TeamEndpoints.RequireEditable(conv,u); InboxWorkflow.SetState(conv,"open"); conv.Status = "human"; conv.AssignedTo = u.Subject; conv.Revision++; await db.SaveChangesAsync(); }
+        var type = file.ContentType.Split('/')[0]; if (type == "application") type = "document";
+        var msg = await svc.Send(id, Path.GetFileName(file.FileName), "human", key, mid, type, actingSubject: u.Subject, actor: u); CrmEndpoints.Audit(db, t, u, "media.sent", msg.Id); await db.SaveChangesAsync(); return Results.Ok(msg);
+    }
     public static void MapWhatsApp(this WebApplication app)
     {
         var api = app.MapGroup("/api").RequireAuthorization();
@@ -36,18 +50,7 @@ public static class WhatsAppEndpoints
         });
         api.MapGet("/conversations/{id:guid}/messages", async (Guid id, CrmDb db) => await Messages(id, db) is { } messages ? Results.Ok(messages) : Results.NotFound());
         api.MapPost("/conversations/{id:guid}/messages", SendMessage);
-        api.MapPost("/conversations/{id:guid}/media", async (Guid id, HttpContext ctx, CrmDb db, TenantScope t, CurrentUser u, KapsoClient kapso, ConversationService svc) =>
-        {
-            var conv = await db.Conversations.SingleOrDefaultAsync(x => x.Id == id); if (conv is null) return Results.NotFound();
-            TeamEndpoints.RequireEditable(conv,u);
-            var form = await ctx.Request.ReadFormAsync(); var file = form.Files.GetFile("file"); if (file is null || file.Length == 0 || file.Length > 16 * 1024 * 1024) throw new ArgumentException("Archivo requerido, máximo 16 MB");
-            var allowed = new[] { "application/pdf", "image/jpeg", "image/png", "audio/ogg", "audio/mpeg", "audio/mp4", "video/mp4" }; if (!allowed.Contains(file.ContentType)) throw new ArgumentException("Formato no permitido");
-            var channel = await svc.RequireSendable(conv, manual: true);
-            await using var stream = file.OpenReadStream(); var mid = await kapso.Upload(channel.PhoneNumberId, stream, file.FileName, file.ContentType);
-            using (var teamLease = await svc.Lock(t.Id)) using (var l = await svc.Lock(id)) { await db.Entry(conv).ReloadAsync(); TeamEndpoints.RequireEditable(conv,u); InboxWorkflow.SetState(conv,"open"); conv.Status = "human"; conv.AssignedTo = u.Subject; conv.Revision++; await db.SaveChangesAsync(); }
-            var type = file.ContentType.Split('/')[0]; if (type == "application") type = "document";
-            var msg = await svc.Send(id, Path.GetFileName(file.FileName), "human", ctx.Request.Headers["Idempotency-Key"].ToString(), mid, type, actingSubject: u.Subject, actor: u); CrmEndpoints.Audit(db, t, u, "media.sent", msg.Id); await db.SaveChangesAsync(); return Results.Ok(msg);
-        }).DisableAntiforgery();
+        api.MapPost("/conversations/{id:guid}/media", SendMedia).DisableAntiforgery();
         api.MapGet("/messages/{id:guid}/media", async (Guid id, CrmDb db, KapsoClient kapso) =>
         {
             var m = await db.Messages.SingleOrDefaultAsync(x => x.Id == id); if (m?.MediaId is null) return Results.NotFound(); var media = await kapso.Download(m.MediaId); return Results.File(media.Bytes, media.Type, fileDownloadName: m.MediaName ?? "archivo", enableRangeProcessing: true);
