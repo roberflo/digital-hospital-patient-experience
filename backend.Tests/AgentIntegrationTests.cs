@@ -446,7 +446,7 @@ public sealed partial class AgentIntegrationTests:IAsyncLifetime {
             Assert.Equal(["confirmed","sent","uncertain","failed","skipped","cancelled"],list.Select(r=>r.Status));
             Assert.Equal("read",list[0].DeliveryStatus);
             var wire=JsonSerializer.SerializeToElement(list[0],new JsonSerializerOptions(JsonSerializerDefaults.Web));
-            Assert.Equal(["id","startsAt","contactName","status","deliveryStatus","conversationId"],wire.EnumerateObject().Select(p=>p.Name));
+            Assert.Equal(["id","startsAt","contactName","status","deliveryStatus","conversationId","changeRequested"],wire.EnumerateObject().Select(p=>p.Name));
         }
         await Assert.ThrowsAsync<AccessDeniedException>(()=>ReminderEndpoints.Tomorrow(db,new CurrentUser{Role="doctor",Subject="doctor",Name="doctor"},scope,now));
     }

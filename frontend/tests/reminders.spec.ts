@@ -145,6 +145,10 @@ test('reception sees tomorrow: who confirmed and whom to call, with nothing clin
         row('three', '2026-10-04T17:00:00Z', 'Paciente Incierto Sintético', 'uncertain'),
         row('four', '2026-10-04T18:00:00Z', 'Paciente Pendiente Sintético', 'pending'),
         row('five', '2026-10-04T19:00:00Z', 'Paciente Fallido Sintético', 'sent', 'failed'),
+        {
+          ...row('six', '2026-10-04T20:00:00Z', 'Paciente Cambio Sintético', 'sent'),
+          changeRequested: true,
+        },
       ],
     }),
   );
@@ -165,7 +169,14 @@ test('reception sees tomorrow: who confirmed and whom to call, with nothing clin
     page.getByRole('region', { name: 'Revisar' }).getByText('Paciente Incierto Sintético'),
   ).toBeVisible();
   // M-2: not yet sent is its own group, and the total counts every row.
-  await expect(page.getByText('5 citas', { exact: true })).toBeVisible();
+  await expect(page.getByText('6 citas', { exact: true })).toBeVisible();
+  // A tap on «Cambiar fecha» or «Cancelar» nobody answered is its own group, never «no answer».
+  await expect(
+    page
+      .getByRole('region', { name: 'Pidieron cambio o cancelación' })
+      .getByText('Paciente Cambio Sintético'),
+  ).toBeVisible();
+  await expect(unanswered.getByText('Paciente Cambio Sintético')).toHaveCount(0);
   await expect(
     page.getByRole('region', { name: 'Aún no enviado' }).getByText('Paciente Pendiente Sintético'),
   ).toBeVisible();

@@ -297,6 +297,7 @@ type Tomorrow = {
   status: string;
   deliveryStatus?: string;
   conversationId?: string;
+  changeRequested?: boolean;
 };
 // «Sin respuesta» is a fact about the reminder, never a prediction: nothing here says the patient will not come.
 // A send WhatsApp reported as failed never reached the patient, so it is to review, not «no answer».
@@ -306,20 +307,24 @@ const tomorrowGroups: {
   has: (r: Tomorrow) => boolean;
   empty?: string;
 }[] = [
+  // A tap on «Cambiar fecha» or «Cancelar» that the agent did not take: the desk calls first.
+  { title: 'Pidieron cambio o cancelación', has: (r) => !!r.changeRequested },
   {
     title: 'Confirmaron',
-    has: (r) => r.status === 'confirmed',
+    has: (r) => r.status === 'confirmed' && !r.changeRequested,
     empty: 'Nadie ha confirmado todavía.',
   },
   {
     title: 'Sin respuesta',
-    has: (r) => r.status === 'sent' && !failedSend(r),
+    has: (r) => r.status === 'sent' && !failedSend(r) && !r.changeRequested,
     empty: 'No hay recordatorios sin respuesta.',
   },
   { title: 'Aún no enviado', has: (r) => r.status === 'pending' || r.status === 'sending' },
   {
     title: 'Revisar',
-    has: (r) => failedSend(r) || ['uncertain', 'failed', 'skipped', 'cancelled'].includes(r.status),
+    has: (r) =>
+      !r.changeRequested &&
+      (failedSend(r) || ['uncertain', 'failed', 'skipped', 'cancelled'].includes(r.status)),
   },
 ];
 const tomorrowLabels: Record<string, string> = {
@@ -388,9 +393,11 @@ export function TomorrowReminders({ me }: { me: Me }) {
                         </ItemContent>
                         <ItemActions className="flex-wrap">
                           <Badge variant={failedSend(r) ? 'destructive' : 'outline'}>
-                            {failedSend(r)
-                              ? statuses.failed
-                              : (tomorrowLabels[r.status] ?? r.status)}
+                            {r.changeRequested
+                              ? 'Pidió cambio'
+                              : failedSend(r)
+                                ? statuses.failed
+                                : (tomorrowLabels[r.status] ?? r.status)}
                           </Badge>
                           {r.conversationId && (
                             <Button variant="link" size="sm" asChild>

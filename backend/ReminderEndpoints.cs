@@ -6,7 +6,8 @@ namespace Recepcion;
 public record ReminderSettingsInput(bool Enabled,Guid? ChannelId,string? DayTemplate=null);
 public record ReminderConsentInput(bool Enabled);
 /// <summary>One line of «Recordatorios de mañana»: hour, contact name and state only (criterios 14, 16).</summary>
-public record TomorrowReminder(Guid Id,DateTimeOffset StartsAt,string? ContactName,string Status,string? DeliveryStatus,Guid? ConversationId);
+/// <param name="ChangeRequested">The patient tapped «Cambiar fecha» or «Cancelar» on this reminder and nobody answered for the agent: the desk calls.</param>
+public record TomorrowReminder(Guid Id,DateTimeOffset StartsAt,string? ContactName,string Status,string? DeliveryStatus,Guid? ConversationId,bool ChangeRequested=false);
 public static class ReminderEndpoints
 {
     public static async Task<IReadOnlyList<TomorrowReminder>> Tomorrow(CrmDb db,CurrentUser user,TenantScope scope,DateTimeOffset now,CancellationToken ct=default)
@@ -22,8 +23,14 @@ public static class ReminderEndpoints
         var conversations=await db.Conversations.AsNoTracking().Where(c=>contactIds.Contains(c.ContactId)).Select(c=>new{c.Id,c.ContactId,c.ChannelId}).ToListAsync(ct);
         var messageIds=rows.Select(r=>r.MessageId).OfType<Guid>().ToArray();
         var deliveries=await db.Messages.AsNoTracking().Where(m=>messageIds.Contains(m.Id)).ToDictionaryAsync(m=>m.Id,m=>m.Status,ct);
-        return rows.Select(r=>new TomorrowReminder(r.Id,r.StartsAt,r.ContactId is {} contact?names.GetValueOrDefault(contact):null,r.Status,r.MessageId is {} m?deliveries.GetValueOrDefault(m):null,
-            conversations.FirstOrDefault(c=>c.ContactId==r.ContactId&&c.ChannelId==r.ChannelId)?.Id)).ToList();
+        var conversationIds=conversations.Select(c=>(Guid?)c.Id).ToArray();
+        var requests=await db.Activities.AsNoTracking().Where(a=>a.Kind=="reminder_change_request"&&conversationIds.Contains(a.ConversationId)).Select(a=>new{a.ConversationId,a.CreatedAt}).ToListAsync(ct);
+        return rows.Select(r=>{
+            var conversation=conversations.FirstOrDefault(c=>c.ContactId==r.ContactId&&c.ChannelId==r.ChannelId)?.Id;
+            var since=r.AttemptedAt??r.CreatedAt;
+            return new TomorrowReminder(r.Id,r.StartsAt,r.ContactId is {} contact?names.GetValueOrDefault(contact):null,r.Status,r.MessageId is {} m?deliveries.GetValueOrDefault(m):null,
+                conversation,r.Status is "sent" or "confirmed" or "uncertain"&&requests.Any(a=>a.ConversationId==conversation&&a.CreatedAt>=since));
+        }).ToList();
     }
     /// <summary>The administrator's reminder settings: channel, pause and the day-before template (criterio 13). Audited.</summary>
     public static async Task Configure(ReminderSettingsInput input,CrmDb db,CurrentUser user,TenantScope scope,ConversationService service)
