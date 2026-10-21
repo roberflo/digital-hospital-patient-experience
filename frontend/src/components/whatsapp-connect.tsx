@@ -138,8 +138,8 @@ export default function WhatsAppConnect() {
                   <ItemContent className="min-w-48">
                     <ItemTitle>{c.name}</ItemTitle>
                     <ItemDescription>
-                      {c.coexistence ? 'Coexistence · teléfono y Recepción' : 'Conexión dedicada'} ·{' '}
-                      {c.doctorId ? 'Doctor' : 'Atención general'}
+                      {c.coexistence ? 'Coexistencia · teléfono y Recepción' : 'Conexión dedicada'}{' '}
+                      · {c.doctorId ? 'Doctor' : 'Atención general'}
                     </ItemDescription>
                   </ItemContent>
                   <ItemActions>

@@ -27,7 +27,7 @@ public static class ProductivityEndpoints
         api.MapGet("/macros",async(CrmDb db)=>await db.Macros.OrderBy(x=>x.Name).Take(100).ToListAsync());
         api.MapPost("/macros",async(MacroInput input,CrmDb db,CurrentUser user,TenantScope scope,ConversationService locks)=>{
             user.RequireAdmin();using var lease=await locks.Lock(scope.Id);
-            if(await db.Macros.CountAsync()>=100)throw new ArgumentException("Puedes guardar hasta 100 macros por hospital");
+            if(await db.Macros.CountAsync()>=100)throw new ArgumentException("Puedes guardar hasta 100 acciones rápidas por hospital");
             var row=CreateMacro(input);row.TenantId=scope.Id;
             db.Add(row);CrmEndpoints.Audit(db,scope,user,"macro.created",row.Id);await db.SaveChangesAsync();return Results.Ok(row);
         });
@@ -43,7 +43,7 @@ public static class ProductivityEndpoints
             if(row.Revision!=input.ExpectedRevision)return Results.Conflict(new{title="La conversación cambió. Revisa los cambios antes de aplicar la macro."});
             TeamEndpoints.RequireEditable(row,user);
             Apply(macro,row,user.Subject);
-            db.Activities.Add(InboxWorkflow.Event(scope,row,user,"macro","Macro aplicada: "+macro.Name));
+            db.Activities.Add(InboxWorkflow.Event(scope,row,user,"macro","Acción rápida aplicada: "+macro.Name));
             if(!string.IsNullOrWhiteSpace(macro.Note))db.Activities.Add(InboxWorkflow.Event(scope,row,user,"note",macro.Note));
             CrmEndpoints.Audit(db,scope,user,"conversation.macro",id);await db.SaveChangesAsync();return Results.Ok(row);
         });

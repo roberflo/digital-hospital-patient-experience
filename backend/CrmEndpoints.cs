@@ -19,9 +19,11 @@ public static class CrmEndpoints
         if (q.Length > 100) throw new ArgumentException("Búsqueda demasiado larga");
         // Names and phones are encrypted: stream scoped records without truncating the search.
         var matches = new List<Contact>(); var seen = 0;
+        // As the desk types: «7000-0001», «+503 7000 0001» or «jose hernandez» find «José Hernández».
+        var digits = new string(q.Where(char.IsAsciiDigit).ToArray());
         await foreach (var row in query.AsAsyncEnumerable())
         {
-            if (!row.Name.Contains(q, StringComparison.OrdinalIgnoreCase) && !row.Phone.Contains(q)) continue;
+            if (System.Globalization.CultureInfo.InvariantCulture.CompareInfo.IndexOf(row.Name, q.Trim(), System.Globalization.CompareOptions.IgnoreCase | System.Globalization.CompareOptions.IgnoreNonSpace) < 0 && !(digits.Length >= 4 && row.Phone.Contains(digits))) continue;
             if (seen++ < offset) continue; matches.Add(row); if (matches.Count == 100) break;
         }
         return matches;

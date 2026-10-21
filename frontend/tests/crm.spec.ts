@@ -198,13 +198,13 @@ test('admin creates and applies an internal macro', async ({ page }, info) => {
     .filter({ has: page.getByText('Ana Martínez', { exact: true }) })
     .click();
   await page.getByRole('button', { name: 'Acciones rápidas', exact: true }).click();
-  await page.getByRole('button', { name: 'Administrar macros', exact: true }).click();
+  await page.getByRole('button', { name: 'Administrar acciones rápidas', exact: true }).click();
   const macro = 'Revisión E2E ' + info.project.name + Date.now();
-  await page.getByLabel('Nombre de macro', { exact: true }).fill(macro);
+  await page.getByLabel('Nombre de la acción rápida', { exact: true }).fill(macro);
   await page.getByLabel('Cambiar prioridad', { exact: true }).selectOption('high');
-  await page.getByLabel('Nota interna de la macro').fill('Nota macro ' + macro);
-  await page.getByRole('button', { name: 'Crear macro', exact: true }).click();
-  await expect(page.getByText('Macro creada', { exact: true })).toBeVisible();
+  await page.getByLabel('Nota interna de la acción rápida').fill('Nota macro ' + macro);
+  await page.getByRole('button', { name: 'Crear acción rápida', exact: true }).click();
+  await expect(page.getByText('Acción rápida creada', { exact: true })).toBeVisible();
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: 'Acciones rápidas', exact: true }).click();
   await page.getByLabel('Procedimiento', { exact: true }).selectOption({ label: macro });
@@ -213,13 +213,13 @@ test('admin creates and applies an internal macro', async ({ page }, info) => {
     page.getByRole('dialog').getByText('Prioridad: Alta', { exact: true }),
   ).toBeVisible();
   await page.getByRole('button', { name: 'Aplicar a esta conversación', exact: true }).click();
-  await expect(page.getByText('Macro aplicada', { exact: true })).toBeVisible();
+  await expect(page.getByText('Acción rápida aplicada', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Acciones rápidas', exact: true }).click();
-  await page.getByRole('button', { name: 'Administrar macros', exact: true }).click();
-  await page.getByRole('button', { name: 'Eliminar macro ' + macro, exact: true }).click();
-  await page.getByRole('button', { name: 'Eliminar macro', exact: true }).click();
+  await page.getByRole('button', { name: 'Administrar acciones rápidas', exact: true }).click();
+  await page.getByRole('button', { name: 'Eliminar acción rápida ' + macro, exact: true }).click();
+  await page.getByRole('button', { name: 'Eliminar acción rápida', exact: true }).click();
   await expect(
-    page.getByRole('button', { name: 'Eliminar macro ' + macro, exact: true }),
+    page.getByRole('button', { name: 'Eliminar acción rápida ' + macro, exact: true }),
   ).toHaveCount(0);
   // The confirmation has to finish closing before Escape closes the macro dialog behind it.
   await expect(page.getByRole('alertdialog')).toHaveCount(0);
@@ -556,10 +556,11 @@ test('MR-20 activating the agent and deleting a view, a macro or a saved reply a
     agent,
   );
   await page.getByRole('button', { name: 'Acciones rápidas', exact: true }).click();
-  await page.getByRole('button', { name: 'Administrar macros', exact: true }).click();
+  await page.getByRole('button', { name: 'Administrar acciones rápidas', exact: true }).click();
   await confirmOnce(
-    () => page.getByRole('button', { name: 'Eliminar macro Revisión', exact: true }).click(),
-    'Eliminar macro',
+    () =>
+      page.getByRole('button', { name: 'Eliminar acción rápida Revisión', exact: true }).click(),
+    'Eliminar acción rápida',
     macros,
   );
   await page.keyboard.press('Escape');

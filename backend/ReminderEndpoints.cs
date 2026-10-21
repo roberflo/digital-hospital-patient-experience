@@ -31,7 +31,7 @@ public static class ReminderEndpoints
             var conversation=conversations.FirstOrDefault(c=>c.ContactId==r.ContactId&&c.ChannelId==r.ChannelId)?.Id;
             var since=r.AttemptedAt??r.CreatedAt;
             return new TomorrowReminder(r.Id,r.StartsAt,r.ContactId is {} contact?names.GetValueOrDefault(contact):null,r.Status,r.MessageId is {} m?deliveries.GetValueOrDefault(m):null,
-                conversation,r.Status is "sent" or "confirmed" or "uncertain"&&requests.Any(a=>a.ConversationId==conversation&&a.MessageId==r.MessageId&&a.CreatedAt>=since));
+                conversation,r.Status is "sent" or "confirmed" or "uncertain"&&requests.Any(a=>a.ConversationId==conversation&&(a.MessageId==null/* before the tapped reminder was kept */||a.MessageId==r.MessageId)&&a.CreatedAt>=since));
         }).ToList();
     }
     /// <summary>The administrator's reminder settings: channel, pause and the day-before template (criterio 13). Audited.</summary>

@@ -1283,8 +1283,10 @@ public sealed class AgentWorker(IServiceScopeFactory scopes, ILogger<AgentWorker
         foreach (var stuck in await d.Messages.Where(x => x.Status == "sending" && x.ReceivedAt < sendingCutoff).Select(x => new { x.Id, x.ConversationId }).ToListAsync(ct))
         {
             using var lease = await service.Lock(stuck.ConversationId, ct);
-            if (await d.Messages.Where(x => x.Id == stuck.Id && x.Status == "sending").ExecuteUpdateAsync(s => s.SetProperty(m => m.Status, "uncertain"), ct) == 0) continue;
-            var c = await d.Conversations.SingleAsync(x => x.Id == stuck.ConversationId, ct); await d.Entry(c).ReloadAsync(ct); c.Status = "human"; c.Revision++;
+            // One SaveChanges: the message never becomes uncertain without its trail and its handoff.
+            var message = await d.Messages.SingleAsync(x => x.Id == stuck.Id, ct); await d.Entry(message).ReloadAsync(ct); if (message.Status != "sending") continue;
+            message.Status = "uncertain";
+            var c = await d.Conversations.SingleAsync(x => x.Id == stuck.ConversationId, ct); await d.Entry(c).ReloadAsync(ct); c.Status = "human"; c.Revision++; c.UpdatedAt = DateTimeOffset.UtcNow;
             d.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = c.Id, ContactId = c.ContactId, MessageId = stuck.Id, Kind = "delivery", Actor = "Sistema", ActorRole = "system", Body = "Entrega sin confirmar. Comprueba WhatsApp antes de volver a enviar." });
             await d.SaveChangesAsync(ct);
         }

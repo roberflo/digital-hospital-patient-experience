@@ -310,9 +310,9 @@ public static class Rules
 {
     public static string Phone(string phone)
     {
-        if (string.IsNullOrWhiteSpace(phone) || phone.Any(c => !char.IsAsciiDigit(c) && c is not ('+' or ' ' or '-' or '(' or ')' or '.'))) throw new ArgumentException("Teléfono internacional inválido");
+        if (string.IsNullOrWhiteSpace(phone) || phone.Any(c => !char.IsAsciiDigit(c) && c is not ('+' or ' ' or '-' or '(' or ')' or '.'))) throw new ArgumentException("Teléfono inválido. Escribe 8 dígitos (7000 0000) o el número con + y su código de país.");
         var value = new string(phone.Where(char.IsAsciiDigit).ToArray());
-        if (value.Length is < 8 or > 15 || value.StartsWith("0")) throw new ArgumentException("Teléfono internacional inválido"); return value;
+        if (value.Length is < 8 or > 15 || value.StartsWith("0")) throw new ArgumentException("Teléfono inválido. Escribe 8 dígitos (7000 0000) o el número con + y su código de país."); return value;
     }
     /// <summary>A contact typed by the team: a Salvadoran number written locally (7000-0000) gets 503, the code WhatsApp delivers it with,
     /// so it is the same contact as its messages. An explicit «+», another length or another first digit is taken as written.</summary>

@@ -223,7 +223,7 @@ export function ConversationMacros({
           {error && (
             <Alert variant="destructive">
               <AlertCircle />
-              <AlertDescription>No se pudieron cargar las macros.</AlertDescription>
+              <AlertDescription>No se pudieron cargar las acciones rápidas.</AlertDescription>
             </Alert>
           )}
           <Field>
@@ -234,7 +234,7 @@ export function ConversationMacros({
               value={selected}
               onChange={(e) => setSelected(e.target.value)}
             >
-              <NativeSelectOption value="">Seleccionar macro…</NativeSelectOption>
+              <NativeSelectOption value="">Seleccionar acción rápida…</NativeSelectOption>
               {data?.map((m) => (
                 <NativeSelectOption key={m.id} value={m.id}>
                   {m.name}
@@ -257,7 +257,7 @@ export function ConversationMacros({
                   setManage(true);
                 }}
               >
-                Administrar macros
+                Administrar acciones rápidas
               </Button>
             )}
             <Button
@@ -271,7 +271,7 @@ export function ConversationMacros({
                   });
                   onChange();
                   setOpen(false);
-                  toast.success('Macro aplicada');
+                  toast.success('Acción rápida aplicada');
                 } catch (err) {
                   onChange();
                   toast.error((err as Error).message);
@@ -288,7 +288,7 @@ export function ConversationMacros({
       <Dialog open={manage} onOpenChange={setManage}>
         <DialogContent className="max-h-dvh overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Macros del hospital</DialogTitle>
+            <DialogTitle>Acciones rápidas del hospital</DialogTitle>
             <DialogDescription>
               Define acciones repetibles para recepción. Disponibles para todos los usuarios de este
               hospital.
@@ -312,7 +312,7 @@ export function ConversationMacros({
                 });
                 await mutate();
                 form.reset();
-                toast.success('Macro creada');
+                toast.success('Acción rápida creada');
               } catch (err) {
                 toast.error((err as Error).message);
               } finally {
@@ -322,7 +322,7 @@ export function ConversationMacros({
           >
             <FieldGroup className="gap-4">
               <Field>
-                <FieldLabel htmlFor={id + '-name'}>Nombre de macro</FieldLabel>
+                <FieldLabel htmlFor={id + '-name'}>Nombre de la acción rápida</FieldLabel>
                 <Input
                   id={id + '-name'}
                   name="name"
@@ -371,7 +371,7 @@ export function ConversationMacros({
                 />
               </Field>
               <Field>
-                <FieldLabel htmlFor={id + '-note'}>Nota interna de la macro</FieldLabel>
+                <FieldLabel htmlFor={id + '-note'}>Nota interna de la acción rápida</FieldLabel>
                 <Textarea
                   id={id + '-note'}
                   name="note"
@@ -381,11 +381,13 @@ export function ConversationMacros({
               </Field>
               <Field orientation="horizontal">
                 <Checkbox id={id + '-own'} name="takeOwnership" />
-                <FieldLabel htmlFor={id + '-own'}>Asignar a quien aplica la macro</FieldLabel>
+                <FieldLabel htmlFor={id + '-own'}>
+                  Asignar a quien aplica la acción rápida
+                </FieldLabel>
               </Field>
             </FieldGroup>
             <DialogFooter>
-              <Button disabled={busy}>Crear macro</Button>
+              <Button disabled={busy}>Crear acción rápida</Button>
             </DialogFooter>
           </form>
           {!!data?.length && (
@@ -404,9 +406,9 @@ export function ConversationMacros({
                       </ItemContent>
                       <ItemActions>
                         <ConfirmAction
-                          title={`¿Eliminar la macro «${m.name}»?`}
+                          title={`¿Eliminar la acción rápida «${m.name}»?`}
                           description="Tu equipo dejará de verla en Acciones rápidas."
-                          action="Eliminar macro"
+                          action="Eliminar acción rápida"
                           destructive
                           onConfirm={async () => {
                             setBusy(true);
@@ -423,7 +425,7 @@ export function ConversationMacros({
                           <Button
                             size="icon-sm"
                             variant="ghost"
-                            aria-label={'Eliminar macro ' + m.name}
+                            aria-label={'Eliminar acción rápida ' + m.name}
                             disabled={busy}
                           >
                             <Trash2 />

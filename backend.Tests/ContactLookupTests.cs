@@ -59,4 +59,13 @@ public sealed class ContactLookupTests : IAsyncLifetime
     [Fact]
     public async Task MoreThanAPageOfIdsIsRefused() =>
         await Assert.ThrowsAsync<ArgumentException>(() => CrmEndpoints.Contacts(h.Db, null, null, null, Enumerable.Range(0, 101).Select(_ => Guid.NewGuid()).ToArray(), 1));
+
+    [Theory]
+    [InlineData("7111-2222")]
+    [InlineData("+503 7111 2222")]
+    [InlineData("paciente antigua")]
+    [InlineData("PACIENTE ANTÍGUA")]
+    // Como escribe recepción: con guiones, espacios, +503, sin tildes o con ellas de más.
+    public async Task SearchReadsAPhoneByItsDigitsAndANameWithoutAccents(string q) =>
+        Assert.Equal([old.Id], (await CrmEndpoints.Contacts(h.Db, q, null, null, null, 1)).Select(c => c.Id));
 }

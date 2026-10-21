@@ -508,7 +508,7 @@ function InboxForNumber({ number, selector }: { number: string; selector: React.
                 <div className="flex min-w-0 flex-1 flex-col gap-1">
                   <h1 className="text-lg font-semibold tracking-tight">Historial de WhatsApp</h1>
                   <p className="text-sm text-muted-foreground">
-                    {live ? 'Conectado en vivo' : 'Actualización cada 15 s'}
+                    {live ? 'Actualización en vivo' : 'Actualización cada 15 s'}
                   </p>
                 </div>
                 <Badge variant="outline">{conversations.length}</Badge>

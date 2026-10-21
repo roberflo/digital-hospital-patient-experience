@@ -1300,12 +1300,13 @@ function InboxView({
                             )}
                           </strong>
                           <time
-                            dateTime={c.updatedAt}
+                            // When the patient last wrote: who has waited longest, not when someone last touched it.
+                            dateTime={c.lastInboundAt ?? c.updatedAt}
                             className="shrink-0 text-xs font-normal text-muted-foreground"
                           >
-                            {dayLabel(c.updatedAt, me.tenant.timeZone) === 'Hoy'
-                              ? time(c.updatedAt, me.tenant.timeZone)
-                              : dayLabel(c.updatedAt, me.tenant.timeZone)}
+                            {dayLabel(c.lastInboundAt ?? c.updatedAt, me.tenant.timeZone) === 'Hoy'
+                              ? time(c.lastInboundAt ?? c.updatedAt, me.tenant.timeZone)
+                              : dayLabel(c.lastInboundAt ?? c.updatedAt, me.tenant.timeZone)}
                           </time>
                         </ItemTitle>
                         <ItemDescription className="line-clamp-1">
@@ -1945,7 +1946,11 @@ function ContactsView({ search }: { search: string }) {
         <CardHeader>
           <CardTitle>
             <h2 className="flex items-center gap-2">
-              Contactos <Badge variant="secondary">{data?.length ?? 0}</Badge>
+              {/* One page holds 100: a full page reads «100+», never a total it is not. */}
+              Contactos{' '}
+              <Badge variant="secondary">
+                {data?.length === 100 ? '100+' : (data?.length ?? 0)}
+              </Badge>
             </h2>
           </CardTitle>
           <CardAction>
@@ -2018,6 +2023,10 @@ function ContactsView({ search }: { search: string }) {
                 </TableBody>
               </Table>
             </div>
+          ) : search.trim() ? (
+            <EmptyState icon={Users} title={`Sin resultados para «${search.trim()}»`}>
+              Prueba con otra parte del nombre o del teléfono.
+            </EmptyState>
           ) : (
             <EmptyState icon={Users} title="Tu próxima relación empieza aquí">
               Agrega un contacto o recibe su primer mensaje por WhatsApp.
@@ -2754,6 +2763,8 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {/* Today's work for the desk: who confirmed tomorrow and whom to call (A11: never a doctor). */}
+      {(me.role === 'admin' || me.role === 'agent') && <TomorrowReminders me={me} />}
     </>
   );
 }
