@@ -93,7 +93,7 @@ test('admin configures reminder channel, pauses dispatch and sees template and q
   // Criterio 13: the tenant still has v1; the administrator switches the day-before reminder to the template with buttons.
   expect(saved.every((body) => body.dayTemplate === undefined)).toBe(true);
   await page.getByRole('button', { name: 'Usar plantilla con botones', exact: true }).click();
-  await expect.poll(() => saved.at(-1)?.dayTemplate).toBe('recepcion_cita_dia_anterior_v2');
+  await expect.poll(() => saved.at(-1)?.dayTemplate).toBe('recepcion_cita_dia_anterior_v4');
   expect(saved.at(-1)?.enabled).toBe(false);
 });
 test('staff cannot administer reminders and other tenant contact authorization is hidden', async ({

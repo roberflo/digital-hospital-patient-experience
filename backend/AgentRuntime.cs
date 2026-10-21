@@ -63,7 +63,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         // Each message on its own, so a negation in one does not swallow the sign in another; and joined, for a sign split across them
         // («me duele» + «el pecho») or in a message whose job a newer one coalesced.
         var alarm = turn.Append(latest.Body).Append(string.Join("\n", turn)).Any(text => AgentGuard.NamesEmergency(text, registering));
-        // A reminder's «Cambiar fecha» / «Cancelar cita» carries the reminder (I-1): the existing flow acts on the appointment it was about.
+        // A reminder's «Cambiar fecha» / «Cancelar» carries the reminder (I-1): the existing flow acts on the appointment it was about.
         var tappedChoice = await TappedReminder(latest.Body, ct) is { } fromReminder ? $"{fromReminder.Verb} {fromReminder.Row.AppointmentId}" : latest.Body;
         if (waitingSince is { } since)
         {
@@ -393,8 +393,8 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
 
     /// <summary>A tap on a day-before reminder (recordatorios-whatsapp.spec.md, criterios 6, 8, 10; I-1: the payload is the reminder's id).
     /// Runs before every gate of the agent, so it counts with the agent or with a person, and reads this job's own message, so a «gracias»
-    /// typed right after does not hide it. «Confirmo» ends here: the model never sees the command, and the thanks goes only if the agent
-    /// still owns the conversation after the Hospital re-read. «Cambiar fecha» / «Cancelar cita» with nobody automatic to answer leave one
+    /// typed right after does not hide it. «Confirmar» ends here: the model never sees the command, and the thanks goes only if the agent
+    /// still owns the conversation after the Hospital re-read. «Cambiar fecha» / «Cancelar» with nobody automatic to answer leave one
     /// note per send, and only for a reminder that reached the patient.</summary>
     async Task<bool> ReminderReply(Tenant tenant, CancellationToken ct)
     {
@@ -427,7 +427,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         }
         return false;
     }
-    /// <summary>«Cambiar fecha» / «Cancelar cita» of a day-before reminder sent to this contact: the verb and that reminder.</summary>
+    /// <summary>«Cambiar fecha» / «Cancelar» of a day-before reminder sent to this contact: the verb and that reminder.</summary>
     async Task<(string Verb, AppointmentReminder Row)?> TappedReminder(string body, CancellationToken ct) =>
         AgentGuard.AppointmentChoice(body) is { Verb: "MOVER" or "CANCELAR", StartsAt: null } change
         && await db.AppointmentReminders.AsNoTracking().SingleOrDefaultAsync(r => r.Id == change.Appointment && r.Window == "day_before" && r.ContactId == conv.ContactId, ct) is { } row

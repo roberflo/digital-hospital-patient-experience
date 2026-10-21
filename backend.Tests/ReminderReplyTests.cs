@@ -10,8 +10,8 @@ using Recepcion;
 using Xunit;
 
 /// <summary>recordatorios-whatsapp.spec.md, criterios 3 y 6–10: the patient answers the day-before reminder with a tap. Each button
-/// carries the id of the reminder that was sent (owner's decision, I-1), so a tap answers exactly that send. «Confirmo» is recorded only
-/// against current Hospital facts; «Cambiar fecha» and «Cancelar cita» never act on their own.</summary>
+/// carries the id of the reminder that was sent (owner's decision, I-1), so a tap answers exactly that send. «Confirmar» is recorded only
+/// against current Hospital facts; «Cambiar fecha» and «Cancelar» never act on their own.</summary>
 public sealed class ReminderReplyTests : IAsyncLifetime
 {
     readonly AgentHarness h = new();
@@ -54,7 +54,7 @@ public sealed class ReminderReplyTests : IAsyncLifetime
         {
             if (request.Method == HttpMethod.Get)
                 return request.RequestUri!.AbsolutePath.Contains("phone_numbers") ? AgentHarness.Json(new { data = new { business_account_id = "synthetic-waba" } })
-                    : AgentHarness.Json(new { data = new[] { new { name = ReminderRules.DayTemplateV2, language = "es", status = "APPROVED", category = "UTILITY", parameter_format = "NAMED", components = new object[] { new { type = "BODY", text = "Cita en {{hospital}} el {{fecha}} a las {{hora}}. BAJA" }, new { type = "BUTTONS", buttons = new[] { new { type = "QUICK_REPLY", text = "Confirmo" }, new { type = "QUICK_REPLY", text = "Cambiar fecha" }, new { type = "QUICK_REPLY", text = "Cancelar cita" } } } } } } });
+                    : AgentHarness.Json(new { data = new[] { new { name = ReminderRules.DayTemplateV4, language = "es", status = "APPROVED", category = "UTILITY", parameter_format = "NAMED", components = new object[] { new { type = "BODY", text = "Cita en {{hospital}} el {{fecha}} a las {{hora}}. BAJA" }, new { type = "BUTTONS", buttons = new[] { new { type = "QUICK_REPLY", text = "Confirmar" }, new { type = "QUICK_REPLY", text = "Cambiar fecha" }, new { type = "QUICK_REPLY", text = "Cancelar" } } } } } } });
             using var sent = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
             payloads = sent.RootElement.GetProperty("template").GetProperty("components").EnumerateArray().Where(c => c.GetProperty("type").GetString() == "button").Select(c => c.GetProperty("parameters")[0].GetProperty("payload").GetString()!).ToArray();
             return AgentHarness.Json(new { messages = new[] { new { id = "reminder-" + Guid.NewGuid() } } });
@@ -210,7 +210,7 @@ public sealed class ReminderReplyTests : IAsyncLifetime
         var note = Assert.Single(notes, a => a.Kind is "appointment_confirmation_rejected" or "appointment_confirmation_unverified");
         Assert.Equal(scenario == "hospital_down" ? "appointment_confirmation_unverified" : "appointment_confirmation_rejected", note.Kind);
         if (scenario == "hospital_down") Assert.StartsWith("Confirmación recibida, sin verificar con Hospital.", note.Body);
-        if (scenario == "uncertain") Assert.Equal("El paciente tocó «Confirmo» en un recordatorio cuya entrega no se confirmó; no se registró. Confirma la cita con el paciente.", note.Body);
+        if (scenario == "uncertain") Assert.Equal("El paciente tocó «Confirmar» en un recordatorio cuya entrega no se confirmó; no se registró. Confirma la cita con el paciente.", note.Body);
         Assert.Empty(h.Sent);
         Assert.Empty(h.HospitalWrites);
     }
@@ -253,7 +253,7 @@ public sealed class ReminderReplyTests : IAsyncLifetime
 
     // Criterio 9. The reminder's buttons reuse the agent's two-step flow on the appointment the reminder is about; the deterministic step
     // before the agent must not swallow them. The body is what WhatsAppContent reads from the template tap (criterio 5).
-    static string Tapped(string payload) { var message = JsonSerializer.SerializeToElement(new { type = "button", button = new { payload, text = "Cancelar cita" } }); return WhatsAppContent.Inbound(message, default); }
+    static string Tapped(string payload) { var message = JsonSerializer.SerializeToElement(new { type = "button", button = new { payload, text = "Cancelar" } }); return WhatsAppContent.Inbound(message, default); }
     [Fact]
     public async Task ReminderButtonsReuseTheTwoStepFlow()
     {
@@ -308,9 +308,9 @@ public sealed class ReminderReplyTests : IAsyncLifetime
     // Criterios 6, 7 y 10 from the real webhook handler, with the template tap of the synthetic fixture (plan §4); and the inbox shows
     // what the patient tapped, never the command.
     [Theory]
-    [InlineData("ASISTO", "Confirmo", "booked", "appointment_confirmed", "Tocó: Confirmo")]
-    [InlineData("ASISTO", "Confirmo", "cancelled-by-patient", "appointment_confirmation_rejected", "Tocó: Confirmo")]
-    [InlineData("CANCELAR", "Cancelar cita", "booked", "reminder_change_request", "Tocó: Cancelar cita")]
+    [InlineData("ASISTO", "Confirmar", "booked", "appointment_confirmed", "Tocó: Confirmar")]
+    [InlineData("ASISTO", "Confirmar", "cancelled-by-patient", "appointment_confirmation_rejected", "Tocó: Confirmar")]
+    [InlineData("CANCELAR", "Cancelar", "booked", "reminder_change_request", "Tocó: Cancelar")]
     [InlineData("MOVER", "Cambiar fecha", "booked", "reminder_change_request", "Tocó: Cambiar fecha")]
     public async Task TapsArriveThroughTheWebhook(string verb, string text, string hospitalStatus, string kind, string shown)
     {

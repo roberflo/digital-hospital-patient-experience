@@ -353,13 +353,13 @@ public sealed partial class AgentIntegrationTests:IAsyncLifetime {
         await service.Sync(now);await service.Dispatch(row.Id,now);
         await db.Entry(message).ReloadAsync();Assert.Equal("uncertain",row.Status);Assert.Equal("uncertain",message.Status);Assert.Equal(0,never.Calls);
     }
-    [Theory][InlineData("sent")][InlineData("timeout")][InlineData("cancelled")][InlineData("consent")][InlineData("template")][InlineData("paused")][InlineData("phone")][InlineData("day_before")][InlineData("day_v1")][InlineData("day_v2_pending")]
+    [Theory][InlineData("sent")][InlineData("timeout")][InlineData("cancelled")][InlineData("consent")][InlineData("template")][InlineData("paused")][InlineData("phone")][InlineData("day_before")][InlineData("day_v1")][InlineData("day_v4_pending")]
     public async Task ReminderDispatchVerifiesCurrentFactsAndDoesNotReplay(string scenario)
     {
         var now=DateTimeOffset.UtcNow;var start=now.AddHours(1);var appointment=Guid.NewGuid();
         var tenant=await db.Tenants.SingleAsync(t=>t.Id==scope.Id);tenant.ReminderChannelId=conversation.ChannelId;tenant.RemindersEnabled=true;contact.Name="PRIVATE PATIENT SENTINEL";
         contact.PatientId=Guid.NewGuid();contact.ReminderConsentAt=scenario=="consent"?null:now;
-        var window=scenario.StartsWith("day")?"day_before":"hour_before";tenant.ReminderDayTemplate=scenario=="day_v1"?"recepcion_cita_dia_anterior_v1":"recepcion_cita_dia_anterior_v2";
+        var window=scenario.StartsWith("day")?"day_before":"hour_before";tenant.ReminderDayTemplate=scenario=="day_v1"?"recepcion_cita_dia_anterior_v1":"recepcion_cita_dia_anterior_v4";
         var reminder=new AppointmentReminder{TenantId=scope.Id,ContactId=contact.Id,PatientId=contact.PatientId.Value,ChannelId=conversation.ChannelId,AppointmentId=appointment,StartsAt=start,DueAt=now,Window=window};db.Add(reminder);await db.SaveChangesAsync();
         var cfg=new ConfigurationBuilder().AddConfiguration(GoogleConfig()).AddConfiguration(config).AddInMemoryCollection(new Dictionary<string,string?>{{"REMINDERS_SEND_ENABLED",scenario=="paused"?"false":"true"}}).Build();
         var h=new HospitalClient(new HttpClient(new Fake(req=>Task.FromResult(req.RequestUri!.AbsolutePath.StartsWith("/v1/patients/")?Json(new{patientId=contact.PatientId,phone=scenario=="phone"?"50370000999":contact.Phone}):Json(new{rows=new[]{new{appointmentId=appointment,scheduledStart=start,status=scenario=="cancelled"?"cancelled-by-patient":"booked"}}})))),cfg);
@@ -368,8 +368,8 @@ public sealed partial class AgentIntegrationTests:IAsyncLifetime {
                 if(req.RequestUri!.AbsolutePath.Contains("phone_numbers"))return Json(new{data=new{business_account_id="synthetic-waba"}});
                 var name=Uri.UnescapeDataString(req.RequestUri.Query.Split('&')[0]["?name=".Length..]);
                 var components=new List<object>{new{type="BODY",text="Cita en {{hospital}} el {{fecha}} a las {{hora}}. BAJA"}};
-                if(name.EndsWith("_v2"))components.Add(new{type="BUTTONS",buttons=new[]{new{type="QUICK_REPLY",text="Confirmo"},new{type="QUICK_REPLY",text="Cambiar fecha"},new{type="QUICK_REPLY",text="Cancelar cita"}}});
-                return Json(new{data=new[]{new{name,language="es",status=scenario is "template" or "day_v2_pending"?"PENDING":"APPROVED",category="UTILITY",parameter_format="NAMED",components}}});
+                if(name.EndsWith("_v4")){components.Add(new{type="FOOTER",text="Para dejar de recibir recordatorios escribe BAJA."});components.Add(new{type="BUTTONS",buttons=new[]{new{type="QUICK_REPLY",text="Confirmar"},new{type="QUICK_REPLY",text="Cambiar fecha"},new{type="QUICK_REPLY",text="Cancelar"}}});}
+                return Json(new{data=new[]{new{name,language="es",status=scenario is "template" or "day_v4_pending"?"PENDING":"APPROVED",category="UTILITY",parameter_format="NAMED",components}}});
             }
             sends++;using var payload=JsonDocument.Parse(await req.Content!.ReadAsStringAsync());sent=payload.RootElement.Clone();Assert.Equal("template",payload.RootElement.GetProperty("type").GetString());Assert.Equal(contact.Phone,payload.RootElement.GetProperty("to").GetString());Assert.DoesNotContain(contact.Name,payload.RootElement.GetRawText());
             if(scenario=="timeout")throw new HttpRequestException("Synthetic timeout");return Json(new{messages=new[]{new{id="reminder-"+Guid.NewGuid()}}});
@@ -381,7 +381,7 @@ public sealed partial class AgentIntegrationTests:IAsyncLifetime {
         Assert.Equal(scenario switch{"sent" or "day_before"=>"sent","timeout"=>"uncertain","cancelled" or "consent"=>"cancelled",_=>"pending"},reminder.Status);
         if(sends==1)Assert.Single(await db.Activities.Where(a=>a.Kind=="appointment_reminder").ToListAsync());
         // Criterio 13: while v2 is not approved nothing leaves for the day before, neither v1 in its place nor free text.
-        if(scenario is "day_v1" or "day_v2_pending")Assert.Equal("Plantilla pendiente de aprobación o incompatible.",reminder.Reason);
+        if(scenario is "day_v1" or "day_v4_pending")Assert.Equal("Plantilla pendiente de aprobación o incompatible.",reminder.Reason);
         if(sends==0)return;
         // Criterios 3–4: the day before carries the three quick replies, verb and reminder id only; the hour before carries none.
         var parts=sent.GetProperty("template").GetProperty("components").EnumerateArray().ToArray();
@@ -405,15 +405,15 @@ public sealed partial class AgentIntegrationTests:IAsyncLifetime {
         var tenant=await db.Tenants.SingleAsync(t=>t.Id==scope.Id);tenant.ReminderDayTemplate="recepcion_cita_dia_anterior_v1";await db.SaveChangesAsync();
         var admin=new CurrentUser{Role="admin",Subject="admin-sintetico",Name="Admin"};var locks=Service(new Fake(_=>throw new Exception("Must not send")));
         foreach(var role in new[]{"agent","doctor"})
-            await Assert.ThrowsAsync<AccessDeniedException>(()=>ReminderEndpoints.Configure(new(false,conversation.ChannelId,ReminderRules.DayTemplateV2),db,new CurrentUser{Role=role,Subject=role,Name=role},scope,locks));
+            await Assert.ThrowsAsync<AccessDeniedException>(()=>ReminderEndpoints.Configure(new(false,conversation.ChannelId,ReminderRules.DayTemplateV4),db,new CurrentUser{Role=role,Subject=role,Name=role},scope,locks));
         foreach(var bad in new[]{"Recepcion V2","plantilla;DROP","",new string('a',513)})
             await Assert.ThrowsAsync<ArgumentException>(()=>ReminderEndpoints.Configure(new(false,conversation.ChannelId,bad),db,admin,scope,locks));
         await db.Entry(tenant).ReloadAsync();Assert.Equal("recepcion_cita_dia_anterior_v1",tenant.ReminderDayTemplate);
-        await ReminderEndpoints.Configure(new(false,conversation.ChannelId,ReminderRules.DayTemplateV2),db,admin,scope,locks);
-        await db.Entry(tenant).ReloadAsync();Assert.Equal(ReminderRules.DayTemplateV2,tenant.ReminderDayTemplate);Assert.Equal(conversation.ChannelId,tenant.ReminderChannelId);
+        await ReminderEndpoints.Configure(new(false,conversation.ChannelId,ReminderRules.DayTemplateV4),db,admin,scope,locks);
+        await db.Entry(tenant).ReloadAsync();Assert.Equal(ReminderRules.DayTemplateV4,tenant.ReminderDayTemplate);Assert.Equal(conversation.ChannelId,tenant.ReminderChannelId);
         Assert.Single(await db.Audits.Where(a=>a.Action=="appointment_reminders.configured"&&a.Actor=="admin-sintetico").ToListAsync());
         await ReminderEndpoints.Configure(new(false,conversation.ChannelId),db,admin,scope,locks); // pause or channel only: the template stays
-        await db.Entry(tenant).ReloadAsync();Assert.Equal(ReminderRules.DayTemplateV2,tenant.ReminderDayTemplate);
+        await db.Entry(tenant).ReloadAsync();Assert.Equal(ReminderRules.DayTemplateV4,tenant.ReminderDayTemplate);
     }
     // Criterio 14: tomorrow's day-before reminders of this tenant, for the administrator and reception, not for doctors.
     [Fact] public async Task TomorrowListIsForAdminAndReceptionOfThisTenantOnly()

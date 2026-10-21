@@ -43,7 +43,7 @@ type Settings = {
   error?: string;
   rows: Reminder[];
 };
-const dayTemplateV2 = 'recepcion_cita_dia_anterior_v2';
+const dayTemplateV4 = 'recepcion_cita_dia_anterior_v4';
 const statuses: Record<string, string> = {
   pending: 'Programado',
   sending: 'Enviando',
@@ -190,13 +190,13 @@ export function AppointmentReminders({ me }: { me: Me }) {
               >
                 Comprobar plantillas
               </Button>
-              {data.dayTemplate !== dayTemplateV2 && (
+              {data.dayTemplate !== dayTemplateV4 && (
                 <Button
                   variant="outline"
                   disabled={busy || !data.channelId}
                   onClick={() => {
                     setTemplates(undefined);
-                    void save(data.enabled, data.channelId, dayTemplateV2);
+                    void save(data.enabled, data.channelId, dayTemplateV4);
                   }}
                 >
                   Usar plantilla con botones
@@ -204,10 +204,10 @@ export function AppointmentReminders({ me }: { me: Me }) {
               )}
             </div>
             <div className="flex flex-col gap-2">
-              {data.dayTemplate !== dayTemplateV2 && (
+              {data.dayTemplate !== dayTemplateV4 && (
                 <p className={hint}>
-                  El aviso del día anterior necesita la plantilla con botones (Confirmo, Cambiar
-                  fecha, Cancelar cita). Mientras no esté aprobada, ese aviso no se envía.
+                  El aviso del día anterior necesita la plantilla con botones (Confirmar, Cambiar
+                  fecha, Cancelar). Mientras no esté aprobada, ese aviso no se envía.
                 </p>
               )}
               {!data.sendEnabled && (

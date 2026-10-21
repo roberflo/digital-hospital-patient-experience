@@ -20,7 +20,7 @@ public static partial class WhatsAppContent
     }
     /// <summary>How the inbox shows a patient's message: a reminder button reads as what the patient tapped, never as its command and id.</summary>
     public static string Shown(string body) => ReminderTap().Match(body.Trim()) is { Success: true } m
-        ? "Tocó: " + m.Groups[1].Value switch { "ASISTO" => "Confirmo", "MOVER" => "Cambiar fecha", _ => "Cancelar cita" } : body;
+        ? "Tocó: " + m.Groups[1].Value switch { "ASISTO" => "Confirmar", "MOVER" => "Cambiar fecha", _ => "Cancelar" } : body;
     [GeneratedRegex(@"^(ASISTO|MOVER|CANCELAR) [0-9a-fA-F-]{36}$")] private static partial Regex ReminderTap();
     static string? Text(JsonElement value, string name) => value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out var found) && found.ValueKind == JsonValueKind.String ? found.GetString() : null;
     [GeneratedRegex(@"^(?:CONFIRMAR [0-9A-F]{6}|CORREGIR [0-9A-F]{6}|EMERGENCIA|ACTIVAR RECORDATORIOS|BAJA|AGENDAR|RECETA|PERSONA|MENU|MISCITAS|(?:VERCITA|CANCELAR|ASISTO) [0-9a-fA-F-]{36}|MOVER [0-9a-fA-F-]{36}(?: \S{10,40} [0-9a-fA-F-]{36} \d{1,3}(?: .{1,60})?)?|CITA \S{10,40} [0-9a-fA-F-]{36} \d{1,3}(?: .{1,60})?|VER \d{4}-\d{2}-\d{2} (?:[0-9a-fA-F-]{36}|[*+?]) [MT?])$")] private static partial Regex Command();

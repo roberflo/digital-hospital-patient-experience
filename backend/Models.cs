@@ -24,7 +24,7 @@ public sealed class Tenant
     public string? Attention { get; set; }
     public bool RemindersEnabled { get; set; }
     public Guid? ReminderChannelId { get; set; }
-    public string ReminderDayTemplate { get; set; } = ReminderRules.DayTemplateV2;
+    public string ReminderDayTemplate { get; set; } = ReminderRules.DayTemplateV4;
     public string ReminderHourTemplate { get; set; } = "recepcion_cita_una_hora_v1";
     public string ReminderLanguage { get; set; } = "es";
     public DateTimeOffset? ReminderLastSyncAt { get; set; }

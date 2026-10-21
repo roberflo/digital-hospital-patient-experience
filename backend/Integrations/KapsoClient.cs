@@ -50,24 +50,26 @@ public sealed class KapsoClient(HttpClient http, IConfiguration config)
         var payload = await res.Content.ReadFromJsonAsync<JsonElement>(ct);
         return payload.GetProperty("data").EnumerateArray().FirstOrDefault(t => t.GetProperty("name").GetString() == name && t.GetProperty("language").GetString() == language);
     }
-    static readonly string[] DayButtons=["Confirmo","Cambiar fecha","Cancelar cita"];
-    /// <summary>The shape a reminder template must have for its window: the hour before is one BODY; the day before is a BODY
-    /// plus exactly the three quick replies, in that order. Anything else (a header, a URL or phone button, another parameter) is refused.</summary>
+    static readonly string[] DayButtons=["Confirmar","Cambiar fecha","Cancelar"];
+    /// <summary>The shape a reminder template must have for its window: the hour before is one BODY; the day before is a BODY,
+    /// an optional FOOTER and exactly the three quick replies, in that order. The BAJA instruction is in the BODY or the FOOTER.
+    /// Anything else (a header, a URL or phone button, another parameter) is refused.</summary>
     public static bool ValidReminderTemplate(JsonElement template, string window)
     {
         if (template.ValueKind != JsonValueKind.Object || !template.TryGetProperty("status",out var status) || status.GetString() != "APPROVED"
             || !template.TryGetProperty("category",out var category) || category.GetString() != "UTILITY"
             || !template.TryGetProperty("parameter_format",out var format) || format.GetString() != "NAMED"
             || !template.TryGetProperty("components",out var components) || components.ValueKind != JsonValueKind.Array) return false;
-        var count=window switch{"hour_before"=>1,"day_before"=>2,_=>0};
-        if(count==0||components.GetArrayLength()!=count)return false;
-        var body=components[0];if(body.GetProperty("type").GetString()!="BODY")return false;
-        var text=body.GetProperty("text").GetString()??"";
+        var types=components.EnumerateArray().Select(c=>c.GetProperty("type").GetString()).ToArray();
+        var shapeOk=window switch{"hour_before"=>types.SequenceEqual(["BODY"]),"day_before"=>types.SequenceEqual(["BODY","BUTTONS"])||types.SequenceEqual(["BODY","FOOTER","BUTTONS"]),_=>false};
+        if(!shapeOk)return false;
+        var text=components[0].GetProperty("text").GetString()??"";
         var parameters=System.Text.RegularExpressions.Regex.Matches(text,@"\{\{([a-z_]+)\}\}").Select(m=>m.Groups[1].Value).Order().ToArray();
-        if(!parameters.SequenceEqual(new[]{"fecha","hora","hospital"})||!text.Contains("BAJA",StringComparison.Ordinal))return false;
-        if(count==1)return true;
-        var buttons=components[1];
-        return buttons.GetProperty("type").GetString()=="BUTTONS"&&buttons.TryGetProperty("buttons",out var list)&&list.ValueKind==JsonValueKind.Array
+        var footer=types.Length==3?components[1].GetProperty("text").GetString()??"":"";
+        if(!parameters.SequenceEqual(new[]{"fecha","hora","hospital"})||!(text+"\n"+footer).Contains("BAJA",StringComparison.Ordinal))return false;
+        if(window=="hour_before")return true;
+        var buttons=components[types.Length-1];
+        return buttons.TryGetProperty("buttons",out var list)&&list.ValueKind==JsonValueKind.Array
             &&list.EnumerateArray().Select(b=>b.GetProperty("type").GetString()=="QUICK_REPLY"?b.GetProperty("text").GetString():null).SequenceEqual(DayButtons);
     }
     public async Task<bool> ReminderTemplateApproved(string number,string name,string language,string window,CancellationToken ct=default) => ValidReminderTemplate(await ReminderTemplate(number,name,language,ct),window);

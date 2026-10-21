@@ -24,8 +24,8 @@ public static class ReminderRules
         return new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(local,tz));
     }
     public static bool Booked(string? status) => status == "booked";
-    public const string DayTemplateV2 = "recepcion_cita_dia_anterior_v2";
-    /// <summary>The command a «Confirmo» tap carries: <c>ASISTO {reminderId}</c>, exactly.</summary>
+    public const string DayTemplateV4 = "recepcion_cita_dia_anterior_v4";
+    /// <summary>The command a «Confirmar» tap carries: <c>ASISTO {reminderId}</c>, exactly.</summary>
     public static Guid? Acknowledgement(string body) =>
         System.Text.RegularExpressions.Regex.Match(body.Trim(),"^ASISTO ([0-9a-fA-F-]{36})$") is {Success:true} m&&Guid.TryParse(m.Groups[1].Value,out var id)?id:null;
     /// <summary>Hospital still has this appointment booked at the reminder's start.</summary>
@@ -36,7 +36,7 @@ public static class ReminderRules
         var local=TimeZoneInfo.ConvertTime(start,TimeZoneInfo.FindSystemTimeZoneById(zone));
         return (local.ToString("dd/MM/yyyy",CultureInfo.InvariantCulture),local.ToString("HH:mm",CultureInfo.InvariantCulture));
     }
-    /// <summary>Payloads of the day-before buttons (Confirmo, Cambiar fecha, Cancelar cita): verb and the id of the reminder sent, nothing else.
+    /// <summary>Payloads of the day-before buttons (Confirmar, Cambiar fecha, Cancelar): verb and the id of the reminder sent, nothing else.
     /// The reminder, not the appointment, so a tap answers exactly that send: after a move, the old reminder no longer confirms the new start (owner, I-1).</summary>
     public static string[] Payloads(Guid reminder) => [$"ASISTO {reminder}", $"MOVER {reminder}", $"CANCELAR {reminder}"];
     public static string? ConsentCommand(string text) => text.Trim().ToUpperInvariant() switch
@@ -115,7 +115,7 @@ public sealed class AppointmentReminderService(CrmDb db,TenantScope scope,Hospit
         await db.SaveChangesAsync(ct);
     }
 
-    /// <summary>The patient tapped «Confirmo» on one reminder (criterios 6–7, INV-6, I-1). Accepted only for that very send: a day-before reminder
+    /// <summary>The patient tapped «Confirmar» on one reminder (criterios 6–7, INV-6, I-1). Accepted only for that very send: a day-before reminder
     /// of this tenant, sent to this contact, still linked to the same patient, still ahead, and re-read now in Hospital as booked at that same
     /// start. Hospital is read outside the reminders lock; a refusal or an unreachable Hospital leaves a note for the desk and nothing for the patient.</summary>
     public async Task<(ReminderAck Result,string? Date,string? Time)> Acknowledge(Guid contactId,Guid reminderId,Guid conversationId,DateTimeOffset now,CancellationToken ct=default)
@@ -126,13 +126,13 @@ public sealed class AppointmentReminderService(CrmDb db,TenantScope scope,Hospit
             db.Activities.Add(new(){TenantId=scope.Id,ContactId=contact?.Id,ConversationId=conversationId,Actor="Recordatorios",ActorRole="system",Kind=kind,Body=body});
             await db.SaveChangesAsync(ct);return (result,null,null);
         }
-        Task<(ReminderAck,string?,string?)> Reject(string body="El paciente tocó «Confirmo», pero no se registró: la cita ya no está programada a esa hora en Hospital, ya pasó o no corresponde a este contacto.")=>
+        Task<(ReminderAck,string?,string?)> Reject(string body="El paciente tocó «Confirmar», pero no se registró: la cita ya no está programada a esa hora en Hospital, ya pasó o no corresponde a este contacto.")=>
             Note(ReminderAck.Rejected,"appointment_confirmation_rejected",body);
         var tenant=await db.Tenants.AsNoTracking().SingleAsync(t=>t.Id==scope.Id,ct);
         var row=await db.AppointmentReminders.AsNoTracking().SingleOrDefaultAsync(r=>r.Id==reminderId&&r.Window=="day_before",ct);
         if(row is null||contact is null||row.ContactId!=contact.Id||contact.PatientId!=row.PatientId)return await Reject();
         if(row.Status=="confirmed")return (ReminderAck.AlreadyConfirmed,null,null);
-        if(row.Status=="uncertain")return await Reject("El paciente tocó «Confirmo» en un recordatorio cuya entrega no se confirmó; no se registró. Confirma la cita con el paciente.");
+        if(row.Status=="uncertain")return await Reject("El paciente tocó «Confirmar» en un recordatorio cuya entrega no se confirmó; no se registró. Confirma la cita con el paciente.");
         if(row.Status!="sent"||row.StartsAt<=now)return await Reject();
         bool booked;
         try
