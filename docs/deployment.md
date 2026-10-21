@@ -10,7 +10,7 @@ Conectar el repositorio `roberflo/digital-hospital-patient-experience`, rama `ma
 | api | contexto `backend`, Dockerfile `backend/Dockerfile` | 8080 | volumen permanente `/keys`, escribible por UID 1654 |
 | web | contexto `frontend`, Dockerfile `frontend/Dockerfile` | 3000 | ninguna |
 
-La ruta de Dockerfile se interpreta respecto al contexto elegido en Easypanel: si el contexto ya es `backend` o `frontend`, usar `Dockerfile`. PostgreSQL y la API no necesitan exponerse directamente al navegador: éste usa el BFF de Next.js. La API sí necesita un dominio HTTPS para el webhook Kapso y callback Google. Restringir el ingreso público de la API a `/webhooks/kapso`, `/oauth/google/callback` y, si se requiere, health; el tráfico `/api/*` va por red privada desde web.
+La ruta de Dockerfile se interpreta respecto al contexto elegido en Easypanel: si el contexto ya es `backend` o `frontend`, usar `Dockerfile`. PostgreSQL y la API no necesitan exponerse directamente al navegador: éste usa el BFF de Next.js. La API sí necesita un dominio HTTPS para el webhook Kapso y callback Google. Restringir el ingreso público de la API a `/webhooks/kapso`, `/webhooks/kapso/general` (número general de la plataforma, si se usa), `/oauth/google/callback` y, si se requiere, health; el tráfico `/api/*` va por red privada desde web. `/platform/reminder-clinics/*` no pasa por el BFF: el operador la llama con su token de `platform-owner` ([appointment-agent.md](appointment-agent.md)), así que se expone sólo si el operador no tiene acceso a la red privada, y nunca otra ruta fuera de `/api`.
 
 Usar una réplica inicial de API. El worker tiene reclamación atómica de jobs y bloqueos PostgreSQL, pero no se ha hecho prueba de carga distribuida. No compartir la base CRM con las tablas de Hospital.
 
@@ -89,7 +89,8 @@ El agente de WhatsApp envía al proveedor la guía de atención, hasta 24 mensaj
 
 ## Operación y respaldo
 
-- Comprobar `/health/live`, `/health/ready` y el inicio de sesión después de cada despliegue.
+- Comprobar `/health/live`, `/health/ready` y el inicio de sesión después de cada despliegue. `/health/ready` responde 503 si falta aplicar alguna migración (p. ej., se olvidó `INITIALIZE_DATABASE=true`), así que un despliegue a medias no aparece sano.
+- Monitor externo de disponibilidad (cualquiera que avise por correo o mensaje) sobre `https://<api>/health/ready` y la página de inicio de web, cada minuto. Sin él, nadie se entera de una caída fuera de horario.
 - Revisar `/api/jobs` y `/api/audit` como Administrador; `failed` o `uncertain` requieren seguimiento humano. Una entrega incierta conserva el intento y no se reenvía automáticamente: consultar WhatsApp/agenda antes de repetir.
 - Usar `scripts/backup.sh` con Compose o el equivalente en Easypanel. Exige `BACKUP_DB_DIR` y `BACKUP_KEYRING_DIR` distintos (ninguno dentro del otro) y `KEYRING_BACKUP_PASSPHRASE`. El dump de PostgreSQL va a `BACKUP_DB_DIR`; `/keys` va a `BACKUP_KEYRING_DIR` como `keyring-<fecha>.tar.gz.enc`, cifrado con `openssl enc -aes-256-cbc -pbkdf2 -iter 600000`, y el script lo descifra y lista antes de darlo por bueno. Llevar cada destino a un almacén fuera del host distinto; la frase de paso se guarda aparte de ambos, nunca junto al dump.
 - Restauración: detener API, restaurar el dump con `pg_restore` en una base vacía, descifrar y restaurar `/keys` (abajo) con dueño UID 1654, montar el **mismo** certificado del llavero, conservar el mismo `PHONE_HASH_KEY`, y reiniciar la API de una versión compatible. Nunca restaurar sobre datos activos sin respaldo y ventana de mantenimiento.

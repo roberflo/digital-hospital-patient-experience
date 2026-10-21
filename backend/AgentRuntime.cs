@@ -1213,7 +1213,7 @@ public sealed class AgentWorker(IServiceScopeFactory scopes, ILogger<AgentWorker
             wasAgent = await d.Conversations.AsNoTracking().AnyAsync(x => x.Id == job.ConversationId && x.Status == "agent" && x.AssignedTo == null, CancellationToken.None);
             var c = await d.Conversations.SingleAsync(x => x.Id == job.ConversationId, CancellationToken.None); c.Status = "human"; c.Revision++;
             d.Activities.Add(new Activity { TenantId = tid, ConversationId = c.Id, ContactId = c.ContactId, Kind = "error", Actor = "Sistema", ActorRole = "system", Body = "El agente no pudo completar la atención. Revisa historial e integraciones." });
-            log.LogWarning("Agent job failed {JobId} {ErrorType}", job.Id, ex.GetType().Name);
+            log.LogWarning("Agent job failed {JobId} {ErrorType} {StackTrace}", job.Id, ex.GetType().Name, ex.StackTrace);
         }
         await d.SaveChangesAsync(CancellationToken.None);
         if (job.Status == "failed" && wasAgent) await TellFailed(d, service, job, log);
@@ -1234,6 +1234,9 @@ public sealed class AgentWorker(IServiceScopeFactory scopes, ILogger<AgentWorker
     }
     public static async Task RetireAbandoned(CrmDb d, TenantScope scope, ConversationService service, CancellationToken ct)
     {
+        // A send whose process died between "sending" and Kapso's answer: it may or may not have gone out, so it is uncertain, never retried.
+        var sendingCutoff = DateTimeOffset.UtcNow.AddMinutes(-AbandonedAfterMinutes);
+        await d.Messages.Where(x => x.Status == "sending" && x.ReceivedAt < sendingCutoff).ExecuteUpdateAsync(s => s.SetProperty(m => m.Status, "uncertain"), ct);
         var due = await d.Jobs.Where(x => x.Status == "running" && x.StartedAt < DateTimeOffset.UtcNow.AddMinutes(-AbandonedAfterMinutes)).Select(x => new { x.Id, x.ConversationId }).ToListAsync(ct);
         foreach (var row in due)
         {

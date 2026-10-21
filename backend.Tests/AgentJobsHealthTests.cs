@@ -61,6 +61,15 @@ public sealed partial class AgentIntegrationTests {
         Assert.Single(await Trail(fresh));Assert.Equal(1L,(await fresh.Conversations.SingleAsync(x=>x.Id==conversation.Id)).Revision);
         Assert.Equal("uncertain",(await fresh.Jobs.SingleAsync(x=>x.Id==job.Id)).Status);
     }
+    [Fact]public async Task SendInterruptedMidwayBecomesUncertainNeverRetried(){
+        // El proceso murió entre guardar «sending» y la respuesta de Kapso: puede haber salido, así que queda incierto.
+        var stuck=new Message{TenantId=scope.Id,ConversationId=conversation.Id,Sender="agent",Body="Sintético",RequestKey="stuck-"+Guid.NewGuid(),Status="sending",ReceivedAt=DateTimeOffset.UtcNow.AddMinutes(-6)};
+        var live=new Message{TenantId=scope.Id,ConversationId=conversation.Id,Sender="human",Body="Sintético",RequestKey="live-"+Guid.NewGuid(),Status="sending"};
+        db.AddRange(stuck,live);await db.SaveChangesAsync();
+        await AgentWorker.RetireAbandoned(db,scope,Service(Never()),CancellationToken.None);
+        await using var fresh=Other();
+        Assert.Equal("uncertain",(await fresh.Messages.SingleAsync(x=>x.Id==stuck.Id)).Status);Assert.Equal("sending",(await fresh.Messages.SingleAsync(x=>x.Id==live.Id)).Status);
+    }
     [Fact]public async Task ClaimIsWonByOneWorker(){
         await using var other=Other();
         var won=await Task.WhenAll(AgentWorker.Claim(db,job.Id,CancellationToken.None),AgentWorker.Claim(other,job.Id,CancellationToken.None));

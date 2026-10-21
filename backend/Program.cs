@@ -38,7 +38,8 @@ app.Use(async (ctx, next) =>
     await next();
 });
 app.MapGet("/health/live", () => Results.Ok(new { status = "ok" }));
-app.MapGet("/health/ready", async (CrmDb db) => await db.Database.CanConnectAsync() ? Results.Ok(new { status = "ready" }) : Results.StatusCode(503));
+// A deploy that forgot INITIALIZE_DATABASE is not ready: every turn would fail on a missing table (docs/deployment.md).
+app.MapGet("/health/ready", async (CrmDb db) => await db.Database.CanConnectAsync() && !(await db.Database.GetPendingMigrationsAsync()).Any() ? Results.Ok(new { status = "ready" }) : Results.StatusCode(503));
 app.UseRateLimiter();
 app.MapRecepcionApi();
 using (var scope = app.Services.CreateScope())

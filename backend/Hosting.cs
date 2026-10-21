@@ -97,7 +97,7 @@ public static class Hosting
         catch (DbUpdateException) { await Results.Problem(statusCode: 409, title: "El registro ya existe o tiene referencias incompatibles").ExecuteAsync(ctx); }
         catch (HospitalIntegrationException ex) { Log(ctx).LogWarning("Hospital integration failed {Code} {Trace}", ex.Code, ctx.TraceIdentifier); await Results.Problem(statusCode: (int)ex.StatusCode is 400 or 403 or 404 or 409 or 503 or 504 ? (int)ex.StatusCode : 502, title: ex.DisplayMessage, extensions: new Dictionary<string,object?>{{"code",ex.Code}}).ExecuteAsync(ctx); }
         catch (HttpRequestException) { await Results.Problem(statusCode: 502, title: "No se pudo completar la conexión externa. Revisa el historial antes de reintentar.").ExecuteAsync(ctx); }
-        catch (Exception ex) { Log(ctx).LogError("Request failed {Type} {Trace}", ex.GetType().Name, ctx.TraceIdentifier); await Results.Problem(statusCode: 500, title: "No se pudo completar la operación", extensions: new Dictionary<string, object?> { { "traceId", ctx.TraceIdentifier } }).ExecuteAsync(ctx); }
+        catch (Exception ex) { Log(ctx).LogError("Request failed {Type} {Trace} {StackTrace}", ex.GetType().Name, ctx.TraceIdentifier, ex.StackTrace); await Results.Problem(statusCode: 500, title: "No se pudo completar la operación", extensions: new Dictionary<string, object?> { { "traceId", ctx.TraceIdentifier } }).ExecuteAsync(ctx); }
     }
     /// <summary>The `jwks` limiter's partition: caller address AND hospital, so neither a flood from outside nor one hospital's
     /// traffic spends Keycloak's quota for another hospital.</summary>
