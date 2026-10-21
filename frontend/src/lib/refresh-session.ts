@@ -97,7 +97,9 @@ export async function refreshSession(refreshToken: string): Promise<Tokens> {
   pending.set(key, item);
   try {
     const tokens = await result;
-    item.expires = Date.now() + 5000;
+    // As long as a request that started with the old cookie can still be in flight (the proxy waits up
+    // to 120 s for the API): Keycloak revokes the session if the spent refresh token is presented again.
+    item.expires = Date.now() + 125000;
     return tokens;
   } catch (error) {
     pending.delete(key);

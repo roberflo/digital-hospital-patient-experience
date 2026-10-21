@@ -29,8 +29,10 @@ const ALLOWED = new Set([
   'inbox-views',
   'macros',
 ]);
+// Without NEXTAUTH_URL there is no origin to trust: every write is refused, never a 500.
 export const sameOrigin = (req: NextRequest) =>
-  req.headers.get('origin') === new URL(process.env.NEXTAUTH_URL!).origin;
+  !!process.env.NEXTAUTH_URL &&
+  req.headers.get('origin') === new URL(process.env.NEXTAUTH_URL).origin;
 type Context = { params: Promise<{ path: string[] }> };
 // Rutas de plataforma sin recepción elegida: la lista de recepciones (y abrir una, REC-3) y los
 // hospitales que aún no la tienen. Nunca llevan X-Acting-Tenant.
@@ -104,7 +106,29 @@ export async function forward(req: NextRequest, { params }: Context, acting = tr
     if (v) headers.set(name, v);
   }
   const body = ['GET', 'HEAD'].includes(req.method) ? undefined : await req.arrayBuffer();
-  if (body && body.byteLength > 20 * 1024 * 1024) return new NextResponse(null, { status: 413 });
+  // Once Keycloak rotated the refresh token, the browser must get it on every answer, errors included:
+  // the old one is spent (refreshTokenMaxReuse=0) and presenting it again ends the session.
+  const withSession = async (response: NextResponse) => {
+    if (!refreshed) return response;
+    const secure = process.env.NEXTAUTH_URL?.startsWith('https:');
+    const name = secure ? '__Secure-next-auth.session-token' : 'next-auth.session-token';
+    const options = { httpOnly: true, secure, path: '/', sameSite: 'lax' as const, maxAge: 3600 };
+    // Keycloak tokens can exceed the browser's 4 KiB cookie limit. Match NextAuth chunking
+    // and expire obsolete chunks when the refreshed token becomes smaller.
+    for (const cookie of req.cookies.getAll()) {
+      if (cookie.name === name || cookie.name.startsWith(name + '.')) {
+        response.cookies.set(cookie.name, '', { ...options, maxAge: 0 });
+      }
+    }
+    const encoded = await encode({ token, secret: process.env.AUTH_SECRET!, maxAge: 3600 });
+    const chunks = encoded.match(/.{1,3800}/g) ?? [];
+    chunks.forEach((chunk, i) =>
+      response.cookies.set(chunks.length === 1 ? name : `${name}.${i}`, chunk, options),
+    );
+    return response;
+  };
+  if (body && body.byteLength > 20 * 1024 * 1024)
+    return withSession(new NextResponse(null, { status: 413 }));
   try {
     const upstream = await fetch(
       `${process.env.API_URL}/api/${path.map(encodeURIComponent).join('/')}${req.nextUrl.search}`,
@@ -126,31 +150,16 @@ export async function forward(req: NextRequest, { params }: Context, acting = tr
     });
     const disposition = upstream.headers.get('content-disposition');
     if (disposition) response.headers.set('Content-Disposition', disposition);
-    if (refreshed) {
-      const secure = process.env.NEXTAUTH_URL?.startsWith('https:');
-      const name = secure ? '__Secure-next-auth.session-token' : 'next-auth.session-token';
-      const options = { httpOnly: true, secure, path: '/', sameSite: 'lax' as const, maxAge: 3600 };
-      // Keycloak tokens can exceed the browser's 4 KiB cookie limit. Match NextAuth chunking
-      // and expire obsolete chunks when the refreshed token becomes smaller.
-      for (const cookie of req.cookies.getAll()) {
-        if (cookie.name === name || cookie.name.startsWith(name + '.')) {
-          response.cookies.set(cookie.name, '', { ...options, maxAge: 0 });
-        }
-      }
-      const encoded = await encode({ token, secret: process.env.AUTH_SECRET!, maxAge: 3600 });
-      const chunks = encoded.match(/.{1,3800}/g) ?? [];
-      chunks.forEach((chunk, i) =>
-        response.cookies.set(chunks.length === 1 ? name : `${name}.${i}`, chunk, options),
-      );
-    }
-    return response;
+    return withSession(response);
   } catch {
-    return NextResponse.json(
-      {
-        title:
-          'No se pudo conectar con recepción. Si enviaste una operación, comprueba el historial antes de repetir.',
-      },
-      { status: 502 },
+    return withSession(
+      NextResponse.json(
+        {
+          title:
+            'No se pudo conectar con recepción. Si enviaste una operación, comprueba el historial antes de repetir.',
+        },
+        { status: 502 },
+      ),
     );
   }
 }

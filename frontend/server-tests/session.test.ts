@@ -62,6 +62,16 @@ test('refresh coalesces rotating tokens; transient outages are retryable and exp
     assert.equal(calls, 1);
     assert.deepEqual(await refreshSession('concurrent-token'), first);
     assert.equal(calls, 1);
+    // A request that left with the old cookie before a slow (up to 120 s) API call answered: the spent
+    // refresh token is never presented again, or Keycloak (refreshTokenMaxReuse=0) ends the session.
+    const realNow = Date.now;
+    Date.now = () => realNow() + 110000;
+    try {
+      assert.deepEqual(await refreshSession('concurrent-token'), first);
+      assert.equal(calls, 1);
+    } finally {
+      Date.now = realNow;
+    }
     assert.equal(first.refreshToken, 'rotated-refresh');
     globalThis.fetch = async () => {
       calls++;

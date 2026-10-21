@@ -4,8 +4,12 @@ import { subscribe } from '@/lib/events';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export async function GET(req: NextRequest) {
+  // A refresh that already rotated the token must reach the browser even when the read fails.
+  let headers: Headers | undefined;
   try {
-    const { number, headers } = await authorizeInbox(req);
+    const auth = await authorizeInbox(req);
+    const number = auth.number;
+    headers = auth.headers;
     const encoder = new TextEncoder();
     let stop = () => {};
     const stream = new ReadableStream<Uint8Array>({
@@ -46,6 +50,6 @@ export async function GET(req: NextRequest) {
     headers.set('X-Accel-Buffering', 'no');
     return new Response(stream, { headers });
   } catch (error) {
-    return errorResponse(error);
+    return errorResponse(error, headers);
   }
 }
