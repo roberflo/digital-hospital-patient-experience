@@ -20,6 +20,7 @@ import {
 } from './ui/item';
 import { NativeSelect, NativeSelectOption } from './ui/native-select';
 import { Separator } from './ui/separator';
+import { zoneName } from '@/lib/format';
 
 type Reminder = {
   id: string;
@@ -108,7 +109,7 @@ export function AppointmentReminders({ me }: { me: Me }) {
         <CardDescription>
           A las <strong className="font-medium text-foreground">09:00 del día anterior</strong> y{' '}
           <strong className="font-medium text-foreground">una hora antes</strong> ·{' '}
-          {me.tenant.timeZone}. Se confirma el horario con Hospital antes de cada aviso.
+          {zoneName(me.tenant.timeZone)}. Se confirma el horario con Hospital antes de cada aviso.
         </CardDescription>
         <CardAction>
           <Badge variant={data?.enabled ? 'default' : 'secondary'}>
