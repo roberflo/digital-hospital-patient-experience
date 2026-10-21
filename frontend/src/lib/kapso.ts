@@ -3,9 +3,12 @@ import type { Conversation, Message, Page } from './kapso-types.ts';
 export type { Conversation, Message, Page } from './kapso-types.ts';
 export class InboxError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** Set-Cookie a renewal already left: the browser must get them even with this error. */
+  headers?: Headers;
+  constructor(status: number, message: string, headers?: Headers) {
     super(message);
     this.status = status;
+    this.headers = headers;
   }
 }
 export function phoneNumberId() {

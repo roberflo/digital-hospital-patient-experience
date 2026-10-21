@@ -14,15 +14,19 @@ export async function authorizeInbox(req: NextRequest) {
     throw new InboxError(403, 'El dueño de plataforma no abre la bandeja de una recepción.');
   const check = new NextRequest(new URL('/api/crm/channels', req.url), { headers: req.headers });
   const response = await forward(check, { params: Promise.resolve({ path: ['channels'] }) }, false);
+  const headers = new Headers({ 'Cache-Control': 'no-store' });
+  for (const cookie of response.headers.getSetCookie()) headers.append('Set-Cookie', cookie);
   if (!response.ok)
     throw new InboxError(
       response.status,
       response.status === 401
         ? 'Sesión expirada. Inicia sesión de nuevo.'
         : 'No se pudo validar tu acceso.',
+      headers,
     );
   const channels: { phoneNumberId: string }[] = await response.json();
-  if (!Array.isArray(channels)) throw new InboxError(502, 'No se pudieron validar los canales.');
+  if (!Array.isArray(channels))
+    throw new InboxError(502, 'No se pudieron validar los canales.', headers);
   const requested = req.nextUrl.searchParams.get('phoneNumberId');
   const number =
     requested ||
@@ -35,9 +39,7 @@ export async function authorizeInbox(req: NextRequest) {
     !Array.isArray(channels) ||
     !channels.some((c) => c.phoneNumberId === number)
   )
-    throw new InboxError(403, 'Tu hospital no tiene acceso a este número de WhatsApp.');
-  const headers = new Headers({ 'Cache-Control': 'no-store' });
-  for (const cookie of response.headers.getSetCookie()) headers.append('Set-Cookie', cookie);
+    throw new InboxError(403, 'Tu hospital no tiene acceso a este número de WhatsApp.', headers);
   return { number, headers };
 }
 // Any call may renew the session. Each later call in the same request carries the cookies the
@@ -156,7 +158,8 @@ export function errorResponse(error: unknown, headers?: Headers) {
       headers: { 'Cache-Control': 'no-store' },
     },
   );
-  for (const cookie of headers?.getSetCookie() ?? []) response.headers.append('Set-Cookie', cookie);
+  const cookies = headers ?? (error instanceof InboxError ? error.headers : undefined);
+  for (const cookie of cookies?.getSetCookie() ?? []) response.headers.append('Set-Cookie', cookie);
   return response;
 }
 export function requireOrigin(req: NextRequest) {

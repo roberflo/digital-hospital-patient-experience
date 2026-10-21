@@ -12,7 +12,13 @@ import {
 } from '../src/lib/events.ts';
 import { windowOpen, mergeMessages } from '../src/lib/kapso-types.ts';
 import type { Conversation, Message } from '../src/lib/kapso-types.ts';
-import { getConversation, listMessages, listConversations, cursor } from '../src/lib/kapso.ts';
+import {
+  getConversation,
+  listMessages,
+  listConversations,
+  cursor,
+  InboxError,
+} from '../src/lib/kapso.ts';
 const number = '613008901896177';
 const id = '11111111-1111-4111-8111-111111111111';
 const conversation: Conversation = {
@@ -377,4 +383,14 @@ test('shared signed receiver routes each number separately without trusting inco
   events.forEach(publish);
   stop();
   assert.equal(delivered, 1);
+});
+test('an inbox error after a renewal still hands the browser the rotated session cookie', async () => {
+  const { errorResponse } = await import('../src/lib/inbox-auth.ts');
+  const renewed = new Headers();
+  renewed.append('Set-Cookie', 'next-auth.session-token=rotated; Path=/; HttpOnly');
+  const response = errorResponse(new InboxError(403, 'Sin acceso.', renewed));
+  assert.equal(response.status, 403);
+  assert.deepEqual(response.headers.getSetCookie(), [
+    'next-auth.session-token=rotated; Path=/; HttpOnly',
+  ]);
 });
