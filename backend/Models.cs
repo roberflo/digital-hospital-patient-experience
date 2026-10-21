@@ -264,6 +264,8 @@ public sealed class CrmDb(DbContextOptions<CrmDb> options, TenantScope scope, ID
         b.Entity<Conversation>().Property(x => x.Revision).IsConcurrencyToken();
         b.Entity<Message>().HasIndex(x => new { x.TenantId, x.ExternalId }).IsUnique();
         b.Entity<Message>().HasIndex(x => new { x.TenantId, x.RequestKey }).IsUnique();
+        // Only the few sends in doubt: the worker sweeps stuck ones every tick and /health/attention counts them across hospitals.
+        b.Entity<Message>().HasIndex(x => x.ReceivedAt).HasFilter("\"Status\" IN ('sending', 'uncertain')").HasDatabaseName("IX_Messages_InDoubt");
         b.Entity<Receipt>().HasIndex(x => new { x.TenantId, x.Key }).IsUnique();
         b.Entity<Receipt>().HasIndex(x => new { x.TenantId, x.CreatedAt });
         b.Entity<Job>().HasIndex(x => new { x.TenantId, x.Key }).IsUnique();

@@ -1426,7 +1426,8 @@ function ChatPanel({
   const [patient, setPatient] = useState(false);
   const [details, setDetails] = useState(false);
   // A chosen file waits for the person to confirm whom it goes to.
-  const [file, setFile] = useState<File | null>(null);
+  // One key per chosen file: retrying after a lost answer never sends it twice.
+  const [file, setFile] = useState<{ file: File; key: string } | null>(null);
   const agentOff = !me.tenant.agentEnabled && c.status !== 'closed';
   // Wide screens keep the patient context as a third column; narrower ones open it on demand.
   const wide = useMediaQuery('(min-width: 1280px)');
@@ -1499,10 +1500,10 @@ function ChatPanel({
   async function sendFile() {
     if (!file) return;
     const form = new FormData();
-    form.append('file', file);
+    form.append('file', file.file);
     setBusy(true);
     try {
-      const sent = await api<Message>(`/conversations/${c.id}/media`, 'POST', form);
+      const sent = await api<Message>(`/conversations/${c.id}/media`, 'POST', form, file.key);
       setFile(null);
       mutate();
       refresh();
@@ -1816,8 +1817,8 @@ function ChatPanel({
           {file && (
             <div className="flex flex-wrap items-center gap-2 rounded-md border p-2 text-sm">
               <Paperclip className="size-4 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1 truncate" title={file.name}>
-                {file.name}
+              <span className="min-w-0 flex-1 truncate" title={file.file.name}>
+                {file.file.name}
               </span>
               <Button
                 type="button"
@@ -1865,7 +1866,8 @@ function ChatPanel({
                   className="sr-only"
                   disabled={busy || !canReply}
                   onChange={(e) => {
-                    setFile(e.target.files?.[0] ?? null);
+                    const chosen = e.target.files?.[0];
+                    setFile(chosen ? { file: chosen, key: crypto.randomUUID() } : null);
                     e.target.value = '';
                   }}
                 />

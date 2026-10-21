@@ -41,7 +41,8 @@ public static class CrmEndpoints
         {
             using var contactLease = await locks.Lock(id);
             var row = await db.Contacts.SingleOrDefaultAsync(x => x.Id == id); if (row is null) return Results.NotFound();
-            if (row.Phone != Rules.ContactPhone(b.Phone))
+            // Both sides as a new contact would be saved: an 8-digit number stored before +503 was assumed is the same phone.
+            if (Rules.ContactPhone(row.Phone) != Rules.ContactPhone(b.Phone))
             {
                 if (row.HospitalCustomerId is not null || await db.Opportunities.AnyAsync(x=>x.ContactId==id&&x.HospitalPurchaseRequest!=null) || await db.Conversations.AnyAsync(x => x.ContactId == id)) throw new ArgumentException("Este teléfono tiene conversaciones. Crea otro contacto para conservar separado su historial.");
                 row.PatientId = null;

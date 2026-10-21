@@ -423,9 +423,10 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         {
             var note = $"El paciente pidió {(tapped.Verb == "MOVER" ? "cambiar" : "cancelar")} la cita desde el recordatorio.";
             var since = tapped.Row.AttemptedAt ?? tapped.Row.CreatedAt;
-            if (!(await db.Activities.Where(x => x.ConversationId == conv.Id && x.Kind == "reminder_change_request" && x.CreatedAt >= since).Select(x => x.Body).ToListAsync(ct)).Contains(note))
+            // MessageId is the reminder that was tapped: «Mañana» marks that reminder, not every one of the conversation.
+            if (!(await db.Activities.Where(x => x.ConversationId == conv.Id && x.Kind == "reminder_change_request" && x.MessageId == tapped.Row.MessageId && x.CreatedAt >= since).Select(x => x.Body).ToListAsync(ct)).Contains(note))
             {
-                db.Activities.Add(new() { TenantId = scope.Id, ContactId = conv.ContactId, ConversationId = conv.Id, Actor = "Recordatorios", ActorRole = "system", Kind = "reminder_change_request", Body = note });
+                db.Activities.Add(new() { TenantId = scope.Id, ContactId = conv.ContactId, ConversationId = conv.Id, MessageId = tapped.Row.MessageId, Actor = "Recordatorios", ActorRole = "system", Kind = "reminder_change_request", Body = note });
                 await db.SaveChangesAsync(ct);
             }
         }
@@ -963,6 +964,16 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         catch (Exception ex) when (ex is HttpRequestException or HospitalIntegrationException) { await OfferPerson("No se pudo gestionar la cita del paciente en Hospital.", "Disculpa, no pude consultar tu cita en este momento.", ct); }
     }
 
+    /// <summary>The doctor as Hospital names them, never as the text of a tap says: the patient can write that text. Null when Hospital cannot say;
+    /// the card then goes out without that line.</summary>
+    async Task<string?> DoctorName(string? doctorId, DateTimeOffset? at, CancellationToken ct)
+    {
+        if (!Guid.TryParse(doctorId, out var id)) return null;
+        if (!doctors.ContainsKey(id) && at is { } when)
+            try { var day = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(when, zone).DateTime); foreach (var p in (await hospital.GetAvailabilityAsync(scope.Id, day, day, id, ct)).Professionals) doctors[p.ClinicianId] = p.ClinicianName; }
+            catch (Exception ex) when (ex is HttpRequestException or HospitalIntegrationException) { }
+        return doctors.TryGetValue(id, out var known) && known.Length > 0 ? known : null;
+    }
     /// <summary>Stores a proposal the patient still has to confirm; nothing reaches the agenda here.</summary>
     /// <param name="kind">What the appointment is for, when the patient said it. Without it the kind is derived on confirming, as before.</param>
     async Task<JsonElement> Propose(string action, string? doctorId, string? appointmentId, string? startsAt, int? durationMinutes, CancellationToken ct, string? kind = null)
@@ -987,12 +998,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         if (Guid.TryParse(channel.DoctorId, out var channelDoctor)) payload["doctorId"] = channelDoctor.ToString();
         // The card names the appointment and the doctor. An existing appointment is looked up so a cancellation says which one it is;
         // if Hospital cannot say, the proposal still goes out without those lines.
-        // The doctor is named as Hospital names them, never as the text of a tap says: the patient can write that text.
-        var listed = Guid.TryParse(payload["doctorId"]?.GetValue<string>(), out var one) ? one : (Guid?)null;
-        if (listed is { } named && !doctors.ContainsKey(named) && Future(startsAt) is { } at)
-            try { var day = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(at, zone).DateTime); foreach (var p in (await hospital.GetAvailabilityAsync(scope.Id, day, day, named, ct)).Professionals) doctors[p.ClinicianId] = p.ClinicianName; }
-            catch (Exception ex) when (ex is HttpRequestException or HospitalIntegrationException) { } // without the name the card still goes out, without that line
-        var who = listed is { } id && doctors.TryGetValue(id, out var known) && known.Length > 0 ? known : null;
+        var who = await DoctorName(payload["doctorId"]?.GetValue<string>(), Future(startsAt), ct);
         var passed = false;
         if (Guid.TryParse(appointmentId, out var existing))
             try
@@ -1231,8 +1237,12 @@ public sealed class AgentWorker(IServiceScopeFactory scopes, ILogger<AgentWorker
         foreach (var candidate in candidates)
         {
             if (await ConversationService.TryLock(d, TurnLockId(candidate.ConversationId), stoppingToken) is not { } held) continue;
-            // Under the turn lock a running job of this conversation can only be a dead process's, which RetireAbandoned retires.
-            if (!await d.Jobs.AnyAsync(r => r.ConversationId == candidate.ConversationId && r.Status == "running", stoppingToken) && await Claim(d, candidate.Id, stoppingToken) == 1) { (job, turn) = (candidate, held); break; }
+            try
+            {
+                // Under the turn lock a running job of this conversation can only be a dead process's, which RetireAbandoned retires.
+                if (!await d.Jobs.AnyAsync(r => r.ConversationId == candidate.ConversationId && r.Status == "running", stoppingToken) && await Claim(d, candidate.Id, stoppingToken) == 1) { (job, turn) = (candidate, held); break; }
+            }
+            catch { held.Dispose(); throw; }
             held.Dispose();
         }
         if (job is null) return;
@@ -1268,8 +1278,16 @@ public sealed class AgentWorker(IServiceScopeFactory scopes, ILogger<AgentWorker
     public static async Task RetireAbandoned(CrmDb d, TenantScope scope, ConversationService service, CancellationToken ct)
     {
         // A send whose process died between "sending" and Kapso's answer: it may or may not have gone out, so it is uncertain, never retried.
+        // The conversation goes to a person with the same trail Send leaves, so the inbox shows it.
         var sendingCutoff = DateTimeOffset.UtcNow.AddMinutes(-AbandonedAfterMinutes);
-        await d.Messages.Where(x => x.Status == "sending" && x.ReceivedAt < sendingCutoff).ExecuteUpdateAsync(s => s.SetProperty(m => m.Status, "uncertain"), ct);
+        foreach (var stuck in await d.Messages.Where(x => x.Status == "sending" && x.ReceivedAt < sendingCutoff).Select(x => new { x.Id, x.ConversationId }).ToListAsync(ct))
+        {
+            using var lease = await service.Lock(stuck.ConversationId, ct);
+            if (await d.Messages.Where(x => x.Id == stuck.Id && x.Status == "sending").ExecuteUpdateAsync(s => s.SetProperty(m => m.Status, "uncertain"), ct) == 0) continue;
+            var c = await d.Conversations.SingleAsync(x => x.Id == stuck.ConversationId, ct); await d.Entry(c).ReloadAsync(ct); c.Status = "human"; c.Revision++;
+            d.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = c.Id, ContactId = c.ContactId, MessageId = stuck.Id, Kind = "delivery", Actor = "Sistema", ActorRole = "system", Body = "Entrega sin confirmar. Comprueba WhatsApp antes de volver a enviar." });
+            await d.SaveChangesAsync(ct);
+        }
         var due = await d.Jobs.Where(x => x.Status == "running" && x.StartedAt < DateTimeOffset.UtcNow.AddMinutes(-AbandonedAfterMinutes)).Select(x => new { x.Id, x.ConversationId }).ToListAsync(ct);
         foreach (var row in due)
         {

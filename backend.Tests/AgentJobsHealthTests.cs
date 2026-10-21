@@ -69,6 +69,9 @@ public sealed partial class AgentIntegrationTests {
         await AgentWorker.RetireAbandoned(db,scope,Service(Never()),CancellationToken.None);
         await using var fresh=Other();
         Assert.Equal("uncertain",(await fresh.Messages.SingleAsync(x=>x.Id==stuck.Id)).Status);Assert.Equal("sending",(await fresh.Messages.SingleAsync(x=>x.Id==live.Id)).Status);
+        // Como Send ante una entrega incierta: la conversación pasa a una persona con su rastro en la bandeja.
+        Assert.Equal("human",(await fresh.Conversations.SingleAsync(x=>x.Id==conversation.Id)).Status);
+        Assert.Equal(stuck.Id,Assert.Single(await fresh.Activities.Where(x=>x.Kind=="delivery").ToListAsync()).MessageId);
     }
     [Fact]public async Task ATurnInFlightHoldsBackOnlyItsOwnConversation(){
         // Otro proceso está a mitad de un turno de esta conversación: el de otra conversación del mismo hospital sale igual, el suyo espera.

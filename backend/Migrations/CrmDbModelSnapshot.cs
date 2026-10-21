@@ -715,6 +715,10 @@ namespace Recepcion.Api.Migrations
 
                     b.HasAlternateKey("TenantId", "Id");
 
+                    b.HasIndex("ReceivedAt")
+                        .HasDatabaseName("IX_Messages_InDoubt")
+                        .HasFilter("\"Status\" IN ('sending', 'uncertain')");
+
                     b.HasIndex("TenantId", "ExternalId")
                         .IsUnique();
 

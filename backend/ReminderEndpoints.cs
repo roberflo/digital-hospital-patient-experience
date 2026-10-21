@@ -24,12 +24,14 @@ public static class ReminderEndpoints
         var messageIds=rows.Select(r=>r.MessageId).OfType<Guid>().ToArray();
         var deliveries=await db.Messages.AsNoTracking().Where(m=>messageIds.Contains(m.Id)).ToDictionaryAsync(m=>m.Id,m=>m.Status,ct);
         var conversationIds=conversations.Select(c=>(Guid?)c.Id).ToArray();
-        var requests=await db.Activities.AsNoTracking().Where(a=>a.Kind=="reminder_change_request"&&conversationIds.Contains(a.ConversationId)).Select(a=>new{a.ConversationId,a.CreatedAt}).ToListAsync(ct);
+        // A request is the tapped reminder's (its MessageId), and a person answering in the conversation afterwards settles it.
+        var requests=await db.Activities.AsNoTracking().Where(a=>a.Kind=="reminder_change_request"&&conversationIds.Contains(a.ConversationId)
+            &&!db.Messages.Any(m=>m.ConversationId==a.ConversationId&&m.Sender=="human"&&m.CreatedAt>a.CreatedAt)).Select(a=>new{a.ConversationId,a.MessageId,a.CreatedAt}).ToListAsync(ct);
         return rows.Select(r=>{
             var conversation=conversations.FirstOrDefault(c=>c.ContactId==r.ContactId&&c.ChannelId==r.ChannelId)?.Id;
             var since=r.AttemptedAt??r.CreatedAt;
             return new TomorrowReminder(r.Id,r.StartsAt,r.ContactId is {} contact?names.GetValueOrDefault(contact):null,r.Status,r.MessageId is {} m?deliveries.GetValueOrDefault(m):null,
-                conversation,r.Status is "sent" or "confirmed" or "uncertain"&&requests.Any(a=>a.ConversationId==conversation&&a.CreatedAt>=since));
+                conversation,r.Status is "sent" or "confirmed" or "uncertain"&&requests.Any(a=>a.ConversationId==conversation&&a.MessageId==r.MessageId&&a.CreatedAt>=since));
         }).ToList();
     }
     /// <summary>The administrator's reminder settings: channel, pause and the day-before template (criterio 13). Audited.</summary>

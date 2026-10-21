@@ -50,7 +50,7 @@ app.MapGet("/health/attention", async (CrmDb db) =>
     var reminders = await db.AppointmentReminders.IgnoreQueryFilters().CountAsync(x => x.Status == "uncertain" && x.AttemptedAt > since);
     var body = new { status = turns + sends + reminders == 0 ? "ok" : "attention", turns, sends, reminders };
     return turns + sends + reminders == 0 ? Results.Ok(body) : Results.Json(body, statusCode: 503);
-});
+}).RequireRateLimiting("health");
 app.UseRateLimiter();
 app.MapRecepcionApi();
 using (var scope = app.Services.CreateScope())

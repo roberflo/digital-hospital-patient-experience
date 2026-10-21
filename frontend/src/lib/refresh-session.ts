@@ -92,7 +92,8 @@ export async function refreshSession(refreshToken: string): Promise<Tokens> {
   })();
   // Bound both memory and token retention. Deployment with multiple Node processes needs a shared
   // session/refresh coordinator; this does not change token or session lifetimes.
-  if (pending.size >= 100) pending.delete(pending.keys().next().value!);
+  // Each entry is a few KiB, kept 125 s: room for thousands of people active in one process.
+  if (pending.size >= 5000) pending.delete(pending.keys().next().value!);
   const item = { expires: now + 12000, result };
   pending.set(key, item);
   try {

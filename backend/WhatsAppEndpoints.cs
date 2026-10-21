@@ -20,6 +20,8 @@ public static class WhatsAppEndpoints
         // A send without its key is refused before the upload and before the agent is paused or the conversation reassigned (INV-5).
         var key = ctx.Request.Headers["Idempotency-Key"].ToString(); ConversationService.RequireKey(key);
         var conv = await db.Conversations.SingleOrDefaultAsync(x => x.Id == id); if (conv is null) return Results.NotFound();
+        // A retry of a file already sent answers with that send: it is never uploaded again, whatever its new media id would be.
+        if (await db.Messages.AsNoTracking().SingleOrDefaultAsync(x => x.RequestKey == key) is { } done) return done.ConversationId == id ? Results.Ok(done) : throw new ArgumentException("Clave de envío reutilizada");
         TeamEndpoints.RequireEditable(conv,u);
         var form = await ctx.Request.ReadFormAsync(); var file = form.Files.GetFile("file"); if (file is null || file.Length == 0 || file.Length > 16 * 1024 * 1024) throw new ArgumentException("Archivo requerido, máximo 16 MB");
         var allowed = new[] { "application/pdf", "image/jpeg", "image/png", "audio/ogg", "audio/mpeg", "audio/mp4", "video/mp4" }; if (!allowed.Contains(file.ContentType)) throw new ArgumentException("Formato no permitido");

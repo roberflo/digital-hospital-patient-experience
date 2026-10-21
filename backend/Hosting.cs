@@ -27,6 +27,8 @@ public static class Hosting
             o.RejectionStatusCode = 429;
             // MR-38: the anonymous JWKS, 60/min per caller address and hospital (JwksPartition).
             o.AddPolicy("jwks", ctx => RateLimitPartition.GetFixedWindowLimiter(JwksPartition(ctx), _ => new FixedWindowRateLimiterOptions { PermitLimit = 60, Window = TimeSpan.FromMinutes(1) }));
+            // The anonymous /health/attention reads every hospital: a monitor polls it once a minute, nobody needs more.
+            o.AddPolicy("health", ctx => RateLimitPartition.GetFixedWindowLimiter(ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown", _ => new FixedWindowRateLimiterOptions { PermitLimit = 12, Window = TimeSpan.FromMinutes(1) }));
             o.AddPolicy("assistant", ctx => RateLimitPartition.GetFixedWindowLimiter(ctx.User.FindFirst("sub")?.Value ?? "anonymous", _ => new FixedWindowRateLimiterOptions { PermitLimit = 8, Window = TimeSpan.FromMinutes(1) }));
         });
         services.AddHttpClient<KapsoClient>(c => c.Timeout = TimeSpan.FromSeconds(30)).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
