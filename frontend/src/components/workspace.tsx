@@ -6,6 +6,7 @@ import {
   useRef,
   useSyncExternalStore,
   type FormEvent,
+  type UIEvent,
   type ReactNode,
 } from 'react';
 import useSWR, { useSWRConfig } from 'swr';
@@ -136,7 +137,7 @@ import {
   type Opportunity,
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
-import { inZone } from '@/lib/format';
+import { dayInZone, inZone, zoneName } from '@/lib/format';
 import { defaultInboxFilters, filtersActive, inboxQuery } from '@/lib/inbox-filters';
 import { ConfirmAction } from './confirm-action';
 import { AppointmentReminders, ReminderConsent, TomorrowReminders } from './appointment-reminders';
@@ -175,7 +176,7 @@ const nav = [
   ['team', 'Equipo', Users],
   ['contacts', 'Contactos', BookUser],
   ['companies', 'Empresas', Building2],
-  ['opportunities', 'Oportunidades', Columns3],
+  ['opportunities', 'Seguimientos', Columns3],
   ['calendar', 'Agenda', CalendarDays],
   ['hospital', 'Mi hospital', HeartPulse],
   ['activity', 'Actividad', ActivityIcon],
@@ -230,6 +231,21 @@ function initials(name: string) {
 const time = (value: string, tz: string) =>
   inZone(value, tz, { hour: '2-digit', minute: '2-digit' });
 const date = (value: string, tz: string) => inZone(value, tz, { day: 'numeric', month: 'short' });
+/** «Hoy», «Ayer» or «17 oct» in the hospital's zone; another year carries it. */
+function dayLabel(value: string, tz: string) {
+  const d = dayInZone(value, tz);
+  const today = dayInZone(Date.now(), tz);
+  if (d === today) return 'Hoy';
+  if (d === dayInZone(Date.now() - 864e5, tz)) return 'Ayer';
+  return d.slice(0, 4) === today.slice(0, 4)
+    ? date(value, tz)
+    : inZone(value, tz, { day: 'numeric', month: 'short', year: 'numeric' });
+}
+/** What the team reads when WhatsApp did not confirm a message. */
+const notSent = (status: string) =>
+  status === 'failed'
+    ? 'El mensaje no se envió. Inténtalo de nuevo.'
+    : 'No sabemos si el mensaje llegó. Revisa el chat antes de reenviar.';
 function PersonAvatar({ name, large = false }: { name: string; large?: boolean }) {
   return (
     <Avatar className={cn(large && 'size-16')}>
@@ -297,6 +313,7 @@ type Field = {
   options?: { value: string; label: string }[];
   value?: string;
   placeholder?: string;
+  description?: string;
 };
 function FormDialog({
   title,
@@ -385,12 +402,14 @@ function FormDialog({
                     id={'field-' + f.name}
                     name={f.name}
                     type={f.type ?? 'text'}
+                    inputMode={f.type === 'tel' ? 'tel' : undefined}
                     defaultValue={f.value}
                     required={f.required}
                     placeholder={f.placeholder}
                     maxLength={f.type === 'text' || !f.type ? 500 : undefined}
                   />
                 )}
+                {f.description && <FieldDescription>{f.description}</FieldDescription>}
               </UiField>
             ))}
             <DialogFooter>
@@ -592,14 +611,16 @@ function AppSidebar({
                   {id === 'agent' && <SidebarMenuBadge>IA</SidebarMenuBadge>}
                 </SidebarMenuItem>
               ))}
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild>
-                  <a href="/whatsapp">
-                    <MessageCircle />
-                    <span>WhatsApp · números</span>
-                  </a>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
+              {me?.role === 'admin' && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild>
+                    <a href="/whatsapp">
+                      <MessageCircle />
+                      <span>WhatsApp · números</span>
+                    </a>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -626,7 +647,9 @@ function AppSidebar({
                 <span className="truncate text-xs">
                   {me?.tenant.agentEnabled
                     ? 'Conectado con tu equipo'
-                    : 'Actívalo cuando esté configurado'}
+                    : me?.role === 'admin'
+                      ? 'Actívalo cuando esté configurado'
+                      : 'Lo activa el administrador'}
                 </span>
               </div>
             </SidebarMenuButton>
@@ -987,7 +1010,7 @@ function InboxView({
       <Card className="inbox-layout min-h-0 flex-1 flex-row gap-0 overflow-hidden py-0">
         <section
           className={cn(
-            'w-full shrink-0 flex-col overflow-y-auto md:flex md:w-72 md:overflow-hidden md:border-r 2xl:w-80',
+            'w-full shrink-0 flex-col overflow-y-auto lg:flex lg:w-72 lg:overflow-hidden lg:border-r 2xl:w-80',
             active ? 'hidden' : 'flex',
           )}
         >
@@ -996,14 +1019,17 @@ function InboxView({
               <h2 className="flex items-center gap-2 text-sm font-semibold">
                 Conversaciones <Badge variant="secondary">{filtered?.length ?? 0}</Badge>
               </h2>
-              <Button asChild variant="link" size="sm" className="ml-auto">
-                <a href="/whatsapp" title="Gestionar números de WhatsApp">
-                  Números ↗
-                </a>
-              </Button>
+              {me.role === 'admin' && (
+                <Button asChild variant="link" size="sm" className="ml-auto">
+                  <a href="/whatsapp" title="Gestionar números de WhatsApp">
+                    Números ↗
+                  </a>
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 size="icon-sm"
+                className="ml-auto"
                 aria-label="Actualizar conversaciones"
                 onClick={() => mutate()}
               >
@@ -1194,7 +1220,7 @@ function InboxView({
               </div>
             )}
           </div>
-          <div className="flex flex-col md:min-h-0 md:flex-1 md:overflow-y-auto">
+          <div className="flex flex-col lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
             {!chats ? (
               <Loading />
             ) : !filtered?.length && filtersActive(filters, search) ? (
@@ -1259,7 +1285,9 @@ function InboxView({
                           <strong className="flex min-w-0 items-center gap-2 font-medium">
                             <span className="truncate">{contact.name}</span>
                             {unreadCount > 0 && (
-                              <Badge aria-label={`${unreadCount} mensajes sin leer`}>
+                              <Badge
+                                aria-label={`${unreadCount} ${unreadCount === 1 ? 'mensaje sin leer' : 'mensajes sin leer'}`}
+                              >
                                 {unreadCount}
                               </Badge>
                             )}
@@ -1271,8 +1299,13 @@ function InboxView({
                               </Badge>
                             )}
                           </strong>
-                          <time className="shrink-0 text-xs font-normal text-muted-foreground">
-                            {time(c.updatedAt, me.tenant.timeZone)}
+                          <time
+                            dateTime={c.updatedAt}
+                            className="shrink-0 text-xs font-normal text-muted-foreground"
+                          >
+                            {dayLabel(c.updatedAt, me.tenant.timeZone) === 'Hoy'
+                              ? time(c.updatedAt, me.tenant.timeZone)
+                              : dayLabel(c.updatedAt, me.tenant.timeZone)}
                           </time>
                         </ItemTitle>
                         <ItemDescription className="line-clamp-1">
@@ -1337,7 +1370,7 @@ function InboxView({
             refresh={() => mutate()}
           />
         ) : (
-          <section className="hidden min-w-0 flex-1 items-center justify-center md:flex">
+          <section className="hidden min-w-0 flex-1 items-center justify-center lg:flex">
             <Empty>
               <EmptyHeader>
                 <EmptyMedia variant="icon">
@@ -1392,6 +1425,9 @@ function ChatPanel({
   const [note, setNote] = useState(false);
   const [patient, setPatient] = useState(false);
   const [details, setDetails] = useState(false);
+  // A chosen file waits for the person to confirm whom it goes to.
+  const [file, setFile] = useState<File | null>(null);
+  const agentOff = !me.tenant.agentEnabled && c.status !== 'closed';
   // Wide screens keep the patient context as a third column; narrower ones open it on demand.
   const wide = useMediaQuery('(min-width: 1280px)');
   const [findMessages, setFindMessages] = useState(false);
@@ -1408,6 +1444,10 @@ function ChatPanel({
   const bottom = useRef<HTMLDivElement>(null);
   // Follow new messages only while the person is at the end; reading further up stays put (MR-26).
   const following = useRef(true);
+  const follow = (e: UIEvent<HTMLElement>) => {
+    const el = e.currentTarget;
+    following.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 80;
+  };
   useEffect(() => {
     if (following.current) bottom.current?.scrollIntoView({ block: 'nearest' });
   }, [messages?.length, c.id]);
@@ -1449,10 +1489,27 @@ function ChatPanel({
       setBody('');
       mutate();
       refresh();
-      if (sent.status !== 'sent')
-        toast.error('Envío ' + (labels[sent.status] ?? sent.status) + '. Revisa antes de repetir.');
+      if (sent.status !== 'sent') toast.error(notSent(sent.status));
     } catch (e) {
       toast.error((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function sendFile() {
+    if (!file) return;
+    const form = new FormData();
+    form.append('file', file);
+    setBusy(true);
+    try {
+      const sent = await api<Message>(`/conversations/${c.id}/media`, 'POST', form);
+      setFile(null);
+      mutate();
+      refresh();
+      if (sent.status === 'sent') toast.success('Archivo enviado');
+      else toast.error(notSent(sent.status));
+    } catch (err) {
+      toast.error((err as Error).message);
     } finally {
       setBusy(false);
     }
@@ -1518,12 +1575,12 @@ function ChatPanel({
   );
   return (
     <>
-      <section className="flex min-w-0 flex-1 flex-col overflow-y-auto">
+      <section className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <div className="flex items-center gap-3 border-b p-3">
           <Button
             variant="ghost"
             size="icon-sm"
-            className="md:hidden"
+            className="lg:hidden"
             onClick={onClose}
             aria-label="Volver a conversaciones"
           >
@@ -1566,159 +1623,185 @@ function ChatPanel({
             </Button>
           </div>
         </div>
-        <div className="flex flex-col gap-3 border-b p-3">
-          <AssignmentControl
-            conversation={c}
-            me={me}
-            onChange={() => {
-              refresh();
-              refreshActivities();
-            }}
-          />
-          <Alert>
-            <Sparkles />
-            <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
-              <span>
-                {c.status === 'agent'
-                  ? 'El agente está atendiendo esta conversación.'
-                  : c.status === 'closed'
-                    ? 'La conversación está cerrada.'
-                    : 'Tu equipo está a cargo. El agente está en pausa.'}
-              </span>
-              <ConfirmAction
-                ask={c.status !== 'agent'}
-                title="¿Activar el agente en esta conversación?"
-                description="El agente responderá al paciente por WhatsApp. Tu equipo puede retomarla en cualquier momento."
-                action="Activar agente"
-                onConfirm={() =>
-                  action(
-                    c.status === 'agent' ? 'human' : 'agent',
-                    c.status === 'agent' ? me.subject : undefined,
-                  )
-                }
-              >
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={!managesTeam(me) && !!c.assignedTo && c.assignedTo !== me.subject}
-                >
-                  {c.status === 'agent' ? 'Tomar conversación' : 'Activar agente'}
-                  <ArrowUpRight />
-                </Button>
-              </ConfirmAction>
-            </AlertDescription>
-          </Alert>
-          <div className="flex flex-wrap items-center gap-2">
-            <PatientClinical
-              key={`${c.id}:${c.assignedTo}:${c.status}:${chat.contact.patientId}`}
-              chat={chat}
-              me={me}
-            />
-            <ConversationMacros
-              chat={chat}
+        {/* A phone scrolls the assignment, actions and thread as one; the reply box stays below. */}
+        <div
+          className="flex min-h-0 flex-1 flex-col overflow-y-auto md:overflow-hidden"
+          onScroll={follow}
+        >
+          <div className="flex shrink-0 flex-col gap-3 border-b p-3">
+            <AssignmentControl
+              conversation={c}
               me={me}
               onChange={() => {
                 refresh();
                 refreshActivities();
               }}
             />
+            <Alert>
+              <Sparkles />
+              <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
+                <span>
+                  {agentOff
+                    ? me.role === 'admin'
+                      ? 'El agente está apagado para todo el hospital. Actívalo en Configuración.'
+                      : 'El agente está apagado para todo el hospital. Pide al administrador que lo active.'
+                    : c.status === 'agent'
+                      ? 'El agente está atendiendo esta conversación.'
+                      : c.status === 'closed'
+                        ? 'La conversación está cerrada.'
+                        : 'Tu equipo está a cargo. El agente está en pausa.'}
+                </span>
+                <ConfirmAction
+                  ask={c.status !== 'agent'}
+                  title="¿Activar el agente en esta conversación?"
+                  description="El agente responderá al paciente por WhatsApp. Tu equipo puede retomarla en cualquier momento."
+                  action="Activar agente"
+                  onConfirm={() =>
+                    action(
+                      c.status === 'agent' ? 'human' : 'agent',
+                      c.status === 'agent' ? me.subject : undefined,
+                    )
+                  }
+                >
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={
+                      (!managesTeam(me) && !!c.assignedTo && c.assignedTo !== me.subject) ||
+                      (agentOff && c.status !== 'agent')
+                    }
+                  >
+                    {c.status === 'agent' ? 'Tomar conversación' : 'Activar agente'}
+                    <ArrowUpRight />
+                  </Button>
+                </ConfirmAction>
+              </AlertDescription>
+            </Alert>
+            <div className="flex flex-wrap items-center gap-2">
+              <PatientClinical
+                key={`${c.id}:${c.assignedTo}:${c.status}:${chat.contact.patientId}`}
+                chat={chat}
+                me={me}
+              />
+              <ConversationMacros
+                chat={chat}
+                me={me}
+                onChange={() => {
+                  refresh();
+                  refreshActivities();
+                }}
+              />
+            </div>
+          </div>
+          <div className="flex shrink-0 flex-col gap-2 border-b p-3 empty:hidden">
             {(findMessages || onlyFiles) && (
               <span className="text-xs text-muted-foreground">
                 {visibleMessages?.length ?? 0} resultados · últimos 200 mensajes
               </span>
             )}
+            {findMessages && (
+              <InputGroup>
+                <InputGroupInput
+                  aria-label="Buscar en esta conversación"
+                  placeholder="Buscar texto o nombre de archivo…"
+                  value={messageSearch}
+                  onChange={(e) => setMessageSearch(e.target.value)}
+                />
+                <InputGroupAddon>
+                  <Search />
+                </InputGroupAddon>
+              </InputGroup>
+            )}
+            <ErrorBox error={error} />
           </div>
-          {findMessages && (
-            <InputGroup>
-              <InputGroupInput
-                aria-label="Buscar en esta conversación"
-                placeholder="Buscar texto o nombre de archivo…"
-                value={messageSearch}
-                onChange={(e) => setMessageSearch(e.target.value)}
-              />
-              <InputGroupAddon>
-                <Search />
-              </InputGroupAddon>
-            </InputGroup>
-          )}
-          <ErrorBox error={error} />
-        </div>
-        <div
-          className="message-list flex min-h-48 flex-1 flex-col gap-3 overflow-y-auto p-4"
-          onScroll={(e) => {
-            const el = e.currentTarget;
-            following.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 80;
-          }}
-        >
-          <div className="flex items-center gap-3 text-xs text-muted-foreground">
-            <Separator className="flex-1" />
-            <span>Historial de atención</span>
-            <Separator className="flex-1" />
-          </div>
-          {(messages?.length ?? 0) >= 200 && (
-            <p className="text-center text-xs text-muted-foreground" role="status">
-              Se muestran los últimos 200 mensajes.
-            </p>
-          )}
-          {visibleMessages?.length === 0 && (
-            <p className="text-center text-sm text-muted-foreground">
-              {onlyFiles
-                ? 'No hay archivos en los mensajes cargados.'
-                : 'No hay mensajes que coincidan.'}
-            </p>
-          )}
-          {visibleMessages?.map((m) => (
-            <div
-              className={cn('flex items-end gap-2', m.sender !== 'patient' && 'justify-end')}
-              key={m.id}
-            >
-              {m.sender === 'patient' && <PersonAvatar name={chat.contact.name} />}
-              <div
-                className={cn(
-                  'bubble flex max-w-4/5 min-w-0 flex-col gap-1 rounded-lg border px-3 py-2 text-sm',
-                  m.sender !== 'patient' && 'bg-muted',
+          <div
+            className="message-list flex flex-col gap-3 p-4 md:min-h-0 md:flex-1 md:overflow-y-auto"
+            onScroll={follow}
+          >
+            <div className="flex items-center gap-3 text-xs text-muted-foreground">
+              <Separator className="flex-1" />
+              <span>Historial de atención</span>
+              <Separator className="flex-1" />
+            </div>
+            {(messages?.length ?? 0) >= 200 && (
+              <p className="text-center text-xs text-muted-foreground" role="status">
+                Se muestran los últimos 200 mensajes.
+              </p>
+            )}
+            {visibleMessages?.length === 0 && (
+              <p className="text-center text-sm text-muted-foreground">
+                {onlyFiles
+                  ? 'No hay archivos en los mensajes cargados.'
+                  : 'No hay mensajes que coincidan.'}
+              </p>
+            )}
+            {visibleMessages?.map((m, i) => (
+              <div className="flex flex-col gap-3" key={m.id}>
+                {(i === 0 ||
+                  dayInZone(visibleMessages[i - 1].createdAt, me.tenant.timeZone) !==
+                    dayInZone(m.createdAt, me.tenant.timeZone)) && (
+                  <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                    <Separator className="flex-1" />
+                    <span>{dayLabel(m.createdAt, me.tenant.timeZone)}</span>
+                    <Separator className="flex-1" />
+                  </div>
                 )}
-              >
-                <div className="flex items-center gap-1 text-xs font-medium text-muted-foreground">
-                  {m.sender === 'agent' ? (
-                    <>
-                      <Sparkles className="size-3" />
-                      Agente de atención
-                    </>
-                  ) : m.sender === 'human' ? (
-                    'Equipo de recepción'
-                  ) : (
-                    chat.contact.name
-                  )}
-                </div>
-                <p className="break-words whitespace-pre-wrap">{m.body}</p>
-                {m.mediaId && (
-                  <Button asChild variant="outline" size="sm" className="self-start">
-                    <a href={`/api/crm/messages/${m.id}/media`} target="_blank" rel="noreferrer">
-                      <Paperclip />{' '}
-                      {m.type === 'audio' ? 'Escuchar / descargar audio' : 'Abrir archivo'}
-                      <ExternalLink />
-                    </a>
-                  </Button>
-                )}
-                <div className="flex items-center justify-end gap-1 text-xs text-muted-foreground">
-                  <time>{time(m.createdAt, me.tenant.timeZone)}</time>
-                  {m.sender !== 'patient' && (
-                    <span title={labels[m.status]}>
-                      {m.status === 'read' ? (
-                        <CheckCheck className="size-3" />
-                      ) : m.status === 'sent' || m.status === 'delivered' ? (
-                        <Check className="size-3" />
+                <div
+                  className={cn('flex items-end gap-2', m.sender !== 'patient' && 'justify-end')}
+                >
+                  {m.sender === 'patient' && <PersonAvatar name={chat.contact.name} />}
+                  <div
+                    className={cn(
+                      'bubble flex max-w-4/5 min-w-0 flex-col gap-1 rounded-lg border px-3 py-2 text-sm',
+                      m.sender !== 'patient' && 'bg-muted',
+                    )}
+                  >
+                    <div className="flex items-center gap-1 text-xs font-medium text-muted-foreground">
+                      {m.sender === 'agent' ? (
+                        <>
+                          <Sparkles className="size-3" />
+                          Agente de atención
+                        </>
+                      ) : m.sender === 'human' ? (
+                        'Equipo de recepción'
                       ) : (
-                        labels[m.status]
+                        chat.contact.name
                       )}
-                    </span>
-                  )}
+                    </div>
+                    <p className="break-words whitespace-pre-wrap">{m.body}</p>
+                    {m.mediaId && (
+                      <Button asChild variant="outline" size="sm" className="self-start">
+                        <a
+                          href={`/api/crm/messages/${m.id}/media`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          <Paperclip />{' '}
+                          {m.type === 'audio' ? 'Escuchar / descargar audio' : 'Abrir archivo'}
+                          <ExternalLink />
+                        </a>
+                      </Button>
+                    )}
+                    <div className="flex items-center justify-end gap-1 text-xs text-muted-foreground">
+                      <time>{time(m.createdAt, me.tenant.timeZone)}</time>
+                      {m.sender !== 'patient' && (
+                        <span title={labels[m.status]}>
+                          {m.status === 'read' ? (
+                            <CheckCheck className="size-3" />
+                          ) : m.status === 'sent' || m.status === 'delivered' ? (
+                            <Check className="size-3" />
+                          ) : (
+                            labels[m.status]
+                          )}
+                        </span>
+                      )}
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
-          <div ref={bottom} />
+            ))}
+            <div ref={bottom} />
+          </div>
         </div>
         <form className="flex flex-col gap-2 border-t p-3" onSubmit={send}>
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1730,6 +1813,33 @@ function ChatPanel({
             </Button>
           </div>
           <SavedReplies me={me} onInsert={(text) => setBody(text)} />
+          {file && (
+            <div className="flex flex-wrap items-center gap-2 rounded-md border p-2 text-sm">
+              <Paperclip className="size-4 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1 truncate" title={file.name}>
+                {file.name}
+              </span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={busy}
+                onClick={() => setFile(null)}
+              >
+                Quitar
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                className="max-w-full"
+                disabled={busy || !canReply}
+                onClick={sendFile}
+              >
+                {busy ? <Spinner /> : <Send />}
+                <span className="truncate">Enviar archivo a {chat.contact.name}</span>
+              </Button>
+            </div>
+          )}
           <Textarea
             aria-label="Mensaje al paciente"
             rows={2}
@@ -1754,25 +1864,9 @@ function ChatPanel({
                   accept=".pdf,.jpg,.jpeg,.png,.ogg,.mp3,.mp4"
                   className="sr-only"
                   disabled={busy || !canReply}
-                  onChange={async (e) => {
-                    const file = e.target.files?.[0];
-                    if (!file) return;
-                    const form = new FormData();
-                    form.append('file', file);
-                    setBusy(true);
-                    try {
-                      const sent = await api<Message>(`/conversations/${c.id}/media`, 'POST', form);
-                      mutate();
-                      refresh();
-                      toast[sent.status === 'sent' ? 'success' : 'error'](
-                        labels[sent.status] ?? sent.status,
-                      );
-                    } catch (err) {
-                      toast.error((err as Error).message);
-                    } finally {
-                      setBusy(false);
-                      e.target.value = '';
-                    }
+                  onChange={(e) => {
+                    setFile(e.target.files?.[0] ?? null);
+                    e.target.value = '';
                   }}
                 />
               </label>
@@ -1869,35 +1963,40 @@ function ContactsView({ search }: { search: string }) {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Paciente / contacto</TableHead>
-                    <TableHead>Teléfono</TableHead>
-                    <TableHead>Correo</TableHead>
-                    <TableHead>Etiqueta</TableHead>
-                    <TableHead>Relación / expediente</TableHead>
+                    <TableHead className="hidden sm:table-cell">Teléfono</TableHead>
+                    <TableHead className="hidden md:table-cell">Correo</TableHead>
+                    <TableHead className="hidden md:table-cell">Etiqueta</TableHead>
+                    <TableHead className="hidden md:table-cell">Relación / expediente</TableHead>
                     <TableHead />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {data.map((c) => (
                     <TableRow key={c.id}>
-                      <TableCell>
+                      <TableCell className="whitespace-normal">
                         <div className="flex items-center gap-2">
                           <PersonAvatar name={c.name} />
-                          <strong className="font-medium">{c.name}</strong>
+                          <div className="flex min-w-0 flex-col">
+                            <strong className="font-medium break-words">{c.name}</strong>
+                            <span className="text-xs text-muted-foreground sm:hidden">
+                              +{c.phone}
+                            </span>
+                          </div>
                         </div>
                       </TableCell>
-                      <TableCell>+{c.phone}</TableCell>
-                      <TableCell>{c.email || '—'}</TableCell>
-                      <TableCell>
+                      <TableCell className="hidden sm:table-cell">+{c.phone}</TableCell>
+                      <TableCell className="hidden md:table-cell">{c.email || '—'}</TableCell>
+                      <TableCell className="hidden md:table-cell">
                         {c.tags ? <Badge variant="secondary">{c.tags}</Badge> : '—'}
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="hidden md:table-cell">
                         <Badge variant={c.patientId ? 'secondary' : 'outline'}>
                           {c.isCustomer ? 'Cliente' : 'Contacto'} ·{' '}
                           {c.patientId ? 'Vinculado' : 'Por vincular'}
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        <div className="flex items-center justify-end gap-2">
+                        <div className="flex flex-col items-end gap-2 md:flex-row md:items-center md:justify-end">
                           <Button variant="outline" size="sm" onClick={() => setPatientContact(c)}>
                             {c.patientId ? 'Ver vínculo' : 'Vincular paciente'}
                           </Button>
@@ -1965,10 +2064,13 @@ function ContactsView({ search }: { search: string }) {
           { name: 'name', label: 'Nombre completo', required: true, value: edit?.name },
           {
             name: 'phone',
-            label: 'Teléfono con código de país',
+            label: 'Teléfono',
+            type: 'tel',
             required: true,
             value: edit?.phone,
-            placeholder: '50370000000',
+            placeholder: '7000 0000',
+            description:
+              'Ejemplo: 7000 0000 (se agrega +503). De otro país, escríbelo con + y su código.',
           },
           { name: 'email', label: 'Correo electrónico', type: 'email', value: edit?.email },
           { name: 'tags', label: 'Etiquetas', value: edit?.tags },
@@ -2008,7 +2110,7 @@ function OpportunitiesView({ search }: { search: string }) {
     <>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <span className="text-sm text-muted-foreground">
-          Seguimientos de la atención y oportunidades del hospital
+          Seguimientos de la atención del hospital
         </span>
         <Button size="sm" onClick={() => setCreate('new')}>
           <Plus />
@@ -2244,7 +2346,7 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
       <Card>
         <CardHeader>
           <CardTitle className="flex flex-wrap items-center gap-2">
-            <CalendarDays className="size-4" /> Agenda del hospital · {me.tenant.timeZone}
+            <CalendarDays className="size-4" /> Agenda del hospital · {zoneName(me.tenant.timeZone)}
           </CardTitle>
           <CardDescription>Todos los doctores</CardDescription>
           <CardAction>
@@ -2449,7 +2551,11 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
                   onChange={setPatient}
                 />
                 <FieldDescription>
-                  Si un paciente no aparece, vincula primero su expediente desde la conversación.
+                  Si no aparece, vincúlalo desde{' '}
+                  <a className="underline underline-offset-4" href="/?view=contacts">
+                    Contactos
+                  </a>{' '}
+                  → Vincular paciente.
                 </FieldDescription>
               </UiField>
               <UiField>
@@ -2470,7 +2576,8 @@ function CalendarView({ search, me }: { search: string; me: Me }) {
               )}
               {availability && !availability.professionals.length && (
                 <p className="text-sm text-muted-foreground">
-                  El hospital no tiene doctores disponibles en el padrón para esta consulta.
+                  No hay doctores con horario ese día. Elige otra fecha o pide al administrador que
+                  cargue los horarios en Hospital.
                 </p>
               )}
               {closedDay && (
@@ -2711,13 +2818,13 @@ function AgentView({ me }: { me: Me }) {
                 onChange={setContactId}
               />
               <FieldDescription>
-                La ficha del contacto seleccionado permanece en el CRM.
+                La ficha del contacto seleccionado queda en Recepción.
               </FieldDescription>
             </UiField>
             <div className="flex flex-col gap-2">
               {[
                 'Resume las conversaciones pendientes',
-                '¿Qué oportunidades necesitan seguimiento?',
+                '¿Qué seguimientos están pendientes?',
                 'Crea un seguimiento para el contacto seleccionado',
               ].map((s) => (
                 <Item

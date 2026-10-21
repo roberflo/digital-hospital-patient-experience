@@ -100,9 +100,9 @@ export default function WhatsAppConnect() {
                 <li className="flex flex-col gap-1">
                   <strong className="font-medium">2. Vincula tu número en Kapso</strong>
                   <p className="text-muted-foreground">
-                    Inicia sesión con la cuenta de Meta que administra tu negocio y completa la
-                    verificación. Elige Coexistence si quieres seguir usando WhatsApp Business en tu
-                    teléfono.
+                    Kapso es nuestro proveedor de WhatsApp. Inicia sesión con la cuenta de Meta que
+                    administra tu negocio y completa la verificación. Elige «Coexistence»
+                    (coexistencia) si quieres seguir usando WhatsApp Business en tu teléfono.
                   </p>
                 </li>
                 <li className="flex flex-col gap-1">

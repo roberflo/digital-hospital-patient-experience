@@ -5,6 +5,8 @@ public static class InboxWorkflow
 {
     public static readonly string[] States = ["open", "pending", "snoozed", "resolved"];
     public static readonly string[] Priorities = ["low", "normal", "high", "urgent"];
+    /// <summary>How a state or a priority reads in Actividad.</summary>
+    public static string Name(string value) => value switch { "open" => "Abierta", "pending" => "Pendiente", "snoozed" => "Pospuesta", "resolved" => "Resuelta", "low" => "Baja", "normal" => "Normal", "high" => "Alta", "urgent" => "Urgente", _ => value };
     public static string Labels(string value)
     {
         var labels=value.Split(',',StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries)

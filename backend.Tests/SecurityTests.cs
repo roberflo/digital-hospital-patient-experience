@@ -18,6 +18,9 @@ public sealed class SecurityTests {
     [Fact]public void EmptySecretNeverAccepted()=>Assert.False(Rules.VerifySignature([],Convert.ToHexString(HMACSHA256.HashData([],[])),""));
     [Theory][InlineData("50370000000","50370000000")][InlineData("+503 7000-0000","50370000000")]
     public void PhoneCanonicalization(string input,string output)=>Assert.Equal(output,Rules.Phone(input));
+    [Theory][InlineData("7000-0000","50370000000")][InlineData("2200 0000","50322000000")][InlineData("50370000000","50370000000")][InlineData("+503 7000-0000","50370000000")]
+    [InlineData("+50012345","50012345")][InlineData("51234567","51234567")][InlineData("14155550100","14155550100")][InlineData("+52 55 1234 5678","525512345678")]
+    public void ContactPhoneAssumesElSalvadorOnlyForLocalNumbers(string input,string output)=>Assert.Equal(output,Rules.ContactPhone(input));
     [Theory][InlineData("123")][InlineData("not a number")][InlineData("1234567890123456")]
     public void BadPhoneRejected(string phone)=>Assert.Throws<ArgumentException>(()=>Rules.Phone(phone));
     [Fact]public void HashUsesSecretAndNormalizedPhone(){Assert.Equal(Rules.PhoneHash("+503 7000-0000","secret"),Rules.PhoneHash("50370000000","secret"));Assert.NotEqual(Rules.PhoneHash("50370000000","secret"),Rules.PhoneHash("50370000000","other"));}

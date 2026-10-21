@@ -137,7 +137,8 @@ export function WhatsAppLinkFlow({ flow }: { flow: ReturnType<typeof useWhatsApp
               <h2>Tu enlace está listo</h2>
             </ItemTitle>
             <ItemDescription>
-              Continúa en Kapso y regresa a esta pestaña cuando termines.
+              Vincula tu número en Kapso, nuestro proveedor de WhatsApp, y regresa a esta pestaña
+              cuando termines.
             </ItemDescription>
           </ItemContent>
           <ItemActions className="basis-full">

@@ -24,14 +24,14 @@ test('dashboard and inbox are separate; conversation and internal note persist',
     });
   });
   await login(page);
-  await expect(page.getByText('Conversaciones abiertas', { exact: true })).toBeVisible();
+  await expect(page.getByText('Sin resolver', { exact: true })).toBeVisible();
   await page.screenshot({
     path: `../artifacts/dashboard-${info.project.name}.png`,
     fullPage: true,
   });
   await page.getByRole('button', { name: 'Abrir bandeja', exact: true }).click();
   await expect(page).toHaveURL(/view=inbox/);
-  await expect(page.getByText('Conversaciones abiertas', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Sin resolver', { exact: true })).toHaveCount(0);
   await expect(page.getByText('ATENCIÓN CONECTADA', { exact: true })).toHaveCount(0);
   const inbox = await page.locator('.inbox-layout').boundingBox();
   expect(inbox!.y).toBeLessThan(180);
@@ -40,7 +40,7 @@ test('dashboard and inbox are separate; conversation and internal note persist',
   await expect(
     page.getByRole('heading', { name: 'Bandeja de entrada', exact: true }),
   ).toBeVisible();
-  await expect(page.getByLabel('1 mensajes sin leer').first()).toBeVisible();
+  await expect(page.getByLabel('1 mensaje sin leer', { exact: true }).first()).toBeVisible();
   await page
     .getByRole('button')
     .filter({ has: page.getByText('Ana Martínez', { exact: true }) })
@@ -67,12 +67,10 @@ test('contact creation and pipeline work through authenticated BFF', async ({ pa
   await page.getByRole('button', { name: 'Nuevo contacto', exact: true }).click();
   const name = 'Paciente E2E ' + info.project.name + ' ' + Date.now();
   await page.getByLabel('Nombre completo').fill(name);
-  await page
-    .getByLabel('Teléfono con código de país')
-    .fill('503' + Date.now().toString().slice(-8));
+  await page.getByLabel('Teléfono', { exact: true }).fill('503' + Date.now().toString().slice(-8));
   await page.getByRole('button', { name: 'Guardar', exact: true }).click();
   await expect(page.getByText(name, { exact: true })).toBeVisible();
-  await nav(page, 'Oportunidades');
+  await nav(page, 'Seguimientos');
   await page.getByRole('button', { name: 'Nuevo seguimiento', exact: true }).click();
   await page.getByLabel('Título', { exact: true }).fill('Seguimiento ' + name);
   await page.getByLabel('Contacto', { exact: true }).selectOption({ label: name });
@@ -132,8 +130,8 @@ test('inbox updates conversation workflow and shared CRM profile', async ({ page
     0,
   );
   await page.getByLabel('Estado del cliente').selectOption('inactive');
-  await page.getByRole('button', { name: 'Guardar ficha CRM', exact: true }).click();
-  await expect(page.getByText('Ficha CRM actualizada', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Guardar ficha', exact: true }).click();
+  await expect(page.getByText('Ficha actualizada', { exact: true })).toBeVisible();
   await expect(page.getByText('Contacto · Inactivo', { exact: true })).toBeVisible();
   await page.getByLabel('Estado de conversación', { exact: true }).selectOption('open');
   await expect(page.getByLabel('Estado de conversación', { exact: true })).toHaveValue('open');
@@ -146,7 +144,10 @@ test('inbox updates conversation workflow and shared CRM profile', async ({ page
   await nav(page, 'Contactos');
   // The demo tenant keeps more than 100 contacts after a few runs: find Ana, not the first page.
   await page.getByLabel('Buscar', { exact: true }).fill('Ana Martínez');
-  await expect(page.getByText(email, { exact: true })).toBeVisible();
+  // A phone hides the e-mail column: the row carries it all the same.
+  await expect(page.getByText(email, { exact: true }))[
+    info.project.name === 'mobile' ? 'toBeAttached' : 'toBeVisible'
+  ]();
 });
 
 test('personal views persist and conversation search filters messages', async ({ page }, info) => {
@@ -207,7 +208,10 @@ test('admin creates and applies an internal macro', async ({ page }, info) => {
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: 'Acciones rápidas', exact: true }).click();
   await page.getByLabel('Procedimiento', { exact: true }).selectOption({ label: macro });
-  await expect(page.getByText('Prioridad: Alta', { exact: true })).toBeVisible();
+  // The history now reads the same words: the preview is the dialog's.
+  await expect(
+    page.getByRole('dialog').getByText('Prioridad: Alta', { exact: true }),
+  ).toBeVisible();
   await page.getByRole('button', { name: 'Aplicar a esta conversación', exact: true }).click();
   await expect(page.getByText('Macro aplicada', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Acciones rápidas', exact: true }).click();
@@ -265,6 +269,13 @@ function chat(name: string, conversation: Record<string, unknown> = {}) {
       ...conversation,
     },
   };
+}
+/** The hospital's agent switch as the session reads it, whatever the local tenant has. */
+async function agentSwitch(page: Page, agentEnabled: boolean) {
+  await page.route('**/api/crm/me', async (route) => {
+    const me = await (await route.fetch()).json();
+    return route.fulfill({ json: { ...me, tenant: { ...me.tenant, agentEnabled } } });
+  });
 }
 async function serveInbox(page: Page, chats: ReturnType<typeof chat>[], urls: string[] = []) {
   await page.route('**/api/crm/conversations?*', (route) => {
@@ -468,11 +479,25 @@ test('MR-19 bulk assignment has no default target, asks before removing the owne
   await expect(ana).toBeChecked();
 });
 
+test('with the hospital agent off a conversation cannot be handed to it', async ({ page }) => {
+  const human = chat('Ana Sintética');
+  await serveInbox(page, [human]);
+  await agentSwitch(page, false);
+  const agent = await counter(page, '**/api/crm/conversations/' + human.conversation.id, 'PATCH');
+  await login(page);
+  await nav(page, 'Bandeja de entrada');
+  await page.locator('.conversation-card').filter({ hasText: 'Ana Sintética' }).click();
+  await expect(page.getByRole('button', { name: 'Activar agente' })).toBeDisabled();
+  await expect(page.getByText(/El agente está apagado para todo el hospital/)).toBeVisible();
+  expect(agent).toHaveLength(0);
+});
+
 test('MR-20 activating the agent and deleting a view, a macro or a saved reply ask first', async ({
   page,
 }) => {
   const human = chat('Ana Sintética');
   await serveInbox(page, [human]);
+  await agentSwitch(page, true);
   await page.route('**/api/crm/inbox-views', (route) =>
     route.request().method() === 'GET'
       ? route.fulfill({ json: [{ id: 'v-1', name: 'Urgentes', filters: '{}' }] })

@@ -244,13 +244,17 @@ export function TeamWorkspace({
               <TableHeader>
                 <TableRow>
                   <TableHead>Persona</TableHead>
-                  <TableHead>Rol del Hospital</TableHead>
-                  <TableHead>Abiertas</TableHead>
-                  <TableHead>Pendientes</TableHead>
-                  <TableHead>Pospuestas</TableHead>
-                  <TableHead>Atención</TableHead>
-                  {admin && <TableHead>WhatsApp para pacientes</TableHead>}
-                  {admin && <TableHead>Acceso a Recepción</TableHead>}
+                  <TableHead className="hidden md:table-cell">Rol del Hospital</TableHead>
+                  <TableHead className="hidden md:table-cell">Abiertas</TableHead>
+                  <TableHead className="hidden md:table-cell">Pendientes</TableHead>
+                  <TableHead className="hidden md:table-cell">Pospuestas</TableHead>
+                  <TableHead className="hidden md:table-cell">Atención</TableHead>
+                  {admin && (
+                    <TableHead className="hidden md:table-cell">WhatsApp para pacientes</TableHead>
+                  )}
+                  {admin && (
+                    <TableHead className="hidden md:table-cell">Acceso a Recepción</TableHead>
+                  )}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -258,82 +262,93 @@ export function TeamWorkspace({
                   .filter((m) =>
                     m.name.toLocaleLowerCase('es').includes(search.toLocaleLowerCase('es')),
                   )
-                  .map((m) => (
-                    <TableRow key={m.subject}>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium">{m.name}</span>
-                          {m.subject === me.subject && <Badge variant="secondary">Tú</Badge>}
-                          {m.disabled && <Badge variant="outline">Desactivado</Badge>}
-                        </div>
-                      </TableCell>
-                      <TableCell>{roles[m.role] ?? m.role}</TableCell>
-                      <TableCell>{m.open}</TableCell>
-                      <TableCell>{m.pending}</TableCell>
-                      <TableCell>{m.snoozed}</TableCell>
-                      <TableCell>
+                  .map((m) => {
+                    const whatsApp =
+                      m.role === 'doctor' ? (
+                        <form
+                          key={m.whatsAppPhone ?? ''}
+                          className="flex items-center gap-2"
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            saveWhatsApp(
+                              m,
+                              String(new FormData(e.currentTarget).get('phone') ?? ''),
+                            );
+                          }}
+                        >
+                          <Input
+                            name="phone"
+                            type="tel"
+                            className="w-40"
+                            aria-label={`WhatsApp de ${m.name} para pacientes`}
+                            defaultValue={m.whatsAppPhone ?? ''}
+                            placeholder="+503 7000 0000"
+                            maxLength={20}
+                          />
+                          <Button variant="outline" size="sm" disabled={busy !== null}>
+                            Guardar
+                          </Button>
+                        </form>
+                      ) : null;
+                    const conversations = (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => onOpenInbox('member:' + m.subject)}
+                      >
+                        Ver conversaciones
+                      </Button>
+                    );
+                    const access = (
+                      <ConfirmAction
+                        ask={!m.disabled}
+                        title={`¿Desactivar el acceso de ${m.name}?`}
+                        description="No podrá entrar a Recepción hasta que restaures su acceso."
+                        action="Desactivar acceso"
+                        destructive
+                        onConfirm={() => toggle(m)}
+                      >
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => onOpenInbox('member:' + m.subject)}
+                          disabled={busy !== null || m.subject === me.subject}
                         >
-                          Ver conversaciones
+                          {m.disabled ? 'Restaurar acceso' : 'Desactivar acceso'}
                         </Button>
-                      </TableCell>
-                      {admin && (
-                        <TableCell>
-                          {m.role === 'doctor' ? (
-                            <form
-                              key={m.whatsAppPhone ?? ''}
-                              className="flex items-center gap-2"
-                              onSubmit={(e) => {
-                                e.preventDefault();
-                                saveWhatsApp(
-                                  m,
-                                  String(new FormData(e.currentTarget).get('phone') ?? ''),
-                                );
-                              }}
-                            >
-                              <Input
-                                name="phone"
-                                type="tel"
-                                className="w-40"
-                                aria-label={`WhatsApp de ${m.name} para pacientes`}
-                                defaultValue={m.whatsAppPhone ?? ''}
-                                placeholder="+503 7000 0000"
-                                maxLength={20}
-                              />
-                              <Button variant="outline" size="sm" disabled={busy !== null}>
-                                Guardar
-                              </Button>
-                            </form>
-                          ) : (
-                            '—'
-                          )}
+                      </ConfirmAction>
+                    );
+                    return (
+                      <TableRow key={m.subject}>
+                        <TableCell className="whitespace-normal">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium">{m.name}</span>
+                            {m.subject === me.subject && <Badge variant="secondary">Tú</Badge>}
+                            {m.disabled && <Badge variant="outline">Desactivado</Badge>}
+                          </div>
+                          {/* On a phone the secondary columns read as one line and the actions stack here. */}
+                          <div className="mt-1 flex flex-col items-start gap-2 md:hidden">
+                            <span className="text-xs text-muted-foreground">
+                              {roles[m.role] ?? m.role} · {m.open} abiertas · {m.pending} pendientes
+                            </span>
+                            {conversations}
+                            {admin && whatsApp}
+                            {admin && access}
+                          </div>
                         </TableCell>
-                      )}
-                      {admin && (
-                        <TableCell>
-                          <ConfirmAction
-                            ask={!m.disabled}
-                            title={`¿Desactivar el acceso de ${m.name}?`}
-                            description="No podrá entrar a Recepción hasta que restaures su acceso."
-                            action="Desactivar acceso"
-                            destructive
-                            onConfirm={() => toggle(m)}
-                          >
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              disabled={busy !== null || m.subject === me.subject}
-                            >
-                              {m.disabled ? 'Restaurar acceso' : 'Desactivar acceso'}
-                            </Button>
-                          </ConfirmAction>
+                        <TableCell className="hidden md:table-cell">
+                          {roles[m.role] ?? m.role}
                         </TableCell>
-                      )}
-                    </TableRow>
-                  ))}
+                        <TableCell className="hidden md:table-cell">{m.open}</TableCell>
+                        <TableCell className="hidden md:table-cell">{m.pending}</TableCell>
+                        <TableCell className="hidden md:table-cell">{m.snoozed}</TableCell>
+                        <TableCell className="hidden md:table-cell">{conversations}</TableCell>
+                        {admin && (
+                          <TableCell className="hidden md:table-cell">{whatsApp ?? '—'}</TableCell>
+                        )}
+                        {admin && <TableCell className="hidden md:table-cell">{access}</TableCell>}
+                      </TableRow>
+                    );
+                  })}
               </TableBody>
             </Table>
           )}

@@ -16,6 +16,7 @@ import {
   X,
 } from 'lucide-react';
 import { fetcher, type Me } from '@/lib/api';
+import { zoneName } from '@/lib/format';
 import { AgentMetrics } from './agent-metrics';
 import { Alert, AlertDescription } from './ui/alert';
 import { Badge } from './ui/badge';
@@ -79,7 +80,7 @@ const categories = [
   ['clinical', 'Consulta de Hospital'],
   ['review', 'Requiere revisión'],
   ['ai_action', 'Acciones del agente'],
-  ['crm', 'Actualizaciones CRM'],
+  ['crm', 'Cambios en la ficha'],
 ];
 const titles: Record<string, string> = {
   response: 'Respondió al paciente',
@@ -183,7 +184,7 @@ function EventCard({
               ? 'Intentó responder al paciente'
               : event.kind === 'response' && event.deliveryStatus === 'sending'
                 ? 'Está enviando una respuesta'
-                : (titles[event.kind] ?? 'Registró una acción en el CRM')}
+                : (titles[event.kind] ?? 'Registró una acción')}
           </p>
           {event.careType === 'unknown' && (
             <small className="text-xs text-muted-foreground">
@@ -387,7 +388,8 @@ export function ActivityWorkspace({
           </div>
           <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
             <span className="flex items-center gap-2">
-              <CalendarDays className="size-4 shrink-0" /> Fechas y horas de {me.tenant.timeZone}
+              <CalendarDays className="size-4 shrink-0" /> Fechas y horas ·{' '}
+              {zoneName(me.tenant.timeZone)}
             </span>
             {patient && (
               <span className="flex min-w-0 items-center gap-1">

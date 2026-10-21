@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dayInZone, inZone, noShowLine } from '../src/lib/format.ts';
+import { dayInZone, inZone, noShowLine, zoneName } from '../src/lib/format.ts';
 
 // MR-23: la hora la dicta la zona del hospital, no la del navegador del recepcionista.
 const lateNight = '2026-10-17T03:30:00Z'; // 21:30 del 16 de octubre en San Salvador; 12:30 del 17 en Tokio
@@ -36,4 +36,10 @@ test('says how many times the patient did not come, and how many in a row', () =
     noShowLine({ noShows: 4, consecutiveNoShows: 2 }),
     'No asistió 4 veces · 2 seguidas',
   );
+});
+
+test('names the hospital zone as staff say it, never its IANA id', () => {
+  assert.equal(zoneName('America/El_Salvador'), 'Hora de El Salvador');
+  assert.doesNotMatch(zoneName('America/Guatemala'), /America\//);
+  assert.equal(zoneName('No/Existe'), 'No/Existe');
 });

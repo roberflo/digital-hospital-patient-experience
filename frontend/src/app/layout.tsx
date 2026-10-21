@@ -19,7 +19,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <TooltipProvider>
             <SessionRecovery>{children}</SessionRecovery>
           </TooltipProvider>
-          <Toaster richColors position="bottom-right" />
+          <Toaster
+            richColors
+            position="bottom-right"
+            containerAriaLabel="Notificaciones"
+            toastOptions={{ closeButtonAriaLabel: 'Cerrar notificación' }}
+          />
         </ThemeProvider>
       </body>
     </html>

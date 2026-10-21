@@ -11,8 +11,8 @@ public static class InboxEndpoints
             var row=await db.Conversations.SingleOrDefaultAsync(x=>x.Id==id);if(row is null)return Results.NotFound();
             if(b.ExpectedRevision is {} revision&&revision!=row.Revision)return Results.Conflict(new{title="La conversación cambió; actualiza antes de guardar"});
             var changes=new List<string>();
-            if(b.State is {} state){InboxWorkflow.SetState(row,state,b.SnoozedUntil);changes.Add("Estado: "+state);}
-            if(b.Priority is {} priority){if(!InboxWorkflow.Priorities.Contains(priority))throw new ArgumentException("Prioridad inválida");row.Priority=priority;changes.Add("Prioridad: "+priority);}
+            if(b.State is {} state){InboxWorkflow.SetState(row,state,b.SnoozedUntil);changes.Add("Estado: "+InboxWorkflow.Name(state));}
+            if(b.Priority is {} priority){if(!InboxWorkflow.Priorities.Contains(priority))throw new ArgumentException("Prioridad inválida");row.Priority=priority;changes.Add("Prioridad: "+InboxWorkflow.Name(priority));}
             if(b.Labels is {} labels){row.Labels=InboxWorkflow.Labels(labels);changes.Add("Etiquetas: "+row.Labels);}
             if(changes.Count==0)throw new ArgumentException("Indica el cambio que quieres guardar");
             row.Revision++;row.UpdatedAt=DateTimeOffset.UtcNow;

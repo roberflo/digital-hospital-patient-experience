@@ -312,6 +312,13 @@ public static class Rules
         var value = new string(phone.Where(char.IsAsciiDigit).ToArray());
         if (value.Length is < 8 or > 15 || value.StartsWith("0")) throw new ArgumentException("Teléfono internacional inválido"); return value;
     }
+    /// <summary>A contact typed by the team: a Salvadoran number written locally (7000-0000) gets 503, the code WhatsApp delivers it with,
+    /// so it is the same contact as its messages. An explicit «+», another length or another first digit is taken as written.</summary>
+    public static string ContactPhone(string phone)
+    {
+        var value = Phone(phone);
+        return value.Length == 8 && value[0] is '2' or '6' or '7' && !phone.TrimStart().StartsWith('+') ? "503" + value : value;
+    }
     public static string PhoneHash(string phone, string key) => Convert.ToHexString(HMACSHA256.HashData(Encoding.UTF8.GetBytes(key), Encoding.UTF8.GetBytes(Phone(phone))));
     public static string Required(string? value, int max = 200) => string.IsNullOrWhiteSpace(value) || value.Length > max ? throw new ArgumentException($"Campo requerido (máximo {max} caracteres)") : value.Trim();
     public static bool VerifySignature(byte[] body, string signature, string secret)

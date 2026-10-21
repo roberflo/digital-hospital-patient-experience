@@ -30,9 +30,9 @@ export function DashboardView({
   const metrics = [
     {
       icon: MessageCircle,
-      label: 'Conversaciones abiertas',
+      label: 'Sin resolver',
       value: stats?.conversations,
-      detail: 'Tu bandeja de atención',
+      detail: 'Abiertas, pendientes y pospuestas',
       view: 'inbox',
     },
     {

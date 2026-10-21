@@ -3,7 +3,7 @@ import { useState } from 'react';
 import useSWR from 'swr';
 import { AlertCircle, CalendarDays, RefreshCw } from 'lucide-react';
 import { fetcher, type Contact, type Me } from '@/lib/api';
-import { noShowLine } from '@/lib/format';
+import { noShowLine, zoneName } from '@/lib/format';
 import { Alert, AlertDescription } from './ui/alert';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -62,7 +62,7 @@ export function PatientAppointments({ contact, me }: { contact: Contact; me: Me 
           {expanded && (
             <>
               <p className="text-xs text-muted-foreground">
-                Próximos 31 días · {me.tenant.timeZone}
+                Próximos 31 días · {zoneName(me.tenant.timeZone)}
               </p>
               {isLoading && (
                 <p className="flex items-center gap-2 text-xs text-muted-foreground">

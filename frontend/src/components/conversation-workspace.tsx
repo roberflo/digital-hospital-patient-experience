@@ -199,7 +199,7 @@ export function CustomerCrm({ chat, onChange }: { chat: Chat; onChange: () => vo
     <>
       <section className="flex flex-col gap-3">
         <div className="flex items-center justify-between gap-2">
-          <h4 className="text-sm font-medium">Ficha del cliente · CRM</h4>
+          <h4 className="text-sm font-medium">Ficha del paciente</h4>
           <Button variant="ghost" size="sm" onClick={() => setEdit(true)}>
             Editar ficha
           </Button>
@@ -207,7 +207,7 @@ export function CustomerCrm({ chat, onChange }: { chat: Chat; onChange: () => vo
         {error && (
           <Alert variant="destructive">
             <AlertCircle />
-            <AlertDescription>No se pudo cargar el contexto CRM.</AlertDescription>
+            <AlertDescription>No se pudo cargar la ficha del paciente.</AlertDescription>
           </Alert>
         )}
         <p className="text-sm break-words text-muted-foreground">
@@ -226,7 +226,11 @@ export function CustomerCrm({ chat, onChange }: { chat: Chat; onChange: () => vo
           }}
         />
         <p className="text-xs text-muted-foreground">
-          {data?.conversations.length ?? '—'} conversaciones vinculadas a esta ficha.
+          {data?.conversations.length ?? '—'}{' '}
+          {data?.conversations.length === 1
+            ? 'conversación vinculada'
+            : 'conversaciones vinculadas'}{' '}
+          a esta ficha.
         </p>
         <div className="flex items-center justify-between gap-2">
           <h4 className="text-sm font-medium">Seguimientos</h4>
@@ -241,7 +245,7 @@ export function CustomerCrm({ chat, onChange }: { chat: Chat; onChange: () => vo
         </div>
         {data?.opportunities.length === 0 && (
           <p className="text-xs text-muted-foreground">
-            Crea un seguimiento para continuar la atención en el CRM.
+            Crea un seguimiento para continuar la atención.
           </p>
         )}
         {data?.opportunities.map((o) => (
@@ -282,7 +286,7 @@ export function CustomerCrm({ chat, onChange }: { chat: Chat; onChange: () => vo
       <Dialog open={edit} onOpenChange={setEdit}>
         <DialogContent className="max-h-dvh overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Ficha CRM del cliente</DialogTitle>
+            <DialogTitle>Ficha del paciente</DialogTitle>
             <DialogDescription>
               Los cambios se reflejan en Contactos y en todas sus conversaciones. El teléfono
               conserva su historial.
@@ -304,7 +308,7 @@ export function CustomerCrm({ chat, onChange }: { chat: Chat; onChange: () => vo
                 });
                 await refresh();
                 setEdit(false);
-                toast.success('Ficha CRM actualizada');
+                toast.success('Ficha actualizada');
               } catch (err) {
                 toast.error((err as Error).message);
               } finally {
@@ -363,7 +367,7 @@ export function CustomerCrm({ chat, onChange }: { chat: Chat; onChange: () => vo
             </FieldGroup>
             <HospitalCommercialLink />
             <DialogFooter>
-              <Button disabled={busy}>Guardar ficha CRM</Button>
+              <Button disabled={busy}>Guardar ficha</Button>
             </DialogFooter>
           </form>
         </DialogContent>
@@ -373,7 +377,7 @@ export function CustomerCrm({ chat, onChange }: { chat: Chat; onChange: () => vo
           <DialogHeader>
             <DialogTitle>Seguimiento de esta conversación</DialogTitle>
             <DialogDescription>
-              Quedará vinculado al cliente, al hilo de WhatsApp y al pipeline del CRM.
+              Quedará vinculado al paciente, a su conversación de WhatsApp y a Seguimientos.
             </DialogDescription>
           </DialogHeader>
           <form
@@ -392,7 +396,7 @@ export function CustomerCrm({ chat, onChange }: { chat: Chat; onChange: () => vo
                 });
                 await refresh();
                 setCreate(false);
-                toast.success('Seguimiento creado en CRM');
+                toast.success('Seguimiento creado');
               } catch (err) {
                 toast.error((err as Error).message);
               } finally {
@@ -428,7 +432,7 @@ export function CustomerCrm({ chat, onChange }: { chat: Chat; onChange: () => vo
               </Field>
             </FieldGroup>
             <DialogFooter>
-              <Button disabled={busy}>Crear seguimiento CRM</Button>
+              <Button disabled={busy}>Crear seguimiento</Button>
             </DialogFooter>
           </form>
         </DialogContent>

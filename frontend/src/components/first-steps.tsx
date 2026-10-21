@@ -14,6 +14,7 @@ import {
   type StepId,
   type StepState,
 } from '@/lib/first-steps';
+import { zoneName } from '@/lib/format';
 import { refreshHospitalIdentity } from '@/lib/hospital-identity';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -29,6 +30,7 @@ import {
 } from './ui/item';
 import { Progress } from './ui/progress';
 import { Spinner } from './ui/spinner';
+import { ConfirmAction } from './confirm-action';
 import { CopyAccessLink, type Workload } from './team-workspace';
 import { useWhatsAppConnect, WhatsAppLinkFlow } from './whatsapp-link-flow';
 
@@ -134,6 +136,10 @@ export function FirstSteps({ me, onNavigate }: { me: Me; onNavigate: (view: stri
     workload,
   });
   if (!steps) return null;
+  // The agent answers through the hospital and a number that receives: without them it would answer nobody.
+  const agentReady = steps
+    .filter((s) => s.id === 'hospital' || s.id === 'whatsapp')
+    .every((s) => s.state === 'done');
 
   async function act(run: () => Promise<unknown>, done: string) {
     setBusy(true);
@@ -179,8 +185,8 @@ export function FirstSteps({ me, onNavigate }: { me: Me; onNavigate: (view: stri
         return (
           hospital && (
             <p className={note}>
-              <span className="font-medium text-foreground">{hospital.name}</span> · zona horaria{' '}
-              {hospital.timeZone}
+              <span className="font-medium text-foreground">{hospital.name}</span> ·{' '}
+              {zoneName(hospital.timeZone)}
             </p>
           )
         );
@@ -211,8 +217,8 @@ export function FirstSteps({ me, onNavigate }: { me: Me; onNavigate: (view: stri
           )}
           {need === 'reception' && (
             <p className="text-sm text-destructive">
-              {channel?.name ?? 'Tu número'} está activo, pero Kapso aún no entrega sus mensajes a
-              Recepción. Pulsa Verificar conexión para registrar la recepción de nuevo.
+              {channel?.name ?? 'Tu número'} está activo, pero todavía no recibimos mensajes de este
+              número. Pulsa Verificar conexión.
             </p>
           )}
           <WhatsAppLinkFlow flow={flow} />
@@ -238,11 +244,20 @@ export function FirstSteps({ me, onNavigate }: { me: Me; onNavigate: (view: stri
       state === 'pending' && (
         <>
           <p className={note}>
-            Al activarlo, el agente atiende las conversaciones nuevas de tus números activos.
+            {agentReady
+              ? 'Al activarlo, el agente atiende las conversaciones nuevas de tus números activos.'
+              : 'Primero conecta tu hospital y un número de WhatsApp que reciba mensajes: sin ellos el agente no puede responder.'}
           </p>
-          <Button size="sm" disabled={busy} onClick={activateAgent}>
-            Activar agente
-          </Button>
+          <ConfirmAction
+            title="¿Activar el agente?"
+            description="Responderá a todos los pacientes que escriban a tus números activos."
+            action="Activar agente"
+            onConfirm={activateAgent}
+          >
+            <Button size="sm" disabled={busy || !agentReady}>
+              Activar agente
+            </Button>
+          </ConfirmAction>
         </>
       ),
   };

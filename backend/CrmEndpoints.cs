@@ -41,7 +41,7 @@ public static class CrmEndpoints
         {
             using var contactLease = await locks.Lock(id);
             var row = await db.Contacts.SingleOrDefaultAsync(x => x.Id == id); if (row is null) return Results.NotFound();
-            if (row.Phone != Rules.Phone(b.Phone))
+            if (row.Phone != Rules.ContactPhone(b.Phone))
             {
                 if (row.HospitalCustomerId is not null || await db.Opportunities.AnyAsync(x=>x.ContactId==id&&x.HospitalPurchaseRequest!=null) || await db.Conversations.AnyAsync(x => x.ContactId == id)) throw new ArgumentException("Este teléfono tiene conversaciones. Crea otro contacto para conservar separado su historial.");
                 row.PatientId = null;
@@ -155,7 +155,7 @@ public static class CrmEndpoints
         if (!hospitalConnected) { row.Name = name; row.TimeZone = b.TimeZone; }
         row.Guide = b.Guide; row.AgentEnabled = b.AgentEnabled;
     }
-    static void SetContact(Contact row, ContactInput b, IConfiguration c) { row.Name = Rules.Required(b.Name); row.Phone = Rules.Phone(b.Phone); row.PhoneHash = Rules.PhoneHash(b.Phone, c["PHONE_HASH_KEY"]!); row.Email = b.Email ?? ""; row.Tags = b.Tags ?? ""; if (row.Email.Length > 320 || row.Tags.Length > 500) throw new ArgumentException("Campo demasiado largo"); }
+    static void SetContact(Contact row, ContactInput b, IConfiguration c) { row.Name = Rules.Required(b.Name); row.Phone = Rules.ContactPhone(b.Phone); row.PhoneHash = Rules.PhoneHash(row.Phone, c["PHONE_HASH_KEY"]!); row.Email = b.Email ?? ""; row.Tags = b.Tags ?? ""; if (row.Email.Length > 320 || row.Tags.Length > 500) throw new ArgumentException("Campo demasiado largo"); }
     static void ValidateStage(string stage) { if (stage is not ("new" or "contacted" or "scheduled" or "won" or "lost")) throw new ArgumentException("Etapa inválida"); }
 }
 public record ContactInput(string Name, string Phone, string? Email, string? Tags);

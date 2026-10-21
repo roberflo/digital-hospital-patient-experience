@@ -3,6 +3,8 @@ using Xunit;
 
 public class InboxWorkflowTests
 {
+    [Fact]
+    public void ActivityNamesEveryStateAndPriorityInSpanish()=>Assert.All(InboxWorkflow.States.Concat(InboxWorkflow.Priorities),v=>Assert.NotEqual(v,InboxWorkflow.Name(v)));
     [Theory]
     [InlineData("pending", "human")]
     [InlineData("resolved", "closed")]
