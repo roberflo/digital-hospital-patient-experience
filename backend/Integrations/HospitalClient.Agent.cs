@@ -43,6 +43,31 @@ public sealed partial class HospitalClient
         // Everything but the caller giving up, as below: an answer that cannot be read (a proxy's page) is not worth the turn either.
         catch (Exception ex) when (!ct.IsCancellationRequested) { Degraded("clinic-contact", tenantId, ex); return null; }
     }
+    /// <summary>General number (S3): the recipients of a hospital without Recepción, from criterio 41 only. Never the day agenda or the patient record (B7).</summary>
+    public async Task<IReadOnlyList<HospitalReminderRecipient>> GetReminderRecipientsAsync(Guid tenantId, DateOnly from, DateOnly to, CancellationToken ct = default)
+    {
+        if (to < from || to.DayNumber - from.DayNumber > 6) throw new ArgumentException("Consulta hasta 7 días de destinatarios");
+        return (await ReadAsync<HospitalReminderRecipients>(tenantId, $"v1/agenda/whatsapp-reminders?from={from:yyyy-MM-dd}&to={to:yyyy-MM-dd}", ct)).Rows ?? [];
+    }
+    /// <summary>General number (criterio 20): L1, strictly. 404 is «nothing published» (null); any other failure is thrown, so a Hospital that is down
+    /// is retried instead of being reported as a missing name.</summary>
+    public async Task<HospitalClinicContact?> GetOutboundContactAsync(Guid tenantId, CancellationToken ct = default)
+    {
+        try { return await ReadAsync<HospitalClinicContact>(tenantId, "v1/agenda/clinic-contact", ct); }
+        catch (HospitalIntegrationException ex) when (ex.Code == "hospital.http_404") { return null; }
+    }
+    /// <summary>Criterio 25b: a BAJA on the general number withdraws the patient's WhatsApp authorisation in Hospital, origin «whatsapp-baja».
+    /// <paramref name="optedOutAt"/> is when the BAJA arrived: Hospital never withdraws an authorisation recorded after it (criterio 33).</summary>
+    public async Task WithdrawWhatsAppConsentAsync(Guid tenantId, Guid patientId, DateTimeOffset optedOutAt, CancellationToken ct = default)
+    {
+        using var response = await SendAsync(tenantId, HttpMethod.Post, $"v1/patients/{patientId:D}/whatsapp-reminders/consent/withdraw", new { origin = "whatsapp-baja", optedOutAt }, ct);
+    }
+    /// <summary>Criterios 22 y 27: the patient's own cancellation from the general number. No read of the record first: criterio 41 was just re-read.</summary>
+    public async Task CancelReminderAppointmentAsync(Guid tenantId, Guid appointmentId, CancellationToken ct = default)
+    {
+        var cancellation = AppointmentCancellation.From("patient-requested");
+        using var response = await SendAsync(tenantId, HttpMethod.Post, $"v1/agenda/{appointmentId:D}/cancel", new { reason = cancellation.Reason, cancelledByPatient = cancellation.CancelledByPatient }, ct);
+    }
     /// <summary>These two reads fail in silence for the patient, so a failure that stays would be seen by nobody: it is logged. A 404 is an
     /// answer (nothing published, or a Hospital without the route), not a failure. Only the error's type or code: never a body, a URL or a token.</summary>
     void Degraded(string read, Guid tenantId, Exception ex)
@@ -75,7 +100,16 @@ public sealed partial class HospitalClient
     }
 }
 /// <summary>Hospital also answers how long it takes to confirm an online request; that is about its web form, not something the WhatsApp agent says, so it is not read.</summary>
-public sealed record HospitalClinicContact(string? PublicAddress, string? PublicPhone);
+/// <remarks><see cref="OutboundDisplayName"/>: the name a person approved for messages to patients (the live booking link's public name,
+/// enmienda E-RL1); the general number's reminder names the clinic with it and nothing else (criterio 20).</remarks>
+public sealed record HospitalClinicContact(string? PublicAddress, string? PublicPhone, string? OutboundDisplayName = null);
+/// <summary>Criterio 41's minimal contract: one booked appointment whose patient has a current WhatsApp authorisation tied to this phone, and
+/// since when that authorisation holds (A20: an authorisation recorded after a BAJA on the general number counts again, for that hospital). Nothing else.</summary>
+public sealed record HospitalReminderRecipient(Guid AppointmentId, Guid PatientId, DateTimeOffset ScheduledStart, string Phone, DateTimeOffset? ConsentSince = null)
+{
+    public override string ToString() => $"HospitalReminderRecipient {AppointmentId}";
+}
+public sealed record HospitalReminderRecipients(IReadOnlyList<HospitalReminderRecipient> Rows);
 public sealed record HospitalClinicianDiscipline(Guid ClinicianId, string? Discipline);
 public sealed record HospitalClinicianDisciplines(IReadOnlyList<HospitalClinicianDiscipline>? Clinicians);
 public sealed record HospitalPatientRegistration(string GivenNames, string FamilyNames, DateOnly BirthDate, string Sex, string Phone,

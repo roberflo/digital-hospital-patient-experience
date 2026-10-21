@@ -15,10 +15,10 @@ public sealed class KapsoClient(HttpClient http, IConfiguration config)
         var created = await Platform(HttpMethod.Post, "customers", new { customer = new { name, external_customer_id = externalId } }, ct);
         return created.GetProperty("data").GetProperty("id").GetString()!;
     }
-    public async Task<JsonElement> Platform(HttpMethod method, string path, object? body = null, CancellationToken ct = default)
+    public async Task<JsonElement> Platform(HttpMethod method, string path, object? body = null, CancellationToken ct = default, bool general = false)
     {
         using var req = new HttpRequestMessage(method, "https://api.kapso.ai/platform/v1/" + path);
-        req.Headers.Add("X-API-Key", config["KAPSO_API_KEY"] ?? throw new ArgumentException("Kapso no configurado"));
+        req.Headers.Add("X-API-Key", general ? GeneralKey() : config["KAPSO_API_KEY"] ?? throw new ArgumentException("Kapso no configurado"));
         if (body is not null) req.Content = JsonContent.Create(body);
         using var res = await http.SendAsync(req, ct); res.EnsureSuccessStatusCode(); return await res.Content.ReadFromJsonAsync<JsonElement>(ct);
     }
@@ -40,19 +40,23 @@ public sealed class KapsoClient(HttpClient http, IConfiguration config)
         // Accepted but unreadable: it may have gone out, so the caller treats it like a 5xx (uncertain, never retried).
         throw new HttpRequestException("Kapso aceptó el envío sin devolver el id del mensaje");
     }
-    public async Task<JsonElement> ReminderTemplate(string number, string name, string language, CancellationToken ct = default)
+    public async Task<JsonElement> ReminderTemplate(string number, string name, string language, CancellationToken ct = default, bool general = false)
     {
-        var raw = await Platform(HttpMethod.Get, "whatsapp/phone_numbers/" + Uri.EscapeDataString(number), ct: ct);
+        var raw = await Platform(HttpMethod.Get, "whatsapp/phone_numbers/" + Uri.EscapeDataString(number), ct: ct, general: general);
         var data = raw.TryGetProperty("data", out var d) ? d : raw;
         var waba = data.GetProperty("business_account_id").GetString()!;
-        using var req = Request(HttpMethod.Get, Uri.EscapeDataString(waba) + "/message_templates?name=" + Uri.EscapeDataString(name) + "&limit=100");
+        using var req = Request(HttpMethod.Get, general, Uri.EscapeDataString(waba) + "/message_templates?name=" + Uri.EscapeDataString(name) + "&limit=100");
         using var res = await http.SendAsync(req, ct); res.EnsureSuccessStatusCode();
         var payload = await res.Content.ReadFromJsonAsync<JsonElement>(ct);
         return payload.GetProperty("data").EnumerateArray().FirstOrDefault(t => t.GetProperty("name").GetString() == name && t.GetProperty("language").GetString() == language);
     }
     static readonly string[] DayButtons=["Confirmar","Cambiar fecha","Cancelar"];
+    /// <summary>The general number's windows (S3): its own templates, with the clinic's phone; the day before has one «Cancelar cita» (A13, A-P1).</summary>
+    public const string GeneralDayWindow="general_day_before", GeneralHourWindow="general_hour_before";
+    public const string GeneralDayTemplate="recepcion_cita_general_dia_anterior_v1", GeneralHourTemplate="recepcion_cita_general_una_hora_v1";
     /// <summary>The shape a reminder template must have for its window: the hour before is one BODY; the day before is a BODY,
     /// an optional FOOTER and exactly the three quick replies, in that order. The BAJA instruction is in the BODY or the FOOTER.
+    /// The general number's windows also name {{telefono}}, may carry a FOOTER, and its day before has exactly one «Cancelar cita».
     /// Anything else (a header, a URL or phone button, another parameter) is refused.</summary>
     public static bool ValidReminderTemplate(JsonElement template, string window)
     {
@@ -61,24 +65,32 @@ public sealed class KapsoClient(HttpClient http, IConfiguration config)
             || !template.TryGetProperty("parameter_format",out var format) || format.GetString() != "NAMED"
             || !template.TryGetProperty("components",out var components) || components.ValueKind != JsonValueKind.Array) return false;
         var types=components.EnumerateArray().Select(c=>c.GetProperty("type").GetString()).ToArray();
-        var shapeOk=window switch{"hour_before"=>types.SequenceEqual(["BODY"]),"day_before"=>types.SequenceEqual(["BODY","BUTTONS"])||types.SequenceEqual(["BODY","FOOTER","BUTTONS"]),_=>false};
+        var general=window is GeneralDayWindow or GeneralHourWindow;
+        var shapeOk=window switch{
+            "hour_before"=>types.SequenceEqual(["BODY"]),
+            GeneralHourWindow=>types.SequenceEqual(["BODY"])||types.SequenceEqual(["BODY","FOOTER"]),
+            "day_before" or GeneralDayWindow=>types.SequenceEqual(["BODY","BUTTONS"])||types.SequenceEqual(["BODY","FOOTER","BUTTONS"]),
+            _=>false};
         if(!shapeOk)return false;
         var text=components[0].GetProperty("text").GetString()??"";
         var parameters=System.Text.RegularExpressions.Regex.Matches(text,@"\{\{([a-z_]+)\}\}").Select(m=>m.Groups[1].Value).Order().ToArray();
-        var footer=types.Length==3?components[1].GetProperty("text").GetString()??"":"";
-        if(!parameters.SequenceEqual(new[]{"fecha","hora","hospital"})||!(text+"\n"+footer).Contains("BAJA",StringComparison.Ordinal))return false;
-        if(window=="hour_before")return true;
+        var footer=types.Length>1&&types[1]=="FOOTER"?components[1].GetProperty("text").GetString()??"":"";
+        if(!parameters.SequenceEqual(general?new[]{"fecha","hora","hospital","telefono"}:new[]{"fecha","hora","hospital"})||!(text+"\n"+footer).Contains("BAJA",StringComparison.Ordinal))return false;
+        if(window is "hour_before" or GeneralHourWindow)return true;
         var buttons=components[types.Length-1];
         return buttons.TryGetProperty("buttons",out var list)&&list.ValueKind==JsonValueKind.Array
-            &&list.EnumerateArray().Select(b=>b.GetProperty("type").GetString()=="QUICK_REPLY"?b.GetProperty("text").GetString():null).SequenceEqual(DayButtons);
+            &&list.EnumerateArray().Select(b=>b.GetProperty("type").GetString()=="QUICK_REPLY"?b.GetProperty("text").GetString():null).SequenceEqual(general?["Cancelar cita"]:DayButtons);
     }
-    public async Task<bool> ReminderTemplateApproved(string number,string name,string language,string window,CancellationToken ct=default) => ValidReminderTemplate(await ReminderTemplate(number,name,language,ct),window);
-    /// <summary>Sends an approved reminder. <paramref name="buttons"/> are the quick-reply payloads, in the template's button order; the caller composes them.</summary>
-    public async Task<string> SendReminder(string number,string phone,string name,string language,string hospital,string date,string time,CancellationToken ct=default,IReadOnlyList<string>? buttons=null)
+    public async Task<bool> ReminderTemplateApproved(string number,string name,string language,string window,CancellationToken ct=default,bool general=false) => ValidReminderTemplate(await ReminderTemplate(number,name,language,ct,general),window);
+    /// <summary>Sends an approved reminder. <paramref name="buttons"/> are the quick-reply payloads, in the template's button order; the caller composes them.
+    /// <paramref name="general"/>: from the platform's account (criterio 39), never a clinic's key; <paramref name="phoneOfClinic"/> fills {{telefono}}.</summary>
+    public async Task<string> SendReminder(string number,string phone,string name,string language,string hospital,string date,string time,CancellationToken ct=default,IReadOnlyList<string>? buttons=null,bool general=false,string? phoneOfClinic=null)
     {
         if(config["REMINDERS_SEND_ENABLED"]!="true")throw new ArgumentException("Recordatorios en pausa");
-        using var req=Request(HttpMethod.Post,$"{number}/messages");
-        var components=new List<object>{new{type="body",parameters=new[]{new{type="text",parameter_name="hospital",text=hospital},new{type="text",parameter_name="fecha",text=date},new{type="text",parameter_name="hora",text=time}}}};
+        using var req=Request(HttpMethod.Post,general,$"{number}/messages");
+        var values=new List<object>{new{type="text",parameter_name="hospital",text=hospital},new{type="text",parameter_name="fecha",text=date},new{type="text",parameter_name="hora",text=time}};
+        if(phoneOfClinic is not null)values.Add(new{type="text",parameter_name="telefono",text=phoneOfClinic});
+        var components=new List<object>{new{type="body",parameters=values}};
         components.AddRange((buttons??[]).Select((payload,i)=>new{type="button",sub_type="quick_reply",index=i.ToString(System.Globalization.CultureInfo.InvariantCulture),parameters=new[]{new{type="payload",payload}}}));
         req.Content=JsonContent.Create(new{messaging_product="whatsapp",to=Rules.Phone(phone),type="template",template=new{name,language=new{code=language},components}});
         using var res=await http.SendAsync(req,ct);res.EnsureSuccessStatusCode();
@@ -89,6 +101,18 @@ public sealed class KapsoClient(HttpClient http, IConfiguration config)
             &&messages[0].ValueKind==JsonValueKind.Object&&messages[0].TryGetProperty("id",out var id)&&id.ValueKind==JsonValueKind.String&&id.GetString() is {Length:>0} value
             ?value:throw new HttpRequestException("Kapso answered without a message id");
     }
+    /// <summary>The general number's fixed replies (criterios 22–25): from the platform's number and key, gated like the reminders themselves.</summary>
+    public async Task SendGeneral(string phone, string? body, object? interactive = null, CancellationToken ct = default)
+    {
+        if (config["REMINDERS_SEND_ENABLED"] != "true") throw new ArgumentException("Recordatorios en pausa");
+        var payload = new Dictionary<string, object> { { "messaging_product", "whatsapp" }, { "to", Rules.Phone(phone) }, { "type", interactive is null ? "text" : "interactive" } };
+        payload[interactive is null ? "text" : "interactive"] = interactive ?? new { body };
+        using var req = Request(HttpMethod.Post, true, $"{GeneralNumber()}/messages"); req.Content = JsonContent.Create(payload);
+        using var res = await http.SendAsync(req, ct); res.EnsureSuccessStatusCode();
+    }
+    /// <summary>The platform's general number (criterio 39). Missing ⇒ «Cuenta general no configurada»; never a clinic's (criterio 40).</summary>
+    public string GeneralNumber() => config["KAPSO_PLATFORM_PHONE_NUMBER_ID"] is { Length: > 0 } number ? number : throw new ArgumentException("Cuenta general no configurada");
+    public string GeneralKey() => config["KAPSO_PLATFORM_API_KEY"] is { Length: > 0 } key ? key : throw new ArgumentException("Cuenta general no configurada");
     /// <summary>Marks the patient's message as read and shows «escribiendo…» until the next message is sent, or about 25 seconds.</summary>
     public async Task Typing(string number, string messageId, CancellationToken ct = default)
     {
@@ -122,5 +146,6 @@ public sealed class KapsoClient(HttpClient http, IConfiguration config)
         var type = meta.TryGetProperty("mime_type", out var m) ? m.GetString()! : "application/octet-stream";
         return (target.ToArray(), type);
     }
-    HttpRequestMessage Request(HttpMethod method, string path) { var r = new HttpRequestMessage(method, "https://api.kapso.ai/meta/whatsapp/v24.0/" + path); r.Headers.Add("X-API-Key", config["KAPSO_API_KEY"]); return r; }
+    HttpRequestMessage Request(HttpMethod method, string path) => Request(method, false, path);
+    HttpRequestMessage Request(HttpMethod method, bool general, string path) { var r = new HttpRequestMessage(method, "https://api.kapso.ai/meta/whatsapp/v24.0/" + path); r.Headers.Add("X-API-Key", general ? GeneralKey() : config["KAPSO_API_KEY"]); return r; }
 }

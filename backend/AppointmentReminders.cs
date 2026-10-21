@@ -47,7 +47,7 @@ public static class ReminderRules
 
 public enum ReminderAck { Confirmed, AlreadyConfirmed, Rejected, Unverified }
 
-public sealed class AppointmentReminderService(CrmDb db,TenantScope scope,HospitalClient hospital,KapsoClient kapso,ConversationService conversations,IConfiguration config)
+public sealed partial class AppointmentReminderService(CrmDb db,TenantScope scope,HospitalClient hospital,KapsoClient kapso,ConversationService conversations,IConfiguration config)
 {
     /// <summary>For a sync a person starts (MR-11): Hospital sees their token. The reminder worker never calls this.</summary>
     public AppointmentReminderService AsUser(string bearer)=>new(db,scope,hospital.AsUser(bearer),kapso,conversations,config);
@@ -65,6 +65,7 @@ public sealed class AppointmentReminderService(CrmDb db,TenantScope scope,Hospit
     {
         using var lease = await conversations.Lock(ReminderRules.LockId(scope.Id),ct);
         var tenant = await db.Tenants.SingleAsync(t=>t.Id==scope.Id,ct);
+        if(tenant.Mode=="reminders"){await SyncGeneral(tenant,now,ct);return;} // the general number (S3), never this tenant's channels
         if(tenant.ReminderChannelId is not {} channelId) throw new ArgumentException("Selecciona el número general del hospital para los recordatorios.");
         var channel = await db.Channels.SingleOrDefaultAsync(c=>c.Id==channelId,ct);
         if(channel is null || !channel.Enabled) throw new ArgumentException("El canal de recordatorios está desactivado.");
@@ -165,6 +166,8 @@ public sealed class AppointmentReminderService(CrmDb db,TenantScope scope,Hospit
         if(!tenant.RemindersEnabled||config["REMINDERS_SEND_ENABLED"]!="true")return;
         async Task Stop(string status,string reason){row.Status=status;row.Reason=reason;await db.SaveChangesAsync(ct);}
         if(now>row.DueAt.AddMinutes(15)||now>=row.StartsAt){await Stop("skipped","El horario del recordatorio ya pasó.");return;}
+        // Criterio 18: a hospital without Recepción always sends from the general number; one with Recepción never does.
+        if(tenant.Mode=="reminders"){await DispatchGeneral(row,tenant,now,ct);return;}
         var contact=await db.Contacts.AsNoTracking().SingleOrDefaultAsync(c=>c.Id==row.ContactId,ct);
         var channel=await db.Channels.AsNoTracking().SingleOrDefaultAsync(c=>c.Id==row.ChannelId,ct);
         if(contact?.PatientId!=row.PatientId||contact.ReminderConsentAt is null||channel is null||!channel.Enabled||tenant.ReminderChannelId!=row.ChannelId){await Stop("cancelled","Autorización, paciente o canal ya no disponibles.");return;}
@@ -212,14 +215,30 @@ public sealed class AppointmentReminderWorker(IServiceScopeFactory scopes,ILogge
             try
             {
                 using var root=scopes.CreateScope();var db=root.ServiceProvider.GetRequiredService<CrmDb>();
-                var ids=await db.Tenants.Where(t=>t.RemindersEnabled).Select(t=>t.Id).ToListAsync(ct);
-                foreach(var tenant in ids) await RunTenant(scopes,tenant,log,ct);
+                var (full,retryOnly)=await Pass(db,ct);
+                foreach(var tenant in full) await RunTenant(scopes,tenant,log,ct);
+                foreach(var tenant in retryOnly) await RetryTenant(scopes,tenant,log,ct);
             }
             catch(Exception ex) when(!ct.IsCancellationRequested){log.LogWarning("Reminder worker unavailable {ErrorType}",ex.GetType().Name);}
             await Task.Delay(TimeSpan.FromMinutes(1),ct);
         }
     }
 
+    /// <summary>Who this pass serves: hospitals with reminders on get the whole pass; a hospital there only because a BAJA's withdrawal is still
+    /// pending (criterio 25: whatever its mode or pause) gets only that retry, never a sync or a send. Read from the worker's root scope, which has
+    /// no tenant: the pending rows are found across hospitals.</summary>
+    public static async Task<(IReadOnlyList<Guid> Full,IReadOnlyList<Guid> RetryOnly)> Pass(CrmDb db,CancellationToken ct)
+    {
+        var full=await db.Tenants.Where(t=>t.RemindersEnabled).Select(t=>t.Id).ToListAsync(ct);
+        var retry=await db.AppointmentReminders.IgnoreQueryFilters().Where(r=>r.OptOutPendingAt!=null&&!full.Contains(r.TenantId)).Select(r=>r.TenantId).Distinct().ToListAsync(ct);
+        return (full,retry);
+    }
+    public static async Task RetryTenant(IServiceScopeFactory scopes,Guid tenant,ILogger log,CancellationToken ct)
+    {
+        using var s=scopes.CreateScope();s.ServiceProvider.GetRequiredService<TenantScope>().Id=tenant;
+        try { await s.ServiceProvider.GetRequiredService<AppointmentReminderService>().RetryOptOuts(ct); }
+        catch(Exception ex) when(!ct.IsCancellationRequested){log.LogWarning("Reminder opt-out retry unavailable {TenantId} {ErrorType}",tenant,ex.GetType().Name);}
+    }
     /// <summary>One tenant's pass: sync the agenda, then send what is due. Sending has its own deadline, so a sync that spends
     /// its whole budget on a slow Hospital never holds back a reminder already due (it was verified when it was created and
     /// Dispatch re-reads Hospital before sending).</summary>
@@ -227,6 +246,8 @@ public sealed class AppointmentReminderWorker(IServiceScopeFactory scopes,ILogge
     {
         using var s=scopes.CreateScope();s.ServiceProvider.GetRequiredService<TenantScope>().Id=tenant;
         var scoped=s.ServiceProvider.GetRequiredService<CrmDb>();var service=s.ServiceProvider.GetRequiredService<AppointmentReminderService>();
+        try { await service.RetryOptOuts(ct); }
+        catch(Exception ex) when(!ct.IsCancellationRequested){log.LogWarning("Reminder opt-out retry unavailable {TenantId} {ErrorType}",tenant,ex.GetType().Name);scoped.ChangeTracker.Clear();}
         try
         {
             using var deadline=CancellationTokenSource.CreateLinkedTokenSource(ct);deadline.CancelAfter(syncBudget??TimeSpan.FromMinutes(2));

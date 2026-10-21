@@ -70,7 +70,7 @@ public static class WhatsAppEndpoints
         api.MapGet("/channels", async (CrmDb db) => await db.Channels.ToListAsync()).WithMetadata(new PlatformOperable());
         api.MapPost("/channels", async (ChannelInput b, CrmDb db, CurrentUser u, TenantScope t, KapsoClient k, IConfiguration c) =>
         {
-            u.RequireAdmin(); Rules.Required(b.PhoneNumberId, 50); var raw = await k.Platform(HttpMethod.Get, "whatsapp/phone_numbers/" + Uri.EscapeDataString(b.PhoneNumberId));
+            u.RequireAdmin(); Rules.Required(b.PhoneNumberId, 50); GeneralNumber.RequireNotPlatformNumber(b.PhoneNumberId, c); var raw = await k.Platform(HttpMethod.Get, "whatsapp/phone_numbers/" + Uri.EscapeDataString(b.PhoneNumberId));
             var number = raw.TryGetProperty("data", out var d) ? d : raw;
             var customer = number.TryGetProperty("customer_id", out var cust) ? cust.GetString() : null;
             var tenant = await db.Tenants.SingleAsync(x => x.Id == t.Id);
@@ -102,10 +102,8 @@ public static class WhatsAppEndpoints
     }
     public static async Task<IResult> Receive(HttpContext ctx, CrmDb db, TenantScope scope, IConfiguration config, ILoggerFactory logs)
     {
-        if (ctx.Request.ContentLength > 2 * 1024 * 1024) return Results.StatusCode(413);
-        using var buffer = new MemoryStream(); var bytes = new byte[8192]; int read;
-        while ((read = await ctx.Request.Body.ReadAsync(bytes)) > 0) { if (buffer.Length + read > 2 * 1024 * 1024) return Results.StatusCode(413); buffer.Write(bytes, 0, read); }
-        var body = buffer.ToArray(); if (!Rules.VerifySignature(body, ctx.Request.Headers["X-Webhook-Signature"].ToString(), config["KAPSO_WEBHOOK_SECRET"] ?? "")) return Results.Unauthorized();
+        if (await Body(ctx) is not { } body) return Results.StatusCode(413);
+        if (!Rules.VerifySignature(body, ctx.Request.Headers["X-Webhook-Signature"].ToString(), config["KAPSO_WEBHOOK_SECRET"] ?? "")) return Results.Unauthorized();
         // A signed body that is not the expected shape is refused whole, before anything is written.
         JsonDocument json; JsonElement[] items;
         try
@@ -190,6 +188,14 @@ public static class WhatsAppEndpoints
             ? (await db.Messages.AsNoTracking().Where(x => x.ConversationId == id).OrderByDescending(x => x.CreatedAt).Take(200).OrderBy(x => x.CreatedAt).ToListAsync())
                 .Select(m => { if (m.Sender == "patient") m.Body = WhatsAppContent.Shown(m.Body); return m; }).ToList()
             : null;
+    /// <summary>A webhook's raw body, for its signature; null over 2 MB.</summary>
+    internal static async Task<byte[]?> Body(HttpContext ctx)
+    {
+        if (ctx.Request.ContentLength > 2 * 1024 * 1024) return null;
+        using var buffer = new MemoryStream(); var bytes = new byte[8192]; int read;
+        while ((read = await ctx.Request.Body.ReadAsync(bytes)) > 0) { if (buffer.Length + read > 2 * 1024 * 1024) return null; buffer.Write(bytes, 0, read); }
+        return buffer.ToArray();
+    }
     internal static string? Get(JsonElement e, string key) => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(key, out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
 }
 public record SendInput(string Body);

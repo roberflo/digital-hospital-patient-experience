@@ -106,6 +106,7 @@ public static class Hosting
     public static void MapRecepcionApi(this WebApplication app)
     {
         app.MapPlatformOwner();
+        app.MapPlatform(); app.MapGeneralNumber();
         app.MapHospitalConnection();
         app.MapCommercial();
         app.MapReminderEndpoints();

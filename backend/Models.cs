@@ -13,6 +13,9 @@ public sealed class Tenant
     [System.Text.Json.Serialization.JsonIgnore]
     public string? HospitalConnection { get; set; }
     public Guid Id { get; set; } = Guid.NewGuid(); public string Name { get; set; } = "";
+    /// <summary>«reception» (the hospital uses Recepción) or «reminders»: a hospital without Recepción whose appointment reminders go out from the
+    /// platform's general number (recordatorios-whatsapp.spec.md S3). Set only by the platform operator; nobody of a «reminders» hospital signs in.</summary>
+    public string Mode { get; set; } = "reception";
     public string Guide { get; set; } = ""; public bool AgentEnabled { get; set; }
     public string TimeZone { get; set; } = "America/El_Salvador";
     /// <summary>The number the agent gives a patient it hands off; shown as written by the hospital.</summary>
@@ -172,9 +175,16 @@ public sealed class Message : TenantRow
 }
 public sealed class AppointmentReminder : TenantRow
 {
-    public Guid ContactId { get; set; }
+    /// <summary>Null on a reminder of the general number (S3): it has no contact and no channel, only <see cref="RecipientHash"/>.</summary>
+    public Guid? ContactId { get; set; }
     public Guid PatientId { get; set; }
-    public Guid ChannelId { get; set; }
+    public Guid? ChannelId { get; set; }
+    /// <summary>General number only: HMAC of the phone Hospital named as recipient (criterio 41). The phone itself is never stored.</summary>
+    public string? RecipientHash { get; set; }
+    /// <summary>General number only: a BAJA arrived after this was sent and Hospital has not yet recorded the withdrawal (criterio 25b).</summary>
+    public DateTimeOffset? OptOutPendingAt { get; set; }
+    /// <summary>General number only: when Hospital recorded that withdrawal. A later appearance of the patient means a new authorisation (A20).</summary>
+    public DateTimeOffset? OptOutWithdrawnAt { get; set; }
     public Guid AppointmentId { get; set; }
     public Guid? MessageId { get; set; }
     public DateTimeOffset StartsAt { get; set; }
@@ -185,6 +195,10 @@ public sealed class AppointmentReminder : TenantRow
     public DateTimeOffset? AttemptedAt { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
+/// <summary>The general number's opt-out list (criterio 25, A17): only the phone's HMAC, no hospital, patient or body. Not a TenantRow.</summary>
+public sealed class GeneralOptOut { public string PhoneHash { get; set; } = ""; public DateTimeOffset CreatedAt { get; set; } }
+/// <summary>The general number's one-fixed-reply-per-24-h cap (criterios 24, 26): the phone's HMAC and the last reply, nothing else. Not a TenantRow.</summary>
+public sealed class GeneralReplyCap { public string PhoneHash { get; set; } = ""; public DateTimeOffset LastReplyAt { get; set; } }
 public sealed class Job : TenantRow
 {
     public Guid ConversationId { get; set; }
@@ -201,6 +215,7 @@ public sealed class Audit : TenantRow { public string Actor { get; set; } = ""; 
 public sealed class CrmDb(DbContextOptions<CrmDb> options, TenantScope scope, IDataProtectionProvider protection) : DbContext(options)
 {
     public DbSet<AppointmentReminder> AppointmentReminders => Set<AppointmentReminder>();
+    public DbSet<GeneralOptOut> GeneralOptOuts => Set<GeneralOptOut>(); public DbSet<GeneralReplyCap> GeneralReplyCaps => Set<GeneralReplyCap>();
     public DbSet<Tenant> Tenants => Set<Tenant>(); public DbSet<Member> Members => Set<Member>();
     public DbSet<Contact> Contacts => Set<Contact>(); public DbSet<Company> Companies => Set<Company>();
     public DbSet<Opportunity> Opportunities => Set<Opportunity>(); public DbSet<Activity> Activities => Set<Activity>();
@@ -219,6 +234,8 @@ public sealed class CrmDb(DbContextOptions<CrmDb> options, TenantScope scope, ID
         Map<AppointmentReminder>(b);
         b.Entity<AppointmentReminder>().HasIndex(x => new { x.TenantId, x.AppointmentId, x.StartsAt, x.Window }).IsUnique();
         b.Entity<AppointmentReminder>().HasIndex(x => new { x.TenantId, x.Status, x.DueAt });
+        b.Entity<AppointmentReminder>().HasIndex(x => x.RecipientHash); // BAJA finds the general number's sends by hash, across hospitals
+        b.Entity<GeneralOptOut>().HasKey(x => x.PhoneHash); b.Entity<GeneralReplyCap>().HasKey(x => x.PhoneHash); b.Entity<GeneralReplyCap>().HasIndex(x => x.LastReplyAt); // the 24 h purge
         b.Entity<AppointmentReminder>().HasOne<Contact>().WithMany().HasForeignKey(x => new { x.TenantId, x.ContactId }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict);
         b.Entity<AppointmentReminder>().HasOne<Channel>().WithMany().HasForeignKey(x => new { x.TenantId, x.ChannelId }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict);
         Map<ConversationRead>(b); Map<SavedReply>(b); Map<InboxView>(b); Map<ConversationMacro>(b);

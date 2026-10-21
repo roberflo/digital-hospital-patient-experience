@@ -65,6 +65,15 @@ public sealed class WhatsAppOnboardingTests : IAsyncLifetime
         Assert.Equal(1,(await service.Sync(default)).Added);Assert.Equal(0,(await service.Sync(default)).Added);Assert.Equal(1,writes);
         var row=await db.Channels.SingleAsync();Assert.Equal(customer,row.KapsoCustomerId);Assert.True(row.Coexistence);Assert.False(row.Enabled);Assert.False((await db.Tenants.SingleAsync(x=>x.Id==scope.Id)).AgentEnabled);
     }
+    // recordatorios-whatsapp S3 (nit): the platform's general number is never registered as a clinic's channel, even if Kapso lists it.
+    [Fact] public async Task ThePlatformNumberIsNeverRegisteredAsAClinicsChannel()
+    {
+        config=new ConfigurationBuilder().AddConfiguration(config).AddInMemoryCollection(new Dictionary<string,string?>{["KAPSO_PLATFORM_PHONE_NUMBER_ID"]=number}).Build();
+        var service=Service(_=>Task.FromResult(Json(new{data=new[]{Number()},meta=new{total_pages=1}})));
+        var error=await Assert.ThrowsAsync<ArgumentException>(()=>service.Sync(default));
+        Assert.Contains("número general de la plataforma",error.Message);
+        Assert.Empty(await db.Channels.ToListAsync());
+    }
     [Theory][InlineData("admin")][InlineData("platform")] public async Task ProviderFilterIsNotTrustedForForeignCustomer(string role)
     {
         As(role);

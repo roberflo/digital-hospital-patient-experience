@@ -50,7 +50,10 @@ public static class Identity
         var sub = ctx.User.FindFirst("sub")?.Value; var role = MapRole(ctx.User);
         if (string.IsNullOrEmpty(sub) || role is null) return false;
         scope.Id = tenant;
-        if (!await db.Tenants.AnyAsync(t => t.Id == tenant))
+        var mode = await db.Tenants.Where(t => t.Id == tenant).Select(t => t.Mode).SingleOrDefaultAsync();
+        // A hospital on the general number has no Recepción: nobody of it signs in or becomes a Member (recordatorios-whatsapp.spec.md criterio 17).
+        if (mode == "reminders") { ctx.Items["hospital-reminders-only"] = true; return false; }
+        if (mode is null)
         {
             // The hospital's own Administrador opens its space by signing in; no operator step.
             // HOSPITAL_SELF_ONBOARDING=false returns that to the operator (BOOTSTRAP_TENANT_ID).

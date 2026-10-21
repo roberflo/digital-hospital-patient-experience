@@ -8,6 +8,7 @@ var config = builder.Configuration;
 // It never adds a second issuer: every token, in every environment, is Hospital's Keycloak's.
 var dev = builder.Environment.IsDevelopment();
 if (string.IsNullOrWhiteSpace(config["PHONE_HASH_KEY"]) || config["PHONE_HASH_KEY"]!.Length < 32) throw new InvalidOperationException("PHONE_HASH_KEY must be at least 32 characters");
+GeneralNumber.RequireSeparateCredentials(config);
 if (string.IsNullOrWhiteSpace(config["Auth:Authority"])) throw new InvalidOperationException("Keycloak Authority required");
 Hosting.RequireKeyringCertificate(config, builder.Environment);
 builder.Services.AddRecepcionServices(config, dev);
@@ -27,7 +28,8 @@ app.Use(async (ctx, next) =>
         if (gate is null && !await Identity.Bind(ctx, ctx.RequestServices.GetRequiredService<CrmDb>(), ctx.RequestServices.GetRequiredService<TenantScope>(), ctx.RequestServices.GetRequiredService<CurrentUser>(), config))
         {
             ctx.Response.StatusCode = 403;
-            if (ctx.Items.ContainsKey("hospital-pending")) await ctx.Response.WriteAsJsonAsync(new { title = "Tu hospital aún no está dado de alta en Recepción. Pide al Administrador del hospital que inicie sesión primero.", code = "hospital_not_onboarded" });
+            if (ctx.Items.ContainsKey("hospital-reminders-only")) await ctx.Response.WriteAsJsonAsync(new { title = "Tu hospital no usa Recepción: sólo recibe recordatorios de citas desde el número general de la plataforma.", code = "hospital_reminders_only" });
+            else if (ctx.Items.ContainsKey("hospital-pending")) await ctx.Response.WriteAsJsonAsync(new { title = "Tu hospital aún no está dado de alta en Recepción. Pide al Administrador del hospital que inicie sesión primero.", code = "hospital_not_onboarded" });
             return;
         }
         // First sign-in of a hospital: take its real name and zone from Hospital, best effort.
@@ -43,6 +45,7 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<CrmDb>();
     if (dev || config["INITIALIZE_DATABASE"] == "true") { await db.Database.MigrateAsync(); }
+    await GeneralNumber.RequireNotAClinicNumber(db, config);
     if (dev) {
         await DemoSeed.Run(db, scope.ServiceProvider.GetRequiredService<TenantScope>());
         if(Guid.TryParse(config["DEV_HOSPITAL_TENANT_ID"],out var hospitalTenant)&&hospitalTenant!=Guid.Empty&&!await db.Tenants.AnyAsync(x=>x.Id==hospitalTenant)){

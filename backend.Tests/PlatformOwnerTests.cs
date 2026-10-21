@@ -69,7 +69,7 @@ public sealed class PlatformOwnerTests : IAsyncLifetime
         var wire = JsonSerializer.Serialize(result, new JsonSerializerOptions(JsonSerializerDefaults.Web));
         using var doc = JsonDocument.Parse(wire);
         Assert.Equal(new[] { "tenants" }, doc.RootElement.EnumerateObject().Select(x => x.Name));
-        Assert.All(doc.RootElement.GetProperty("tenants").EnumerateArray(), row => Assert.Equal(new[] { "id", "name", "hospitalConfigured", "whatsAppConnected" }, row.EnumerateObject().Select(x => x.Name)));
+        Assert.All(doc.RootElement.GetProperty("tenants").EnumerateArray(), row => Assert.Equal(new[] { "id", "name", "hospitalConfigured", "whatsAppConnected", "mode" }, row.EnumerateObject().Select(x => x.Name)));
         foreach (var secret in new[] { "must-not-leak", "5550001234", number, "hospitalConnection", "kapsoCustomerId", "guide", "googleRefreshToken" }) Assert.DoesNotContain(secret, wire, StringComparison.OrdinalIgnoreCase);
     }
     [Theory][InlineData("admin")][InlineData("agent")][InlineData("doctor")][InlineData("")]
@@ -286,11 +286,11 @@ public sealed class PlatformOwnerTests : IAsyncLifetime
         var hospital = Hospital([Listed(fresh, "Clínica Nueva"), Listed(target, "Nombre en Hospital"), Listed(unnamed, null)], calls: calls);
         var result = await PlatformOwner.Hospitals(Platform(), Bearer(), db, Install(), new Factory(hospital), default);
         Assert.Equal(new[] { "/v1/platform/hospitals" }, calls);
-        Assert.Equal(new[] { new PlatformHospital(fresh, "Clínica Nueva", false), new PlatformHospital(unnamed, "Hospital sin nombre", false), new PlatformHospital(target, "Nombre en Hospital", true) }, result.Hospitals);
+        Assert.Equal(new[] { new PlatformHospital(fresh, "Clínica Nueva", false), new PlatformHospital(unnamed, "Hospital sin nombre", false), new PlatformHospital(target, "Nombre en Hospital", true, "reception") }, result.Hospitals);
         var wire = JsonSerializer.Serialize(result, new JsonSerializerOptions(JsonSerializerDefaults.Web));
         using var doc = JsonDocument.Parse(wire);
         Assert.Equal(new[] { "hospitals" }, doc.RootElement.EnumerateObject().Select(x => x.Name));
-        Assert.All(doc.RootElement.GetProperty("hospitals").EnumerateArray(), row => Assert.Equal(new[] { "id", "name", "hasReception" }, row.EnumerateObject().Select(x => x.Name)));
+        Assert.All(doc.RootElement.GetProperty("hospitals").EnumerateArray(), row => Assert.Equal(new[] { "id", "name", "hasReception", "mode" }, row.EnumerateObject().Select(x => x.Name)));
         Assert.DoesNotContain(OwnerToken, wire);
     }
     [Theory][InlineData("admin")][InlineData("agent")][InlineData("doctor")][InlineData("")]

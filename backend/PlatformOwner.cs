@@ -7,7 +7,8 @@ namespace Recepcion;
 /// without it answers 403 to that actor. <paramref name="NeedsTenant"/>: the route acts on the
 /// reception named by <c>X-Acting-Tenant</c>.</summary>
 public sealed record PlatformOperable(bool NeedsTenant = true);
-public record PlatformTenant(Guid Id, string Name, bool HospitalConfigured, bool WhatsAppConnected);
+/// <summary><paramref name="Mode"/>: «reception», or «reminders» for a hospital on the platform's general number (recordatorios-whatsapp.spec.md S3).</summary>
+public record PlatformTenant(Guid Id, string Name, bool HospitalConfigured, bool WhatsAppConnected, string Mode);
 public record PlatformTenants(IReadOnlyList<PlatformTenant> Tenants);
 
 // The platform owner (realm role `platform-owner`, no `tenant_id`) configures a reception's Hospital
@@ -36,7 +37,11 @@ public static class PlatformOwner
             if (!chosen) return 403;
             var acting = ctx.Request.Headers[Header];
             // Never created by choosing (INV-R4): a space is opened by its Administrador, BOOTSTRAP_TENANT_ID or POST /api/platform/tenants.
-            if (acting.Count != 1 || !Guid.TryParseExact(acting[0], "D", out var tenant) || tenant == Guid.Empty || !await db.Tenants.AnyAsync(t => t.Id == tenant, ctx.RequestAborted)) return 404;
+            if (acting.Count != 1 || !Guid.TryParseExact(acting[0], "D", out var tenant) || tenant == Guid.Empty) return 404;
+            var mode = await db.Tenants.Where(t => t.Id == tenant).Select(t => t.Mode).SingleOrDefaultAsync(ctx.RequestAborted);
+            if (mode is null) return 404;
+            // A hospital on the general number has no WhatsApp of its own and no agent: only its Hospital connection is operated for it (S3).
+            if (mode == "reminders" && (ctx.GetEndpoint() as RouteEndpoint)?.RoutePattern.RawText?.StartsWith("/api/hospital/connection", StringComparison.Ordinal) != true) return 403;
             scope.Id = tenant;
         }
         current.Subject = "platform:" + sub; current.Role = "platform"; current.Name = ctx.User.FindFirst("name")?.Value is { Length: > 0 } name ? name : "Dueño de plataforma";
@@ -47,10 +52,10 @@ public static class PlatformOwner
     public static async Task<PlatformTenants> Tenants(CurrentUser u, CrmDb db, HospitalClient h)
     {
         if (!u.Platform) throw new AccessDeniedException();
-        var rows = await db.Tenants.AsNoTracking().OrderBy(x => x.Name).ThenBy(x => x.Id).Select(x => new { x.Id, x.Name }).ToListAsync();
+        var rows = await db.Tenants.AsNoTracking().OrderBy(x => x.Name).ThenBy(x => x.Id).Select(x => new { x.Id, x.Name, x.Mode }).ToListAsync();
         var connected = (await db.Channels.IgnoreQueryFilters().Where(x => !x.PhoneNumberId.StartsWith("demo")).Select(x => x.TenantId).Distinct().ToListAsync()).ToHashSet();
         // ponytail: IsConfigured reads one row per reception; fold into the query above if receptions reach the hundreds.
-        return new(rows.Select(x => new PlatformTenant(x.Id, x.Name, h.IsConfigured(x.Id), connected.Contains(x.Id))).ToList());
+        return new(rows.Select(x => new PlatformTenant(x.Id, x.Name, h.IsConfigured(x.Id), connected.Contains(x.Id), x.Mode)).ToList());
     }
 
     /// <summary>REC-3: the hospitals Hospital lists for the owner, each marked with whether its reception is open.</summary>
@@ -59,8 +64,8 @@ public static class PlatformOwner
         if (!u.Platform) throw new AccessDeniedException();
         var listed = await ListedByHospital(ctx, config, factory, ct);
         var ids = listed.Keys.ToArray();
-        var open = (await db.Tenants.Where(x => ids.Contains(x.Id)).Select(x => x.Id).ToListAsync(ct)).ToHashSet();
-        return new(listed.Select(x => new PlatformHospital(x.Key, x.Value, open.Contains(x.Key))).OrderBy(x => x.Name, StringComparer.InvariantCultureIgnoreCase).ThenBy(x => x.Id).ToList());
+        var open = await db.Tenants.Where(x => ids.Contains(x.Id)).ToDictionaryAsync(x => x.Id, x => x.Mode, ct);
+        return new(listed.Select(x => new PlatformHospital(x.Key, x.Value.Name, open.ContainsKey(x.Key), open.GetValueOrDefault(x.Key))).OrderBy(x => x.Name, StringComparer.InvariantCultureIgnoreCase).ThenBy(x => x.Id).ToList());
     }
 
     /// <summary>REC-3: opens the reception (Tenant) of a hospital that exists in Hospital, in the state a first
@@ -89,7 +94,8 @@ public static class PlatformOwner
 
     // Hospital's administrative list for the platform owner, read with the owner's own bearer (its token carries the
     // hospital-api audience). The token only travels to the installation's Hospital API, and only if that origin is allowed.
-    static async Task<Dictionary<Guid, string>> ListedByHospital(HttpContext ctx, IConfiguration config, IHttpClientFactory factory, CancellationToken ct)
+    /// <summary>Hospital's list, by id: the display name and the hospital's own time zone (null when it sends none that this host knows).</summary>
+    internal static async Task<Dictionary<Guid, ListedHospital>> ListedByHospital(HttpContext ctx, IConfiguration config, IHttpClientFactory factory, CancellationToken ct)
     {
         static HospitalIntegrationException Unreadable(string code) => new(code, System.Net.HttpStatusCode.BadGateway);
         var allowed = (config["HOSPITAL_ALLOWED_API_ORIGINS"] ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
@@ -109,7 +115,8 @@ public static class PlatformOwner
             using var doc = System.Text.Json.JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
             // A hospital without a usable name is still listed: an empty or partial list must never look like «there are none».
             return doc.RootElement.GetProperty("hospitals").EnumerateArray().ToDictionary(x => x.GetProperty("id").GetGuid(),
-                x => x.TryGetProperty("displayName", out var name) && name.ValueKind == System.Text.Json.JsonValueKind.String && name.GetString()!.Trim() is { Length: > 0 and <= 200 } text ? text : "Hospital sin nombre");
+                x => new ListedHospital(x.TryGetProperty("displayName", out var name) && name.ValueKind == System.Text.Json.JsonValueKind.String && name.GetString()!.Trim() is { Length: > 0 and <= 200 } text ? text : "Hospital sin nombre",
+                    x.TryGetProperty("timeZone", out var zone) && zone.ValueKind == System.Text.Json.JsonValueKind.String && TimeZoneInfo.TryFindSystemTimeZoneById(zone.GetString()!, out _) ? zone.GetString() : null));
         }
         // Never the response text, the URL or the token in the message.
         catch (Exception ex) when (ex is HttpRequestException or System.Text.Json.JsonException or KeyNotFoundException or InvalidOperationException or FormatException or ArgumentException || ex is OperationCanceledException && !ct.IsCancellationRequested)
@@ -123,7 +130,9 @@ public static class PlatformOwner
         app.MapPost("/api/platform/tenants", Open).RequireAuthorization().WithMetadata(new PlatformOperable(NeedsTenant: false));
     }
 }
-public record PlatformHospital(Guid Id, string Name, bool HasReception);
+/// <summary><paramref name="Mode"/>: null while it has no space here; «reception» or «reminders» once it has.</summary>
+public record PlatformHospital(Guid Id, string Name, bool HasReception, string? Mode = null);
+internal record ListedHospital(string Name, string? TimeZone);
 public record PlatformHospitals(IReadOnlyList<PlatformHospital> Hospitals);
 // Only the id: the name and zone of a reception come from Hospital, never from the caller.
 public record OpenTenantInput(string? HospitalId);

@@ -87,10 +87,10 @@ namespace Recepcion.Api.Migrations
                     b.Property<DateTimeOffset?>("AttemptedAt")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<Guid>("ChannelId")
+                    b.Property<Guid?>("ChannelId")
                         .HasColumnType("uuid");
 
-                    b.Property<Guid>("ContactId")
+                    b.Property<Guid?>("ContactId")
                         .HasColumnType("uuid");
 
                     b.Property<DateTimeOffset>("CreatedAt")
@@ -102,10 +102,19 @@ namespace Recepcion.Api.Migrations
                     b.Property<Guid?>("MessageId")
                         .HasColumnType("uuid");
 
+                    b.Property<DateTimeOffset?>("OptOutPendingAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("OptOutWithdrawnAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<Guid>("PatientId")
                         .HasColumnType("uuid");
 
                     b.Property<string>("Reason")
+                        .HasColumnType("text");
+
+                    b.Property<string>("RecipientHash")
                         .HasColumnType("text");
 
                     b.Property<DateTimeOffset>("StartsAt")
@@ -125,6 +134,8 @@ namespace Recepcion.Api.Migrations
                     b.HasKey("Id");
 
                     b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("RecipientHash");
 
                     b.HasIndex("TenantId", "ChannelId");
 
@@ -511,6 +522,34 @@ namespace Recepcion.Api.Migrations
                     b.ToTable("ConversationReads");
                 });
 
+            modelBuilder.Entity("Recepcion.GeneralOptOut", b =>
+                {
+                    b.Property<string>("PhoneHash")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("PhoneHash");
+
+                    b.ToTable("GeneralOptOuts");
+                });
+
+            modelBuilder.Entity("Recepcion.GeneralReplyCap", b =>
+                {
+                    b.Property<string>("PhoneHash")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("LastReplyAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("PhoneHash");
+
+                    b.HasIndex("LastReplyAt");
+
+                    b.ToTable("GeneralReplyCaps");
+                });
+
             modelBuilder.Entity("Recepcion.InboxView", b =>
                 {
                     b.Property<Guid>("Id")
@@ -877,6 +916,10 @@ namespace Recepcion.Api.Migrations
                     b.Property<string>("KapsoCustomerId")
                         .HasColumnType("text");
 
+                    b.Property<string>("Mode")
+                        .IsRequired()
+                        .HasColumnType("text");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("text");
@@ -938,15 +981,13 @@ namespace Recepcion.Api.Migrations
                         .WithMany()
                         .HasForeignKey("TenantId", "ChannelId")
                         .HasPrincipalKey("TenantId", "Id")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.HasOne("Recepcion.Contact", null)
                         .WithMany()
                         .HasForeignKey("TenantId", "ContactId")
                         .HasPrincipalKey("TenantId", "Id")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict);
                 });
 
             modelBuilder.Entity("Recepcion.Audit", b =>

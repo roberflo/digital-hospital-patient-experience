@@ -17,12 +17,12 @@ public static class ReminderEndpoints
         DateTimeOffset Midnight(DateOnly d)=>new(TimeZoneInfo.ConvertTimeToUtc(d.ToDateTime(TimeOnly.MinValue),zone),TimeSpan.Zero);
         var (from,to)=(Midnight(day),Midnight(day.AddDays(1)));
         var rows=await db.AppointmentReminders.AsNoTracking().Where(r=>r.Window=="day_before"&&r.StartsAt>=from&&r.StartsAt<to).OrderBy(r=>r.StartsAt).ToListAsync(ct);
-        var contactIds=rows.Select(r=>r.ContactId).Distinct().ToArray();
+        var contactIds=rows.Select(r=>r.ContactId).OfType<Guid>().Distinct().ToArray();
         var names=await db.Contacts.AsNoTracking().Where(c=>contactIds.Contains(c.Id)).ToDictionaryAsync(c=>c.Id,c=>c.Name,ct);
         var conversations=await db.Conversations.AsNoTracking().Where(c=>contactIds.Contains(c.ContactId)).Select(c=>new{c.Id,c.ContactId,c.ChannelId}).ToListAsync(ct);
         var messageIds=rows.Select(r=>r.MessageId).OfType<Guid>().ToArray();
         var deliveries=await db.Messages.AsNoTracking().Where(m=>messageIds.Contains(m.Id)).ToDictionaryAsync(m=>m.Id,m=>m.Status,ct);
-        return rows.Select(r=>new TomorrowReminder(r.Id,r.StartsAt,names.GetValueOrDefault(r.ContactId),r.Status,r.MessageId is {} m?deliveries.GetValueOrDefault(m):null,
+        return rows.Select(r=>new TomorrowReminder(r.Id,r.StartsAt,r.ContactId is {} contact?names.GetValueOrDefault(contact):null,r.Status,r.MessageId is {} m?deliveries.GetValueOrDefault(m):null,
             conversations.FirstOrDefault(c=>c.ContactId==r.ContactId&&c.ChannelId==r.ChannelId)?.Id)).ToList();
     }
     /// <summary>The administrator's reminder settings: channel, pause and the day-before template (criterio 13). Audited.</summary>
@@ -43,12 +43,12 @@ public static class ReminderEndpoints
         api.MapGet("",async(CrmDb db,CurrentUser user,TenantScope scope,IConfiguration config)=>{
             user.RequireAdmin();var t=await db.Tenants.SingleAsync(t=>t.Id==scope.Id);
             var rows=await db.AppointmentReminders.OrderByDescending(r=>r.CreatedAt).Take(100).ToListAsync();
-            var ids=rows.Select(r=>r.ContactId).Distinct().ToArray();var contacts=await db.Contacts.Where(c=>ids.Contains(c.Id)).ToDictionaryAsync(c=>c.Id);
+            var ids=rows.Select(r=>r.ContactId).OfType<Guid>().Distinct().ToArray();var contacts=await db.Contacts.Where(c=>ids.Contains(c.Id)).ToDictionaryAsync(c=>c.Id);
             var messageIds=rows.Select(r=>r.MessageId).OfType<Guid>().ToArray();var deliveries=await db.Messages.Where(m=>messageIds.Contains(m.Id)).ToDictionaryAsync(m=>m.Id,m=>m.Status);
             return Results.Ok(new{enabled=t.RemindersEnabled,channelId=t.ReminderChannelId,dayTemplate=t.ReminderDayTemplate,hourTemplate=t.ReminderHourTemplate,language=t.ReminderLanguage,
                 sendEnabled=config["REMINDERS_SEND_ENABLED"]=="true",lastSyncAt=t.ReminderLastSyncAt,error=t.ReminderSyncError,
                 consentingContacts=await db.Contacts.CountAsync(c=>c.PatientId!=null&&c.ReminderConsentAt!=null),
-                rows=rows.Select(r=>new{r.Id,r.AppointmentId,r.ContactId,patientName=contacts.GetValueOrDefault(r.ContactId)?.Name,r.StartsAt,r.DueAt,r.Window,r.Status,r.Reason,deliveryStatus=r.MessageId is {} m?deliveries.GetValueOrDefault(m):null})});
+                rows=rows.Select(r=>new{r.Id,r.AppointmentId,r.ContactId,patientName=r.ContactId is {} contact?contacts.GetValueOrDefault(contact)?.Name:null,r.StartsAt,r.DueAt,r.Window,r.Status,r.Reason,deliveryStatus=r.MessageId is {} m?deliveries.GetValueOrDefault(m):null})});
         });
         api.MapPut("/settings",async(ReminderSettingsInput input,CrmDb db,CurrentUser user,TenantScope scope,ConversationService service)=>{await Configure(input,db,user,scope,service);return Results.Ok();});
         api.MapGet("/templates",async(CrmDb db,CurrentUser user,TenantScope scope,KapsoClient kapso,CancellationToken ct)=>{

@@ -61,6 +61,7 @@ public sealed class WhatsAppOnboarding(CrmDb db, TenantScope scope, CurrentUser 
         foreach (var number in connected.DistinctBy(x => Text(x, "phone_number_id")))
         {
             var id = Text(number, "phone_number_id")!;
+            GeneralNumber.RequireNotPlatformNumber(id, config);
             var channel = await db.Channels.IgnoreQueryFilters().SingleOrDefaultAsync(x => x.PhoneNumberId == id, ct);
             if (channel is not null && channel.TenantId != scope.Id) throw new AccessDeniedException();
             if (channel is null)
