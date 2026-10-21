@@ -12,12 +12,16 @@ db_dir=$(cd "$BACKUP_DB_DIR" && pwd -P)
 keyring_dir=$(cd "$BACKUP_KEYRING_DIR" && pwd -P)
 case "$keyring_dir/" in "$db_dir/"*) echo "BACKUP_KEYRING_DIR must not be BACKUP_DB_DIR or inside it" >&2; exit 1;; esac
 case "$db_dir/" in "$keyring_dir/"*) echo "BACKUP_DB_DIR must not be inside BACKUP_KEYRING_DIR" >&2; exit 1;; esac
+# Compose by default; on Easypanel's host point them at the service containers, e.g.
+# BACKUP_DB_EXEC="docker exec -i $(docker ps -qf name=<proyecto>_db)" (docs/deployment.md, «Operación y respaldo»).
+db_exec=${BACKUP_DB_EXEC:-docker compose exec -T db}
+api_exec=${BACKUP_API_EXEC:-docker compose exec -T recepcion-api}
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 dump="$db_dir/database-${stamp}.dump"
 keyring="$keyring_dir/keyring-${stamp}.tar.gz.enc"
-docker compose exec -T db pg_dump -U recepcion -d recepcion -Fc > "$dump.partial"
+$db_exec pg_dump -U recepcion -d recepcion -Fc > "$dump.partial"
 mv "$dump.partial" "$dump"
-docker compose exec -T recepcion-api tar -C /keys -czf - . | openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -salt -pass env:KEYRING_BACKUP_PASSPHRASE -out "$keyring.partial"
+$api_exec tar -C /keys -czf - . | openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -salt -pass env:KEYRING_BACKUP_PASSPHRASE -out "$keyring.partial"
 # A pipeline only reports openssl's status: decrypt and list the WHOLE archive, so a failed or truncated
 # tar, or a wrong passphrase, fails here instead of producing a backup that never restores.
 fail() { echo "keyring backup is unreadable or empty: $1" >&2; rm -f "$keyring.partial"; exit 1; }

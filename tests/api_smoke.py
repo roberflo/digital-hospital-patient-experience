@@ -35,6 +35,7 @@ def webhook(payload,event='whatsapp.message.received',key=None,signature=None):
     return call('/webhooks/kapso','POST',raw=raw,headers={'X-Webhook-Signature':sig,'X-Webhook-Event':event,'X-Idempotency-Key':key or str(uuid.uuid4())})
 
 check(call('/health/ready')[0]==200,'PostgreSQL readiness')
+attention=call('/health/attention');check(attention[0] in (200,503) and set(attention[1])=={'status','turns','sends','reminders'},'Attention probe answers counts only')
 check(call('/api/contacts')[0]==401,'Unauthenticated requests rejected')
 a=login('admin');b=login('other');agent=login('agent');doctor=login('doctor')
 for endpoint in ['/api/channels/onboarding','/api/channels/sync']:

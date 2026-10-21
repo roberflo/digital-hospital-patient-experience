@@ -40,6 +40,17 @@ app.Use(async (ctx, next) =>
 app.MapGet("/health/live", () => Results.Ok(new { status = "ok" }));
 // A deploy that forgot INITIALIZE_DATABASE is not ready: every turn would fail on a missing table (docs/deployment.md).
 app.MapGet("/health/ready", async (CrmDb db) => await db.Database.CanConnectAsync() && !(await db.Database.GetPendingMigrationsAsync()).Any() ? Results.Ok(new { status = "ready" }) : Results.StatusCode(503));
+// What an external monitor polls to wake a person (docs/deployment.md): 503 while, in any hospital, an agent turn failed or was abandoned,
+// or a send or a reminder became uncertain, in the last 30 minutes. Counts only: nothing names a hospital or a patient.
+app.MapGet("/health/attention", async (CrmDb db) =>
+{
+    var since = DateTimeOffset.UtcNow.AddMinutes(-30);
+    var turns = await db.Jobs.IgnoreQueryFilters().CountAsync(x => (x.Status == "failed" || x.Status == "uncertain") && (x.StartedAt ?? x.CreatedAt) > since);
+    var sends = await db.Messages.IgnoreQueryFilters().CountAsync(x => x.Status == "uncertain" && x.Sender != "patient" && x.ReceivedAt > since);
+    var reminders = await db.AppointmentReminders.IgnoreQueryFilters().CountAsync(x => x.Status == "uncertain" && x.AttemptedAt > since);
+    var body = new { status = turns + sends + reminders == 0 ? "ok" : "attention", turns, sends, reminders };
+    return turns + sends + reminders == 0 ? Results.Ok(body) : Results.Json(body, statusCode: 503);
+});
 app.UseRateLimiter();
 app.MapRecepcionApi();
 using (var scope = app.Services.CreateScope())
