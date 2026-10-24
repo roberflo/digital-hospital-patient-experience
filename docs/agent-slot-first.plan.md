@@ -332,3 +332,70 @@ Ninguna es clínica y ninguna exige migración.
 - **P-5.** Antes de desplegar conviene correr `scripts/eval-agent.sh` y `scripts/live-agent.sh`:
   el prompt cambia el camino de todo paciente nuevo y la suite no lo ve. Usan modelo real y
   Hospital local: la decisión es del propietario.
+
+## P-5 — constancia de `eval-agent.sh` y `live-agent.sh` (2026-10-24)
+
+Corridas sobre `main` `5605d02` con el modelo configurado en `.env` y Hospital local. **No hay
+constancia válida todavía:** el proveedor de IA no responde (`check-nim.py` ⇒ HTTP 404), así que
+109 de 135 evals son «medición inválida» en dos corridas seguidas, y las vivas que pasan por el
+modelo fallan con «Disculpa, en este momento no puedo leer…». Las que no usan el modelo
+(`NewClientRegistersAndBooksFromTheMenuWithoutTheModel`, `TappedSlotBooksInHospitalWithoutTheModel`,
+`HospitalAnswersItsDisciplinesCatalogueAndContact`) pasan. Además `hospital-api` corría con una
+imagen del 2026-10-18 y su reconstrucción desde `main` falló dos veces por red (registro de
+imágenes); `TappedHourKeeps…` (sin «Motivo») puede deberse a eso. Las vivas deben correrse de una
+en una: comparten el inquilino de la clínica sintética. Escalado al propietario (proveedor, n.º 6).
+
+```
+$ scripts/live-agent.sh            # Recepción main 5605d02; hospital-api con imagen del 2026-10-18
+  Passed AgentLiveJourney.NewClientRegistersAndBooksFromTheMenuWithoutTheModel [3 s]
+  Failed AgentLiveJourney.TappedSlotBooksInHospitalWithoutTheModel [44 ms]
+  Failed AgentLiveJourney.AgentAnswersPriceAddressDisciplineAndAgreementFromHospital [447 ms]
+  Failed AgentLiveJourney.TappedHourKeepsWhatThePatientSaidTheAppointmentIsFor [28 ms]
+  Failed AgentLiveJourney.NewClientRegistersBooksAndIsAttended [27 ms]
+  Failed AgentLiveJourney.AgentKeepsThePriceToReceptionWhenPricesAreOff [35 ms]
+  Passed AgentLiveJourney.HospitalAnswersItsDisciplinesCatalogueAndContact [9 ms]
+Total tests: 7
+     Passed: 2
+     Failed: 5
+  (los 5 fallos de la corrida conjunta: 23505 duplicate key "PK_Tenants" — las vivas siembran el mismo inquilino)
+$ scripts/live-agent.sh TappedSlotBooksInHospitalWithoutTheModel
+  Passed AgentLiveJourney.TappedSlotBooksInHospitalWithoutTheModel [1 s]
+$ scripts/live-agent.sh AgentAnswersPriceAddressDisciplineAndAgreementFromHospital
+  Failed AgentLiveJourney.AgentAnswersPriceAddressDisciplineAndAgreementFromHospital [1 s]
+   Assert.Contains() Failure: Sub-string not found
+String:    "Disculpa, en este momento no puedo leer m"···
+Not found: "120"
+$ scripts/live-agent.sh TappedHourKeepsWhatThePatientSaidTheAppointmentIsFor
+  Failed AgentLiveJourney.TappedHourKeepsWhatThePatientSaidTheAppointmentIsFor [1 s]
+   Assert.Contains() Failure: Sub-string not found
+String:    "*Cita:* sábado 24 de octubre a las 08:00\n"···
+Not found: "*Motivo:* Entrega de resultados"
+$ scripts/live-agent.sh NewClientRegistersBooksAndIsAttended
+  Failed AgentLiveJourney.NewClientRegistersBooksAndIsAttended [1 s]
+   Assert.Contains() Failure: Sub-string not found
+String:    "Hay espacio el *sábado 24 de octubre*.\nTo"···
+Not found: "son 7 datos cortos"
+$ scripts/live-agent.sh AgentKeepsThePriceToReceptionWhenPricesAreOff
+  Failed AgentLiveJourney.AgentKeepsThePriceToReceptionWhenPricesAreOff [1 s]
+   Assert.Contains() Failure: Sub-string not found
+String:    "Disculpa, en este momento no puedo leer m"···
+Not found: "Carilla"
+```
+
+```
+$ scripts/eval-agent.sh                       # 1.ª corrida
+Evals: 26/135 pasaron
+Fallo conocido: urgencia-110-responde-no-y-agenda
+Fallo conocido: urgencia-119-senal-pasada-agenda
+$ AGENT_EVAL_SPACING=4 scripts/eval-agent.sh  # 2.ª corrida
+Total tests: 135
+     Passed: 26
+     Failed: 109
+Evals: 26/135 pasaron
+Fallo conocido: urgencia-110-responde-no-y-agenda
+Fallo conocido: urgencia-119-senal-pasada-agenda
+  los 109 fallos de cada corrida: «el proveedor de IA respondió: sin respuesta del proveedor (límite o caída): medición inválida, repetir el caso»
+$ python3 -I scripts/check-nim.py
+urllib.error.HTTPError: HTTP Error 404: Not Found
+```
+
