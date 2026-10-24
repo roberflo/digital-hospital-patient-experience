@@ -31,6 +31,7 @@ import { Input } from './ui/input';
 import { Item, ItemActions, ItemContent, ItemDescription, ItemTitle } from './ui/item';
 import { NativeSelect, NativeSelectOption } from './ui/native-select';
 import { RadioGroup, RadioGroupItem } from './ui/radio-group';
+import { whatsAppPhone } from '@/lib/format';
 
 type Connection = {
   hospital: Me['tenant'];
@@ -288,7 +289,7 @@ export function PatientLink({
           </DialogTitle>
           <DialogDescription>
             {contact.name} · Hospital: {connection?.hospital.name ?? 'Cargando…'}. Se comprobará que
-            el teléfono del expediente coincide con +{contact.phone}.
+            el teléfono del expediente coincide con {whatsAppPhone(contact.phone)}.
           </DialogDescription>
         </DialogHeader>
         {contact.patientId ? (

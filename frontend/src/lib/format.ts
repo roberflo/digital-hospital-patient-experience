@@ -35,3 +35,6 @@ export const noShowLine = ({
         ? ` · ${consecutiveNoShows} ${consecutiveNoShows === 1 ? 'seguida' : 'seguidas'}`
         : '')
     : null;
+
+/** The contact phone as WhatsApp receives it (Rules.WhatsAppTo, criterio 27): stored digits, 8 of them read as a Salvadoran number. */
+export const whatsAppPhone = (phone: string) => '+' + (phone.length === 8 ? '503' + phone : phone);

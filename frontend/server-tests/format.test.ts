@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dayInZone, inZone, noShowLine, zoneName } from '../src/lib/format.ts';
+import { dayInZone, inZone, noShowLine, whatsAppPhone, zoneName } from '../src/lib/format.ts';
 
 // MR-23: la hora la dicta la zona del hospital, no la del navegador del recepcionista.
 const lateNight = '2026-10-17T03:30:00Z'; // 21:30 del 16 de octubre en San Salvador; 12:30 del 17 en Tokio
@@ -42,4 +42,11 @@ test('names the hospital zone as staff say it, never its IANA id', () => {
   assert.equal(zoneName('America/El_Salvador'), 'Hora de El Salvador');
   assert.doesNotMatch(zoneName('America/Guatemala'), /America\//);
   assert.equal(zoneName('No/Existe'), 'No/Existe');
+});
+
+// Criterio 27: el teléfono se muestra como se envía; un contacto antiguo de 8 dígitos es salvadoreño.
+test('shows a contact phone as WhatsApp receives it', () => {
+  assert.equal(whatsAppPhone('70000001'), '+50370000001');
+  assert.equal(whatsAppPhone('50370000001'), '+50370000001');
+  assert.equal(whatsAppPhone('14155550100'), '+14155550100');
 });

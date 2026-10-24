@@ -137,7 +137,7 @@ import {
   type Opportunity,
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
-import { dayInZone, inZone, zoneName } from '@/lib/format';
+import { dayInZone, inZone, whatsAppPhone, zoneName } from '@/lib/format';
 import { defaultInboxFilters, filtersActive, inboxQuery } from '@/lib/inbox-filters';
 import { ConfirmAction } from './confirm-action';
 import { AppointmentReminders, ReminderConsent, TomorrowReminders } from './appointment-reminders';
@@ -1521,7 +1521,7 @@ function ChatPanel({
       <div className="flex flex-col items-center gap-2 text-center">
         <PersonAvatar name={chat.contact.name} large />
         <h3 className="font-semibold">{chat.contact.name}</h3>
-        <p className="text-sm text-muted-foreground">+{chat.contact.phone}</p>
+        <p className="text-sm text-muted-foreground">{whatsAppPhone(chat.contact.phone)}</p>
         {chat.contact.tags && <Badge variant="secondary">{chat.contact.tags}</Badge>}
       </div>
       <Separator />
@@ -1591,7 +1591,9 @@ function ChatPanel({
           <PersonAvatar name={chat.contact.name} />
           <div className="flex min-w-0 flex-col">
             <h2 className="truncate text-sm font-semibold">{chat.contact.name}</h2>
-            <small className="truncate text-xs text-muted-foreground">+{chat.contact.phone}</small>
+            <small className="truncate text-xs text-muted-foreground">
+              {whatsAppPhone(chat.contact.phone)}
+            </small>
           </div>
           <div className="ml-auto flex shrink-0 items-center gap-1">
             <span className="hidden sm:inline-flex">
@@ -1986,12 +1988,14 @@ function ContactsView({ search }: { search: string }) {
                           <div className="flex min-w-0 flex-col">
                             <strong className="font-medium break-words">{c.name}</strong>
                             <span className="text-xs text-muted-foreground sm:hidden">
-                              +{c.phone}
+                              {whatsAppPhone(c.phone)}
                             </span>
                           </div>
                         </div>
                       </TableCell>
-                      <TableCell className="hidden sm:table-cell">+{c.phone}</TableCell>
+                      <TableCell className="hidden sm:table-cell">
+                        {whatsAppPhone(c.phone)}
+                      </TableCell>
                       <TableCell className="hidden md:table-cell">{c.email || '—'}</TableCell>
                       <TableCell className="hidden md:table-cell">
                         {c.tags ? <Badge variant="secondary">{c.tags}</Badge> : '—'}
