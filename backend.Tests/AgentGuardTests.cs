@@ -1022,6 +1022,8 @@ public sealed class AgentHarness(Guid? tenant = null, string phone = "5037000000
     public async Task Link() { Contact.PatientId = Guid.NewGuid(); await Db.SaveChangesAsync(); }
     /// <summary>Another context on the same database and keys, for a host that resolves its own per request.</summary>
     public CrmDb NewDb(TenantScope scope) => new(options, scope, protection);
+    /// <summary>A context whose commands go through <paramref name="interceptors"/>: a test acts between two of them (a concurrent edit).</summary>
+    public CrmDb NewDb(TenantScope scope, params Microsoft.EntityFrameworkCore.Diagnostics.IInterceptor[] interceptors) => new(new DbContextOptionsBuilder<CrmDb>(options).AddInterceptors(interceptors).Options, scope, protection);
     public async Task<Conversation> Fresh() { await using var other = new CrmDb(options, Scope, protection); return await other.Conversations.AsNoTracking().SingleAsync(x => x.Id == Conversation.Id); }
 
     /// <summary>The Hospital client this tenant's runtime gets, for what the team does through the endpoints.</summary>

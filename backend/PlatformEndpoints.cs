@@ -64,33 +64,42 @@ public static class PlatformEndpoints
         return doubts;
     }
 
-    public record PhoneNormalization(bool Applied, int Rewritten, IReadOnlyList<Guid> Conflicts);
+    public record PhoneConflict(Guid TenantId, Guid ContactId);
+    public record PhoneNormalization(bool Applied, int Rewritten, int AlreadyCanonical, IReadOnlyList<PhoneConflict> Conflicts);
     /// <summary>Criterio 32: completes the contacts stored with 8 digits (before +503 was assumed) to 503 + digits and recomputes their hash, in
-    /// every reception or only <paramref name="tenantId"/>. Simulated unless <paramref name="apply"/> is true. A contact whose new hash another
-    /// contact of its reception already has is neither changed nor merged: it comes back by id for a person. BAJA, reply caps and reminder rows
-    /// are not touched. Idempotent; counts and ids only, never a phone. Running it on real data is a deployment the owner asks for.</summary>
+    /// every reception or only <paramref name="tenantId"/>. Simulated unless <paramref name="apply"/> is true; either way each reception it reads is
+    /// audited. A contact whose new hash another contact of its reception already has is neither changed nor merged, and one that changed since it
+    /// was read (an edit, a message) is never undone: both come back by reception and id for a person. BAJA, reply caps and reminder rows are not
+    /// touched. Idempotent; counts and ids only, never a phone. Running it on real data is a deployment the owner asks for.</summary>
     public static async Task<PhoneNormalization> NormalizeContactPhones(Guid? tenantId, bool? apply, HttpContext ctx, CrmDb db, TenantScope scope, IConfiguration config, CancellationToken ct)
     {
-        var u = Operator(ctx); var key = config["PHONE_HASH_KEY"] ?? throw new InvalidOperationException("PHONE_HASH_KEY");
+        var u = Operator(ctx); var key = config["PHONE_HASH_KEY"] ?? throw new InvalidOperationException("PHONE_HASH_KEY"); var write = apply == true;
         // The phone is encrypted at rest, so its length is read here, not in SQL. ponytail: every contact in one read; page it by reception if
         // a deployment ever holds many.
-        var old = (await db.Contacts.IgnoreQueryFilters().Where(c => tenantId == null || c.TenantId == tenantId).OrderBy(c => c.TenantId).ToListAsync(ct)).Where(c => c.Phone.Length == 8).ToList();
-        var conflicts = new List<Guid>(); var rewritten = 0;
-        foreach (var reception in old.GroupBy(c => c.TenantId))
+        var contacts = await db.Contacts.IgnoreQueryFilters().AsNoTracking().Where(c => tenantId == null || c.TenantId == tenantId).ToListAsync(ct);
+        var conflicts = new List<PhoneConflict>(); var rewritten = 0;
+        foreach (var reception in contacts.Where(c => c.Phone.Length == 8).GroupBy(c => c.TenantId).OrderBy(g => g.Key))
         {
             scope.Id = reception.Key;
             foreach (var contact in reception)
             {
                 var phone = "503" + contact.Phone; var hash = Rules.PhoneHash(phone, key);
-                if (await db.Contacts.IgnoreQueryFilters().AnyAsync(c => c.TenantId == contact.TenantId && c.Id != contact.Id && c.PhoneHash == hash, ct)) { conflicts.Add(contact.Id); continue; }
-                rewritten++;
-                if (apply == true) { contact.Phone = phone; contact.PhoneHash = hash; }
+                var taken = await db.Contacts.IgnoreQueryFilters().AnyAsync(c => c.TenantId == contact.TenantId && c.Id != contact.Id && c.PhoneHash == hash, ct);
+                if (!taken && write)
+                    try
+                    {
+                        // Written only as it was read: a contact changed meanwhile is reported, never overwritten.
+                        taken = await db.Contacts.IgnoreQueryFilters().Where(c => c.Id == contact.Id && c.TenantId == contact.TenantId && c.PhoneHash == contact.PhoneHash)
+                            .ExecuteUpdateAsync(x => x.SetProperty(c => c.Phone, phone).SetProperty(c => c.PhoneHash, hash), ct) == 0;
+                    }
+                    // The same number arrived meanwhile (a message created its contact): the unique index says so, for this contact only.
+                    catch (Exception e) when (e is Npgsql.PostgresException { SqlState: "23505" } || e.InnerException is Npgsql.PostgresException { SqlState: "23505" }) { taken = true; }
+                if (taken) conflicts.Add(new(contact.TenantId, contact.Id)); else rewritten++;
             }
-            if (apply == true) { CrmEndpoints.Audit(db, scope, u, "contact_phones.completed", reception.Key); await db.SaveChangesAsync(ct); }
+            CrmEndpoints.Audit(db, scope, u, write ? "contact_phones.completed" : "contact_phones.simulated", reception.Key); await db.SaveChangesAsync(ct);
         }
-        return new(apply == true, rewritten, conflicts);
+        return new(write, rewritten, contacts.Count(c => c.Phone.Length != 8), conflicts);
     }
-
 
     public static void MapPlatform(this WebApplication app)
     {

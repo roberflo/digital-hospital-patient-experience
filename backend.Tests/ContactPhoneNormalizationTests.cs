@@ -46,7 +46,7 @@ public sealed class ContactPhoneNormalizationTests : IAsyncLifetime
     {
         var before = await Contacts();
         var result = await Run(apply: null);
-        Assert.Equal((false, 1), (result.Applied, result.Rewritten)); Assert.Equal([clash], result.Conflicts);
+        Assert.Equal((false, 1), (result.Applied, result.Rewritten)); Assert.Equal([new(h.Scope.Id, clash)], result.Conflicts);
         Assert.Equal(before, await Contacts());
     }
 
@@ -55,13 +55,44 @@ public sealed class ContactPhoneNormalizationTests : IAsyncLifetime
     {
         var before = await Contacts();
         var result = await Run(apply: true);
-        Assert.Equal((true, 1), (result.Applied, result.Rewritten)); Assert.Equal([clash], result.Conflicts);
+        Assert.Equal((true, 1), (result.Applied, result.Rewritten)); Assert.Equal([new(h.Scope.Id, clash)], result.Conflicts);
         var after = await Contacts();
         Assert.Equal(("50370000002", Rules.PhoneHash("50370000002", Key)), after[alone]);
         Assert.Equal((before[clash], before[taken]), (after[clash], after[taken])); // not merged, not changed
         await using (var db = h.NewDb(new TenantScope()))
             Assert.True(await db.GeneralOptOuts.AnyAsync(o => o.PhoneHash == optOut)); // BAJA untouched
         Assert.Equal(0, (await Run(apply: true)).Rewritten);
+    }
+
+    /// <summary>Runs <paramref name="act"/> once, right after the endpoint checks whether the new hash is taken and before it writes.</summary>
+    sealed class BetweenCheckAndWrite(Func<Task> act) : Microsoft.EntityFrameworkCore.Diagnostics.DbCommandInterceptor
+    {
+        bool done;
+        public override async ValueTask<System.Data.Common.DbDataReader> ReaderExecutedAsync(System.Data.Common.DbCommand command, Microsoft.EntityFrameworkCore.Diagnostics.CommandExecutedEventData data, System.Data.Common.DbDataReader result, CancellationToken ct = default)
+        {
+            if (!done && command.CommandText.Contains("EXISTS")) { done = true; await act(); }
+            return result;
+        }
+    }
+    // I-1: a person edits the contact (or a message creates the same number) while the completion runs: the edit survives, the contact is
+    // reported as a conflict, and the run goes on with its counts instead of failing as a whole.
+    [Theory][InlineData("edited")][InlineData("created")]
+    public async Task AConcurrentChangeIsNeverUndoneAndIsReported(string change)
+    {
+        var other = Guid.NewGuid();
+        var interceptor = new BetweenCheckAndWrite(async () =>
+        {
+            await using var db = h.NewDb(h.Scope);
+            if (change == "edited") { var c = await db.Contacts.SingleAsync(x => x.Id == alone); c.Phone = "50370000099"; c.PhoneHash = Rules.PhoneHash("50370000099", Key); }
+            else db.Add(new Contact { Id = other, TenantId = h.Scope.Id, Name = "Paciente Sintético", Phone = "50370000002", PhoneHash = Rules.PhoneHash("50370000002", Key) });
+            await db.SaveChangesAsync();
+        });
+        var scope = new TenantScope(); await using var endpointDb = h.NewDb(scope, interceptor);
+
+        var result = await PlatformEndpoints.NormalizeContactPhones(h.Scope.Id, true, Principal("platform-owner"), endpointDb, scope, config, CancellationToken.None);
+
+        Assert.Contains(new PlatformEndpoints.PhoneConflict(h.Scope.Id, alone), result.Conflicts);
+        Assert.Equal(change == "edited" ? "50370000099" : "70000002", (await Contacts())[alone].Phone);
     }
 
     [Fact]
