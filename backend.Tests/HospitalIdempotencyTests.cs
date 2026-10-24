@@ -48,6 +48,7 @@ public sealed class HospitalIdempotencyTests : IAsyncLifetime
     {
         if (tool == "propose_registration") await h.Say("patient", "Soy Ana Sintética López Prueba, mujer, nací el 12/03/1990. Mi hermano Carlos Sintético, 70000001."); // what the patient wrote of Adult: only that reaches a registration (docs/agent-evidence.md)
         await h.Runtime(h.Model(AgentHarness.ToolCall(tool, arguments), AgentHarness.Reply("Confirma, por favor.")), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
+        if (tool == "propose_registration") { await h.Say("patient", "f"); await h.Runtime(NoModel, h.Sender(), hospital).Run(h.Job, CancellationToken.None); } // EV-8: the sex is always tapped
         return Assert.Single(await h.Pending("proposal"));
     }
     async Task Confirm(PendingAction proposal, HttpMessageHandler hospital)

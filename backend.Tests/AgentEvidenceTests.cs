@@ -66,6 +66,22 @@ public sealed class AgentEvidenceTests : IAsyncLifetime
         Assert.Empty(await h.Pending("proposal"));
     }
 
+    [Theory]
+    [InlineData("Soy Pedro Sintético Prueba, nací el 2 de febrero de 1980. Soy hombre, mi contacto es mi mujer Ana Sintética, 7000 0003.")]
+    [InlineData("Soy Pedro Sintético Prueba, hombre, nací el 2 de febrero de 1980. Mi hermana Ana Sintética, 7000 0003.")]
+    public async Task TheSexIsAlwaysTappedNeverTakenFromTheModel(string said)
+    {
+        // EV-8 (owner, 2026-10-23): «mi mujer Ana» is someone else's sex, so the sex of the document is always asked with the two buttons,
+        // even when the patient wrote it. Only the sex is asked: the rest written is kept.
+        await h.Say("patient", said);
+
+        await Run("start_registration", new { givenNames = "Pedro Sintético", familyNames = "Prueba", birthDate = "2 de febrero de 1980", sex = "male", emergencyContactName = "Ana Sintética", emergencyContactPhone = "7000 0003" });
+
+        Assert.Contains("documento de identidad", h.Sent[^1]); Assert.Contains("me falta uno", h.Sent[^1]);
+        Assert.Empty(await h.Pending("proposal"));
+        Assert.Equal(JsonValueKind.Null, JsonDocument.Parse(Assert.Single(await h.Pending("intake")).Body).RootElement.GetProperty("sex").ValueKind);
+    }
+
     [Fact]
     public async Task ADateAndAPhoneAreComparedAsADateAndAPhone()
     {
@@ -73,6 +89,8 @@ public sealed class AgentEvidenceTests : IAsyncLifetime
         await h.Say("patient", S);
 
         await Run("start_registration", new { givenNames = "Irene Sintética", familyNames = "Mora Prueba", birthDate = "09/09/1979", sex = "female", emergencyContactName = "Sofía Sintética", emergencyContactRelationship = "hija", emergencyContactPhone = "70000007" });
+        Assert.Contains("me falta uno", h.Sent[^1]); // only the sex, always tapped (EV-8)
+        await h.Say("patient", "f"); await h.Runtime(NoModel, h.Sender()).Run(h.Job, CancellationToken.None);
 
         Assert.Contains("Nacimiento: 9 de septiembre de 1979", h.Sent[^1]); Assert.Contains("Sofía Sintética (hija), 70000007", h.Sent[^1]);
         Assert.Single(await h.Pending("proposal"));

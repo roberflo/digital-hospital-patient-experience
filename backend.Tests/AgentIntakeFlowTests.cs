@@ -12,6 +12,8 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
     public Task InitializeAsync() => h.Start();
     public Task DisposeAsync() => h.DisposeAsync().AsTask();
     static readonly DateOnly Today = new(2026, 10, 4);
+    /// <summary>The patient taps one of the form's buttons; the form answers it with no model.</summary>
+    async Task Tap(string id) { await h.Say("patient", id); await h.Runtime(new AgentHarness.Fake(_ => throw new InvalidOperationException("The model must not be consulted")), h.Sender()).Run(h.Job, CancellationToken.None); }
     static readonly string[] Answers = ["Ana Sintética", "López Prueba", "12/03/1990", "Femenino", "Carlos Sintético", "Hermano", "7000 0001"];
 
     [Fact]
@@ -337,9 +339,11 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
         var everything = new { givenNames = "Irene Sintética", familyNames = "Mora Prueba", birthDate = "1979-09-09", sex = "female", emergencyContactName = "Sofía Sintética", emergencyContactRelationship = "hija", emergencyContactPhone = "70000007" };
 
         await h.Runtime(h.Model(AgentHarness.ToolCall("start_registration", everything), AgentHarness.Reply("Ok")), h.Sender()).Run(h.Job, CancellationToken.None);
+        Assert.Contains("documento de identidad", Assert.Single(h.Sent)); // EV-8: the sex is always tapped
+        await Tap("f");
 
-        // Nothing is missing, so there is nothing to ask: the patient gets the card to confirm.
-        var card = Assert.Single(h.Sent);
+        // Nothing else is missing, so there is nothing else to ask: the patient gets the card to confirm.
+        Assert.Equal(2, h.Sent.Count); var card = h.Sent[^1];
         Assert.Contains("*Irene Sintética Mora Prueba*", card); Assert.EndsWith("¿Están correctos?", card);
         Assert.Single(await h.Pending("proposal"));
     }
@@ -366,6 +370,7 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
         var said = new { givenNames = "Irene Sintética", familyNames = "Mora Prueba", birthDate = "9 de septiembre de 1979", sex = "femenino", emergencyContactName = "Sofía Sintética", emergencyContactPhone = "70000007" };
 
         await h.Runtime(h.Model(AgentHarness.ToolCall("start_registration", said), AgentHarness.Reply("Ok")), h.Sender()).Run(h.Job, CancellationToken.None);
+        await Tap("f"); // EV-8: the sex is always tapped
 
         Assert.DoesNotContain("parentesco tiene", h.Sent[^1]);
         Assert.Contains("Sofía Sintética (hija)", h.Sent[^1]);

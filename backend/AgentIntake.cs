@@ -81,13 +81,14 @@ public sealed partial record Intake(int Step, string? GivenNames = null, string?
     /// <summary>Whether the patient wrote <paramref name="value"/> for the datum <paramref name="field"/> (0–6, the form's order) in one of
     /// <paramref name="said"/>, the patient's messages of the conversation in progress (docs/agent-evidence.md). Compared by what the datum is,
     /// never approximately: names word by word without accents or case, the date as the form reads it, the phone as its digits.
-    /// Two different valid birth dates written mean neither is taken.</summary>
+    /// Two different valid birth dates written mean neither is taken. The sex never counts as written: «mi mujer Ana» is someone else's,
+    /// so the sex of the document is always tapped on the form's two buttons (EV-8, owner's decision of 2026-10-23).</summary>
     public static bool Wrote(int field, string value, IReadOnlyCollection<string> said, DateOnly today)
     {
         switch (field)
         {
             case 2: return Date(value) is { } date && said.SelectMany(Dates).Where(d => d <= today && d >= today.AddYears(-120)).Distinct().SequenceEqual([date]);
-            case 3: return SexOf(value) is { } sex && said.SelectMany(Words).Select(SexOf).OfType<string>().Distinct().SequenceEqual([sex]);
+            case 3: return false;
             case 6: return Phone(value) is { } phone && said.SelectMany(s => PhoneRun().Matches(s)).Any(run => Phone(run.Value) == phone);
             default: var written = said.SelectMany(Words).ToHashSet(); return Words(value) is { Length: > 0 } words && words.All(written.Contains);
         }

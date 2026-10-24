@@ -33,10 +33,13 @@ public sealed class AgentIntakeTests : IAsyncLifetime
     }
     /// <summary>What the patient wrote of <see cref="Adult"/>: only that reaches a registration (docs/agent-evidence.md).</summary>
     const string AdultSaid = "Soy Ana Sintética López Prueba, mujer, nací el 12/03/1990. Mi hermano Carlos Sintético, 70000001.";
+    /// <summary>The patient taps one of the form's buttons; the form answers it with no model.</summary>
+    async Task Tap(string id, HttpMessageHandler hospital) { await h.Say("patient", id); await h.Runtime(new AgentHarness.Fake(_ => throw new InvalidOperationException("The model must not be consulted")), h.Sender(), hospital).Run(h.Job, CancellationToken.None); }
     async Task<string> ProposeAndGetCode(HttpMessageHandler hospital, object arguments)
     {
         await h.Say("patient", AdultSaid);
         await h.Runtime(h.Model(AgentHarness.ToolCall("propose_registration", arguments), AgentHarness.Reply("Revisa tus datos y confirma.")), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
+        await Tap("f", hospital); // EV-8: the sex is always tapped
         return Assert.Single(await h.Pending("proposal")).Code;
     }
 
@@ -87,6 +90,7 @@ public sealed class AgentIntakeTests : IAsyncLifetime
 
         await h.Say("patient", AdultSaid);
         await h.Runtime(h.Model(AgentHarness.ToolCall("propose_registration", Adult), AgentHarness.Reply("Confirma tu registro.")), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
+        await Tap("f", hospital); // EV-8: the sex is always tapped
         await Confirm();
         await h.Say("patient", "Quiero la primera cita.");
         await h.Runtime(h.Model(AgentHarness.ToolCall("propose_action", new { action = "create", doctorId = doctor, startsAt = start, durationMinutes = 30 }), AgentHarness.Reply("Confirma tu cita.")), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
