@@ -152,11 +152,12 @@ public static class WhatsAppEndpoints
         string hash; try { hash = Rules.PhoneHash(Rules.WaId(phone), config["PHONE_HASH_KEY"]!); }
         catch (ArgumentException)
         {
-            // Criterio 30: an 8-digit wa_id is unusable. A contact typed with those digits says so on its card, so a person can ask for another number.
+            // Criterio 30: an 8-digit wa_id is unusable. When its digits are those of a stored contact, its card says so once; nothing else happens.
             var digits = new string(phone.Where(char.IsAsciiDigit).ToArray());
-            if (digits.Length == 8 && phone.All(c => char.IsAsciiDigit(c) || c == '+') && await db.Contacts.Where(x => x.PhoneHash == Rules.PhoneHash(digits, config["PHONE_HASH_KEY"]!)).Select(x => (Guid?)x.Id).SingleOrDefaultAsync() is { } known)
+            if (digits.Length == 8 && phone.All(c => char.IsAsciiDigit(c) || c == '+') && await db.Contacts.Where(x => x.PhoneHash == Rules.PhoneHash(digits, config["PHONE_HASH_KEY"]!)).Select(x => (Guid?)x.Id).SingleOrDefaultAsync() is { } known
+                && !await db.Activities.AnyAsync(a => a.ContactId == known && a.Kind == "unusable_phone"))
                 db.Activities.Add(new Activity { TenantId = scope.Id, ContactId = known, Actor = "WhatsApp", ActorRole = "system", Kind = "unusable_phone",
-                    Body = "Llegó un mensaje de WhatsApp desde un número de 8 dígitos en total, que aquí se confunde con uno de El Salvador. No se guardó ni se puede responder: pida al paciente otro número." });
+                    Body = "Un número de WhatsApp extranjero coincide con los dígitos de este contacto; no se respondió." });
             return "unusable phone number";
         } var contact = await db.Contacts.SingleOrDefaultAsync(x => x.PhoneHash == hash);
         if (contact is null) { contact = new Contact { TenantId = scope.Id, Name = Get(conversation, "contact_name") ?? "Paciente", Phone = Rules.WaId(phone), PhoneHash = hash }; db.Add(contact); db.Activities.Add(new Activity{TenantId=scope.Id,ContactId=contact.Id,Actor="WhatsApp",ActorRole="system",Kind="contact_created",Body="Contacto creado automáticamente al recibir su primera conversación de WhatsApp."}); }

@@ -143,6 +143,7 @@ public sealed class WhatsAppWebhookTests : IAsyncLifetime
         await using (var db = Db()) { var c = new Contact { TenantId = tenant, Name = "Paciente Sintético", Phone = "29022345", PhoneHash = Rules.PhoneHash("29022345", "synthetic-phone-key") }; db.Add(c); await db.SaveChangesAsync(); known = c.Id; }
 
         Assert.Equal(200, await Post("{\"batch\":true,\"data\":[" + Inbound("wamid.f", "29022345") + "]}"));
+        Assert.Equal(200, await Post("{\"batch\":true,\"data\":[" + Inbound("wamid.g", "29022345") + "]}")); // a second message: still one note
 
         await using var check = Db();
         Assert.Equal((1, 0, 0), (await check.Contacts.CountAsync(), await check.Messages.CountAsync(), await check.Jobs.CountAsync()));
