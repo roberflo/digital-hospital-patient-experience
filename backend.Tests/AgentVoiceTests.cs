@@ -148,6 +148,7 @@ public sealed class AgentVoiceTests : IAsyncLifetime
     [InlineData(true, "Ya tengo parte de tus datos; me falta uno.\n\n¿Qué sexo aparece en tu documento de identidad?")]
     public async Task AFormThatStartsWithKnownDataReadsLikeAChat(bool onlyTheSexIsMissing, string start)
     {
+        await h.Say("patient", onlyTheSexIsMissing ? "Soy Rosa Sintética Prueba, nací el 8 de enero de 1985. Mi hermano Carlos Sintético, 7000 0001." : "Me llamo Rosa Sintética.");
         object said = onlyTheSexIsMissing ? new { givenNames = "Rosa Sintética", familyNames = "Prueba", birthDate = "8 de enero de 1985", emergencyContactName = "Carlos Sintético", emergencyContactRelationship = "hermano", emergencyContactPhone = "7000 0001" } : new { givenNames = "Rosa Sintética" };
 
         await h.Runtime(h.Model(AgentHarness.ToolCall("start_registration", said), AgentHarness.Reply("Ok")), h.Sender()).Run(h.Job, CancellationToken.None);

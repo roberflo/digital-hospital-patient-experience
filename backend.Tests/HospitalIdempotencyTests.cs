@@ -46,6 +46,7 @@ public sealed class HospitalIdempotencyTests : IAsyncLifetime
 
     async Task<PendingAction> Propose(HttpMessageHandler hospital, string tool, object arguments)
     {
+        if (tool == "propose_registration") await h.Say("patient", "Soy Ana Sintética López Prueba, mujer, nací el 12/03/1990. Mi hermano Carlos Sintético, 70000001."); // what the patient wrote of Adult: only that reaches a registration (docs/agent-evidence.md)
         await h.Runtime(h.Model(AgentHarness.ToolCall(tool, arguments), AgentHarness.Reply("Confirma, por favor.")), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
         return Assert.Single(await h.Pending("proposal"));
     }

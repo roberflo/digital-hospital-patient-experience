@@ -251,6 +251,7 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
     [Fact]
     public async Task WithoutAReadableBirthDateTheStoredFormHoldsNothingAfterIt()
     {
+        await h.Say("patient", "Me llamo Diego Sintético Prueba, tengo 16 años."); // only what the patient wrote reaches the form (docs/agent-evidence.md)
         var said = new { givenNames = "Diego Sintético", familyNames = "Prueba", birthDate = "tengo 16 años", sex = "masculino", emergencyContactName = "Marta Sintética", emergencyContactRelationship = "madre", emergencyContactPhone = "7000 0002" };
 
         await h.Runtime(h.Model(AgentHarness.ToolCall("start_registration", said), AgentHarness.Reply("Ok")), h.Sender()).Run(h.Job, CancellationToken.None);
@@ -315,6 +316,7 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
     [Fact]
     public async Task WhenOnlyTheSexIsMissingThePatientTapsOnceAndGetsTheCard()
     {
+        await h.Say("patient", "Soy Rosa Sintética Prueba, nací el 8 de enero de 1985. Mi hermano Carlos Sintético, 7000 0001."); // no sex in it, on purpose
         var said = new { givenNames = "Rosa Sintética", familyNames = "Prueba", birthDate = "8 de enero de 1985", emergencyContactName = "Carlos Sintético", emergencyContactRelationship = "hermano", emergencyContactPhone = "7000 0001" };
         await h.Runtime(h.Model(AgentHarness.ToolCall("start_registration", said), AgentHarness.Reply("Ok")), h.Sender()).Run(h.Job, CancellationToken.None);
 
@@ -331,6 +333,7 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
     [Fact]
     public async Task AgentHandsTheFormWhatItAlreadyKnows()
     {
+        await h.Say("patient", "Soy Irene Sintética Mora Prueba, mujer, nací el 9 de septiembre de 1979. Mi hija Sofía Sintética, 7000-0007.");
         var everything = new { givenNames = "Irene Sintética", familyNames = "Mora Prueba", birthDate = "1979-09-09", sex = "female", emergencyContactName = "Sofía Sintética", emergencyContactRelationship = "hija", emergencyContactPhone = "70000007" };
 
         await h.Runtime(h.Model(AgentHarness.ToolCall("start_registration", everything), AgentHarness.Reply("Ok")), h.Sender()).Run(h.Job, CancellationToken.None);
@@ -344,6 +347,7 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
     [Fact]
     public async Task AMinorIsNoticedAsSoonAsTheBirthDateIsKnown()
     {
+        await h.Say("patient", "Me llamo Diego Sintético Prueba y nací el 01/01/2010.");
         var minor = new { givenNames = "Diego Sintético", familyNames = "Prueba", birthDate = "2010-01-01", sex = "male" };
 
         await h.Runtime(h.Model(AgentHarness.ToolCall("start_registration", minor), AgentHarness.Reply("Ok")), h.Sender()).Run(h.Job, CancellationToken.None);
@@ -357,6 +361,7 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
     public async Task ARelationshipSaidInFrontOfTheContactsNameIsNotAskedAgain()
     {
         // Eval registro-105, three passes out of three with gpt-6-luna: «mi hija Sofía» reached the form as a name only, and the patient was asked the relationship.
+        await h.Say("patient", "Soy Irene Sintética Mora Prueba, femenino, nací el 9 de septiembre de 1979.");
         await h.Say("patient", "Mi hija Sofía Sintética, 70000007.");
         var said = new { givenNames = "Irene Sintética", familyNames = "Mora Prueba", birthDate = "9 de septiembre de 1979", sex = "femenino", emergencyContactName = "Sofía Sintética", emergencyContactPhone = "70000007" };
 
@@ -371,6 +376,7 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
     {
         // Found with gpt-6-luna: told not to write anything after start_registration, it wrote nothing, and the empty reply was
         // treated as a failure («no logré responder eso»). The earlier tests never saw it: their simulated model always wrote something.
+        await h.Say("patient", "Me llamo Rosa Sintética.");
         var silent = AgentHarness.Json(new { choices = new[] { new { message = new { role = "assistant", content = "" } } } });
 
         await h.Runtime(h.Model(AgentHarness.ToolCall("start_registration", new { givenNames = "Rosa Sintética" }), silent), h.Sender()).Run(h.Job, CancellationToken.None);

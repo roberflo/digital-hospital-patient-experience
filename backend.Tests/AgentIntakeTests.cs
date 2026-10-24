@@ -31,8 +31,11 @@ public sealed class AgentIntakeTests : IAsyncLifetime
             throw new InvalidOperationException("Unexpected hospital request " + path);
         });
     }
+    /// <summary>What the patient wrote of <see cref="Adult"/>: only that reaches a registration (docs/agent-evidence.md).</summary>
+    const string AdultSaid = "Soy Ana Sintética López Prueba, mujer, nací el 12/03/1990. Mi hermano Carlos Sintético, 70000001.";
     async Task<string> ProposeAndGetCode(HttpMessageHandler hospital, object arguments)
     {
+        await h.Say("patient", AdultSaid);
         await h.Runtime(h.Model(AgentHarness.ToolCall("propose_registration", arguments), AgentHarness.Reply("Revisa tus datos y confirma.")), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
         return Assert.Single(await h.Pending("proposal")).Code;
     }
@@ -82,6 +85,7 @@ public sealed class AgentIntakeTests : IAsyncLifetime
         });
         async Task Confirm() { var code = Assert.Single(await h.Pending("proposal")).Code; await h.Say("patient", "CONFIRMAR " + code); await h.Runtime(h.Model(AgentHarness.Reply("No debe consultarse el modelo")), h.Sender(), hospital).Run(h.Job, CancellationToken.None); }
 
+        await h.Say("patient", AdultSaid);
         await h.Runtime(h.Model(AgentHarness.ToolCall("propose_registration", Adult), AgentHarness.Reply("Confirma tu registro.")), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
         await Confirm();
         await h.Say("patient", "Quiero la primera cita.");
@@ -116,6 +120,7 @@ public sealed class AgentIntakeTests : IAsyncLifetime
     [InlineData("no es una fecha", "female", "70000001")]
     public async Task InvalidRegistrationIsNeverProposed(string birthDate, string sex, string emergencyPhone)
     {
+        await h.Say("patient", $"Soy Ana Sintética López Prueba, mujer, nací el {birthDate}. Mi hermano Carlos Sintético, 70000001.");
         var arguments = new { givenNames = "Ana Sintética", familyNames = "López Prueba", birthDate, sex, emergencyContactName = "Carlos Sintético", emergencyContactRelationship = "hermano", emergencyContactPhone = emergencyPhone };
 
         await h.Runtime(h.Model(AgentHarness.ToolCall("propose_registration", arguments), AgentHarness.Reply("No pude registrar esos datos.")), h.Sender()).Run(h.Job, CancellationToken.None);
@@ -128,6 +133,7 @@ public sealed class AgentIntakeTests : IAsyncLifetime
     public async Task LinkedPatientIsNeverRegisteredAgain()
     {
         await h.Link();
+        await h.Say("patient", AdultSaid);
 
         await h.Runtime(h.Model(AgentHarness.ToolCall("propose_registration", Adult), AgentHarness.Reply("Ya tienes expediente.")), h.Sender(), h.Hospital()).Run(h.Job, CancellationToken.None);
 
