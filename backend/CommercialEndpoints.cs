@@ -15,7 +15,7 @@ public static class CommercialEndpoints
             var candidates=await h.Customers(t.Id,contact.Phone);
             HospitalCustomer? customer=null;HospitalCommercialPage<HospitalPurchase>? purchases=null;
             if(contact.HospitalCustomerId is {} cid){customer=await h.Customer(t.Id,cid);HospitalClient.VerifyCustomer(customer,contact);purchases=await h.Purchases(t.Id,cid,Page(page));}
-            return Results.Ok(new{contact,customer,candidates=candidates.Items.Where(c=>HospitalClient.NormalizePhone(c.Phone)==contact.Phone&&(string.IsNullOrEmpty(c.ExternalReference)||c.ExternalReference=="recepcion:"+contact.Id)),purchases});
+            return Results.Ok(new{contact,customer,candidates=candidates.Items.Where(c=>HospitalClient.NormalizePhone(c.Phone)==HospitalClient.NormalizePhone(contact.Phone)&&(string.IsNullOrEmpty(c.ExternalReference)||c.ExternalReference=="recepcion:"+contact.Id)),purchases});
         });
         api.MapPost("/contacts/{id:guid}/link",async(Guid id,CustomerLink b,HttpContext ctx,CrmDb db,CurrentUser u,CommercialService commercial)=>{
             commercial=commercial.AsUser(Identity.Bearer(ctx));

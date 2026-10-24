@@ -72,6 +72,13 @@ public sealed class HospitalClinicalTests
         if (mismatch != "patient") Assert.Equal("hospital.patient_phone_mismatch", error.Code);
         Assert.Equal(1, calls);
     }
+    // Criterio 27: the conversation's contact stored with 8 digits (before 503 was assumed) is the patient Hospital keeps in E.164.
+    [Fact]
+    public async Task AnOldEightDigitContactReadsTheLinkedPatient()
+    {
+        var client = Client(r => r.RequestUri!.AbsolutePath == $"/v1/patients/{patient}" ? Json(new { patientId = patient, phone = "+50370000001" }) : Json(new { items = Array.Empty<object>() }));
+        await client.ReadAsync(tenant, actor.ToString(), Token(), patient, "70000001", "allergies");
+    }
     [Theory][InlineData("role")][InlineData("subject")][InlineData("tenant")]
     public async Task InvalidDelegationNeverUsesServiceCredentials(string mismatch)
     {

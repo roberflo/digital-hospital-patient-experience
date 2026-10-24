@@ -26,7 +26,7 @@ public sealed class KapsoClient(HttpClient http, IConfiguration config)
     {
         RequireSending(manual);
         if (interactive is not null) type = "interactive";
-        var payload = new Dictionary<string, object> { { "messaging_product", "whatsapp" }, { "to", Rules.Phone(phone) }, { "type", type } };
+        var payload = new Dictionary<string, object> { { "messaging_product", "whatsapp" }, { "to", Rules.StoredPhone(phone) }, { "type", type } };
         payload[type] = interactive ?? (type == "text" ? new { body } : new Dictionary<string, object> { { "id", mediaId ?? throw new ArgumentException("Archivo requerido") } });
         using var req = Request(HttpMethod.Post, $"{number}/messages"); req.Content = JsonContent.Create(payload);
         using var res = await http.SendAsync(req, ct); res.EnsureSuccessStatusCode();
@@ -92,7 +92,7 @@ public sealed class KapsoClient(HttpClient http, IConfiguration config)
         if(phoneOfClinic is not null)values.Add(new{type="text",parameter_name="telefono",text=phoneOfClinic});
         var components=new List<object>{new{type="body",parameters=values}};
         components.AddRange((buttons??[]).Select((payload,i)=>new{type="button",sub_type="quick_reply",index=i.ToString(System.Globalization.CultureInfo.InvariantCulture),parameters=new[]{new{type="payload",payload}}}));
-        req.Content=JsonContent.Create(new{messaging_product="whatsapp",to=Rules.Phone(phone),type="template",template=new{name,language=new{code=language},components}});
+        req.Content=JsonContent.Create(new{messaging_product="whatsapp",to=Rules.StoredPhone(phone),type="template",template=new{name,language=new{code=language},components}});
         using var res=await http.SendAsync(req,ct);res.EnsureSuccessStatusCode();
         // A 2xx without a message id may still have been delivered: uncertain, like a 5xx, never retried.
         JsonElement sent;
@@ -105,7 +105,7 @@ public sealed class KapsoClient(HttpClient http, IConfiguration config)
     public async Task SendGeneral(string phone, string? body, object? interactive = null, CancellationToken ct = default)
     {
         if (config["REMINDERS_SEND_ENABLED"] != "true") throw new ArgumentException("Recordatorios en pausa");
-        var payload = new Dictionary<string, object> { { "messaging_product", "whatsapp" }, { "to", Rules.Phone(phone) }, { "type", interactive is null ? "text" : "interactive" } };
+        var payload = new Dictionary<string, object> { { "messaging_product", "whatsapp" }, { "to", Rules.StoredPhone(phone) }, { "type", interactive is null ? "text" : "interactive" } };
         payload[interactive is null ? "text" : "interactive"] = interactive ?? new { body };
         using var req = Request(HttpMethod.Post, true, $"{GeneralNumber()}/messages"); req.Content = JsonContent.Create(payload);
         using var res = await http.SendAsync(req, ct); res.EnsureSuccessStatusCode();

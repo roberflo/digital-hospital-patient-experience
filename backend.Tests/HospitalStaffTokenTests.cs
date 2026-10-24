@@ -277,6 +277,26 @@ public sealed class HospitalStaffTokenTests : IAsyncLifetime
         Assert.Equal((stored, "synthetic-hash", "Paciente Sintético"), (saved.Phone, saved.PhoneHash, saved.Name));
     }
 
+    // Criterio 27: an old 8-digit contact is searched and matched in Hospital's commercial customers as 503 + digits; its phone is not rewritten.
+    [Fact]
+    public async Task AnOldEightDigitContactSeesItsCommercialCandidate()
+    {
+        await using (var db = h.NewDb(h.Scope)) { (await db.Contacts.SingleAsync(c => c.Id == h.Contact.Id)).Phone = "70000001"; await db.SaveChangesAsync(); }
+        string? searched = null;
+        var hospital = Recorded(r =>
+        {
+            if (r.RequestUri!.AbsolutePath != "/v1/commercial/customers" || r.Method != HttpMethod.Get) return null;
+            searched = System.Web.HttpUtility.ParseQueryString(r.RequestUri.Query)["phone"];
+            return AgentHarness.Json(new { items = new[] { Customer() with { Phone = "+50370000001", PatientId = null } }, total = 1, page = 1, pageSize = 100 });
+        });
+
+        using var body = JsonDocument.Parse(await CallBody(App(hospital), "GET /api/commercial/contacts/{id:guid}", "", null, "admin"));
+
+        Assert.Equal("50370000001", searched);
+        Assert.Equal(customer, Assert.Single(body.RootElement.GetProperty("candidates").EnumerateArray()).GetProperty("id").GetGuid());
+        Assert.Equal("70000001", body.RootElement.GetProperty("contact").GetProperty("phone").GetString());
+    }
+
     readonly List<string> google = [];
     WebApplication App(HttpMessageHandler hospital)
     {
@@ -296,6 +316,9 @@ public sealed class HospitalStaffTokenTests : IAsyncLifetime
         var app = builder.Build(); app.MapRecepcionApi(); return app;
     }
     async Task<int> Call(WebApplication app, string route, string query, object? body, string role, string? bearer = null, Guid? id = null)
+        => (await Invoke(app, route, query, body, role, bearer, id)).Status;
+    async Task<string> CallBody(WebApplication app, string route, string query, object? body, string role) => (await Invoke(app, route, query, body, role, null, null)).Body;
+    async Task<(int Status, string Body)> Invoke(WebApplication app, string route, string query, object? body, string role, string? bearer, Guid? id)
     {
         var endpoint = ((IEndpointRouteBuilder)app).DataSources.SelectMany(x => x.Endpoints).OfType<RouteEndpoint>()
             .Single(e => string.Join("|", e.Metadata.GetMetadata<IHttpMethodMetadata>()?.HttpMethods ?? ["ANY"]) + " " + e.RoutePattern.RawText == route);
@@ -314,7 +337,8 @@ public sealed class HospitalStaffTokenTests : IAsyncLifetime
         }
         ctx.Response.Body = new MemoryStream();
         await endpoint.RequestDelegate!(ctx);
-        return ctx.Response.StatusCode;
+        ctx.Response.Body.Position = 0;
+        return (ctx.Response.StatusCode, await new StreamReader(ctx.Response.Body).ReadToEndAsync());
     }
     sealed class HasBody : Microsoft.AspNetCore.Http.Features.IHttpRequestBodyDetectionFeature { public bool CanHaveBody => true; }
 }

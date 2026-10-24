@@ -44,6 +44,20 @@ public sealed class InboxSendTests
         Assert.Equal(first.Id, activity.MessageId); Assert.Equal("staff-1", activity.ActorSubject);
     }
 
+    /// <summary>Criterio 27: a contact stored with 8 digits, before 503 was assumed, is written to with its country code.</summary>
+    [Fact]
+    public async Task An_old_eight_digit_contact_is_sent_with_its_country_code()
+    {
+        await using var h = new AgentHarness(phone: "70000001");
+        await h.Start();
+        var to = new List<string>(); var svc = Service(h, Recipients(to), manual: true);
+
+        await Post(h, svc, "22222222-2222-4222-8222-222222222222");
+
+        Assert.Equal(["50370000001"], to);
+        Assert.Equal("70000001", (await h.Db.Contacts.AsNoTracking().SingleAsync(c => c.Id == h.Contact.Id)).Phone); // read, never rewritten
+    }
+
     /// <summary>A refused send leaves the conversation as it was: the agent keeps it, nobody is assigned, no trace of a reply.</summary>
     [Theory]
     [InlineData("window")]

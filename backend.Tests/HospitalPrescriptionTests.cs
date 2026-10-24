@@ -123,14 +123,18 @@ public sealed class HospitalPrescriptionTests
     }
     // Criterio 17: Hospital stores the phone in E.164 (+50370000001); the WhatsApp sender is its wa_id without «+». Same patient.
     [Theory][InlineData("+50370000001")][InlineData("50370000001")]
-    public async Task AnE164HospitalPhoneVerifiesTheWaIdSender(string stored)
+    public Task AnE164HospitalPhoneVerifiesTheWaIdSender(string stored)=>Verifies(stored,"50370000001");
+    // Criterio 27: a contact stored with 8 digits, before 503 was assumed, is read as 503 + digits when compared with Hospital.
+    [Theory][InlineData("+50370000001")][InlineData("50370000001")][InlineData("7000-0001")]
+    public Task AnOldEightDigitContactVerifiesAgainstHospital(string stored)=>Verifies(stored,"70000001");
+    async Task Verifies(string stored,string contact)
     {
         var tenant=Guid.NewGuid();var patient=Guid.NewGuid();
         var token="e30."+Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(new{tenant_id=tenant,exp=DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds()})).TrimEnd('=').Replace('+','-').Replace('/','_')+".synthetic";
         var config=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{
             [$"Hospital:Tenants:{tenant}:BaseUrl"]="https://hospital.example.invalid/",[$"Hospital:Tenants:{tenant}:AccessToken"]=token}).Build();
         var client=new HospitalClient(new HttpClient(new Handler(_=>new(HttpStatusCode.OK){Content=JsonContent.Create(new{patientId=patient,phone=stored})})),config);
-        await client.GetVerifiedPatientAsync(tenant,patient,"50370000001");
+        await client.GetVerifiedPatientAsync(tenant,patient,contact);
     }
     // Criterio 25: Hospital marks the phone for review ⇒ not verified, and no clinical read follows; a Hospital without the field behaves as before.
     [Theory][InlineData(true)][InlineData(false)][InlineData(null)]

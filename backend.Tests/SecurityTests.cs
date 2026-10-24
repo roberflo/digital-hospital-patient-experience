@@ -23,6 +23,13 @@ public sealed class SecurityTests {
     public void ContactPhoneAssumesElSalvadorOnlyForLocalNumbers(string input,string output)=>Assert.Equal(output,Rules.ContactPhone(input));
     [Theory][InlineData("123")][InlineData("not a number")][InlineData("1234567890123456")][InlineData("123456")]
     public void BadPhoneRejected(string phone)=>Assert.Throws<ArgumentException>(()=>Rules.Phone(phone));
+    /// <summary>Criterio 27: an old 8-digit contact is only read as 503 + digits; its stored hash is the one it always had (guard).</summary>
+    [Fact]public void AnOldEightDigitContactIsReadWith503AndKeepsItsHash()
+    {
+        Assert.Equal("50370000001",Rules.StoredPhone("70000001"));Assert.Equal("14155550100",Rules.StoredPhone("14155550100"));
+        Assert.Equal("50370000001",Recepcion.Integrations.HospitalClient.NormalizePhone("70000001"));
+        Assert.Equal(Convert.ToHexString(HMACSHA256.HashData(Encoding.UTF8.GetBytes("secret"),Encoding.UTF8.GetBytes("70000001"))),Rules.PhoneHash("70000001","secret"));
+    }
     /// <summary>INV-7: seven digits typed by a person without «+» are most likely a Salvadoran number missing a digit.</summary>
     [Theory][InlineData("7000000")][InlineData("700-0000")]
     public void ContactPhoneRejectsSevenLocalDigits(string phone)=>Assert.Throws<ArgumentException>(()=>Rules.ContactPhone(phone));
