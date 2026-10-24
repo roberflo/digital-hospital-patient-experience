@@ -135,6 +135,20 @@ public sealed class WhatsAppWebhookTests : IAsyncLifetime
         await using var db = Db();
         Assert.Equal((0, 0, 0), (await db.Contacts.CountAsync(), await db.Messages.CountAsync(), await db.Jobs.CountAsync()));
     }
+    // Criterio 30, nit 1: a contact stored with those 8 digits (typed before +503 was assumed) says on its card that a message came and why
+    // it cannot be answered; nothing else is created or sent.
+    [Fact] public async Task AnEightDigitWaIdOfAKnownContactLeavesAVisibleNote()
+    {
+        Guid known;
+        await using (var db = Db()) { var c = new Contact { TenantId = tenant, Name = "Paciente Sintético", Phone = "29022345", PhoneHash = Rules.PhoneHash("29022345", "synthetic-phone-key") }; db.Add(c); await db.SaveChangesAsync(); known = c.Id; }
+
+        Assert.Equal(200, await Post("{\"batch\":true,\"data\":[" + Inbound("wamid.f", "29022345") + "]}"));
+
+        await using var check = Db();
+        Assert.Equal((1, 0, 0), (await check.Contacts.CountAsync(), await check.Messages.CountAsync(), await check.Jobs.CountAsync()));
+        // The body is encrypted with the host's keys; this context only checks the note is there, on that contact.
+        Assert.Equal(1, await check.Activities.CountAsync(a => a.ContactId == known && a.Kind == "unusable_phone"));
+    }
     [Fact] public async Task InvalidPhoneIsSkippedAndTheRestOfTheBatchIsProcessed()
     {
         var batch = "{\"batch\":true,\"data\":[" + Inbound("wamid.a", "50370000004") + "," + Inbound("wamid.b", "999abc999") + "," + Inbound("wamid.c", "50370000005") + "]}";

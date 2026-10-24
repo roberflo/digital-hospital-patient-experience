@@ -149,7 +149,16 @@ public static class WhatsAppEndpoints
         var status = Get(k, "status") ?? "received"; var existing = await db.Messages.SingleOrDefaultAsync(x => x.ExternalId == external);
         if (existing != null) { if (status == "read" || status == "failed" || (status == "delivered" && existing.Status != "read") || (status == "sent" && existing.Status is "sending" or "uncertain")) existing.Status = status; return null; }
         var phone = Get(conversation, "phone_number") ?? Get(msg, "from") ?? Get(msg, "to"); if (string.IsNullOrEmpty(phone)) return null;
-        string hash; try { hash = Rules.PhoneHash(Rules.WaId(phone), config["PHONE_HASH_KEY"]!); } catch (ArgumentException) { return "unusable phone number"; } var contact = await db.Contacts.SingleOrDefaultAsync(x => x.PhoneHash == hash);
+        string hash; try { hash = Rules.PhoneHash(Rules.WaId(phone), config["PHONE_HASH_KEY"]!); }
+        catch (ArgumentException)
+        {
+            // Criterio 30: an 8-digit wa_id is unusable. A contact typed with those digits says so on its card, so a person can ask for another number.
+            var digits = new string(phone.Where(char.IsAsciiDigit).ToArray());
+            if (digits.Length == 8 && phone.All(c => char.IsAsciiDigit(c) || c == '+') && await db.Contacts.Where(x => x.PhoneHash == Rules.PhoneHash(digits, config["PHONE_HASH_KEY"]!)).Select(x => (Guid?)x.Id).SingleOrDefaultAsync() is { } known)
+                db.Activities.Add(new Activity { TenantId = scope.Id, ContactId = known, Actor = "WhatsApp", ActorRole = "system", Kind = "unusable_phone",
+                    Body = "Llegó un mensaje de WhatsApp desde un número de 8 dígitos en total, que aquí se confunde con uno de El Salvador. No se guardó ni se puede responder: pida al paciente otro número." });
+            return "unusable phone number";
+        } var contact = await db.Contacts.SingleOrDefaultAsync(x => x.PhoneHash == hash);
         if (contact is null) { contact = new Contact { TenantId = scope.Id, Name = Get(conversation, "contact_name") ?? "Paciente", Phone = Rules.WaId(phone), PhoneHash = hash }; db.Add(contact); db.Activities.Add(new Activity{TenantId=scope.Id,ContactId=contact.Id,Actor="WhatsApp",ActorRole="system",Kind="contact_created",Body="Contacto creado automáticamente al recibir su primera conversación de WhatsApp."}); }
         var conv = await db.Conversations.SingleOrDefaultAsync(x => x.ChannelId == ch.Id && x.ContactId == contact.Id);
         if (conv is null) { conv = new Conversation { TenantId = scope.Id, ChannelId = ch.Id, ContactId = contact.Id, ExternalId = Get(conversation, "id") ?? "", Status = (await db.Tenants.AnyAsync(x=>x.Id==scope.Id&&x.AgentEnabled))&&ch.Enabled?"agent":"human" }; db.Add(conv); db.Activities.Add(InboxWorkflow.Event(scope,conv,"WhatsApp","conversation_created","Conversación vinculada al contacto CRM.")); }
