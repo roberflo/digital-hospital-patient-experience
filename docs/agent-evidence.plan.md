@@ -1,5 +1,7 @@
 # Plan — Evidencia, no confianza (S1)
 
+> **No empezado** — la planificación es anterior a intake-voice y slot-first: re-anclar líneas antes de implementar. EV-8 espera A-2 (dueño). (2026-10-23)
+
 Spec: [agent-evidence.md](agent-evidence.md). Medido el 2026-10-04; solo lectura. La línea base de
 la suite está sin medir y es el paso 0.
 

@@ -1,5 +1,7 @@
 # Plan — El formulario habla como la gente (S1) y salta a lo que falta (S2)
 
+> **Cerrado el 2026-10-23** — implementado en `main`: `30081e5`.
+
 Spec: [agent-intake-voice.md](agent-intake-voice.md). Medido el 2026-10-04 contra `main` local
 `4e05f77`; solo lectura, no se ejecutó ninguna prueba.
 

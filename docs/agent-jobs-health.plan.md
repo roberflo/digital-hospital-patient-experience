@@ -1,5 +1,7 @@
 # Plan: trabajo interrumpido con rastro y salud de las colas
 
+> **Parcial** — parte A en `2d55f68`; la parte B (criterios 7–10) queda retenida hasta OQ-4 (quién lo lee). Se solapa con `/health/attention` (`892dd1f`). (2026-10-23)
+
 Spec: [agent-jobs-health.md](agent-jobs-health.md). Medido el 2026-10-04; solo lectura, no se
 ejecutó ninguna prueba.
 

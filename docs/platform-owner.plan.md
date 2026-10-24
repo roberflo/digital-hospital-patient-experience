@@ -1,5 +1,7 @@
 # Plan — REC-1 / REC-2: dueño de plataforma en Recepción
 
+> **Cerrado el 2026-10-23** — implementado en `main`: `89fdafc`, `e413a13`, `d4dce0c` — F7 (Playwright) no se escribió; vista cubierta por recorrido manual §10.
+
 Plan para `docs/platform-owner.md`. No ejecuté nada: lo que sigue sale de leer el código, y los supuestos sin comprobar van marcados.
 
 ## 0. Lo que el código obliga

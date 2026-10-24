@@ -1,5 +1,7 @@
 # Plan — La hora antes que el registro (S3)
 
+> **Cerrado el 2026-10-23** — implementado en `main`: `37bb7ed` — falta constancia de `eval-agent.sh`/`live-agent.sh` antes de desplegar (P-5).
+
 Spec: [agent-slot-first.md](agent-slot-first.md). Medido el 2026-10-04, solo lectura: no se
 ejecutó ninguna prueba.
 
