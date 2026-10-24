@@ -11,15 +11,18 @@ public sealed partial class AppointmentReminderService
     /// <summary>Why a recipient Hospital named is not written to (the row says it; nothing is sent).</summary>
     /// <summary>The note on a row whose withdrawal Hospital refused for good (4xx): no more retries; the owner's doubts list shows it.</summary>
     public const string WithdrawalRefused = "Hospital rechazó registrar el retiro de la autorización tras BAJA; revíselo con la clínica.";
-    public const string UnusablePhone = "Teléfono inválido o fuera de El Salvador (+503); el número general aún no lo admite.";
+    public const string UnusablePhone = "Teléfono inválido o sin código de país; el número general no puede escribirle.";
+    /// <summary>The text rows were skipped with while only +503 was written to; they reopen like the current one (criterio 18).</summary>
+    const string PreviousUnusablePhone = "Teléfono inválido o fuera de El Salvador (+503); el número general aún no lo admite.";
 
-    /// <summary>The HMAC of a recipient the general number may write to, or null. ponytail: only +503 numbers written with their country
-    /// code (11 digits): Hospital and Kapso must hash the same digits, and nothing normalizes to E.164 yet. Widen when it does.</summary>
+    /// <summary>The HMAC of a recipient the general number may write to, or null (criterio 18, OQ-2): any country written with its «+»
+    /// (Hospital's E.164), or 11 digits starting with 503 without it, as a Hospital deployed before E.164 sends them. A number without
+    /// its country code is not guessed: the general number cannot know the country.</summary>
     public static string? GeneralRecipientHash(string? phone, string key)
     {
         string digits;
         try { digits = Rules.Phone(phone ?? ""); } catch (ArgumentException) { return null; }
-        return digits.Length == 11 && digits.StartsWith("503", StringComparison.Ordinal) ? Rules.PhoneHash(digits, key) : null;
+        return phone!.TrimStart().StartsWith('+') || digits.Length == 11 && digits.StartsWith("503", StringComparison.Ordinal) ? Rules.PhoneHash(digits, key) : null;
     }
     string? Hash(string? phone) => GeneralRecipientHash(phone, config["PHONE_HASH_KEY"]!);
 
@@ -60,7 +63,7 @@ public sealed partial class AppointmentReminderService
                 if (existing is not null)
                 {
                     var reopen = existing.AttemptedAt is null && existing.ContactId is null && existing.PatientId == r.PatientId && r.Hash is not null
-                        && (existing.Status == "cancelled" || existing.Status == "skipped" && existing.Reason == UnusablePhone);
+                        && (existing.Status == "cancelled" || existing.Status == "skipped" && existing.Reason is UnusablePhone or PreviousUnusablePhone);
                     if (reopen) { existing.RecipientHash = r.Hash; existing.Status = "pending"; existing.Reason = null; }
                     continue;
                 }

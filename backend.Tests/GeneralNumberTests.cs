@@ -579,25 +579,78 @@ public sealed class GeneralNumberTests : IAsyncLifetime
 
     // ======================= Ronda 2 (revisión) =======================
 
-    // Important 1 + Moderate 11: one unusable phone never stops the clinic; only +503 numbers with their country code are written to.
+    // Important 1 + Moderate 11: one unusable phone never stops the clinic. Criterio 18 (OQ-2): any country written with its «+» is written to;
+    // a local number without its country code is not, because the general number cannot know the country.
     [Fact]
     public async Task AnUnusablePhoneSkipsOnlyItsRowsAndSaysWhy()
     {
-        Guid bad = Guid.NewGuid(), foreign = Guid.NewGuid();
-        recipients[clinicA] = [Recipient(appointmentA, patientA, start), Recipient(bad, Guid.NewGuid(), start, "12"), Recipient(foreign, Guid.NewGuid(), start, "+1 415 555 0100")];
+        Guid bad = Guid.NewGuid(), local = Guid.NewGuid(), foreign = Guid.NewGuid();
+        recipients[clinicA] = [Recipient(appointmentA, patientA, start), Recipient(bad, Guid.NewGuid(), start, "12"), Recipient(local, Guid.NewGuid(), start, "7000-0000"), Recipient(foreign, Guid.NewGuid(), start, "+1 415 555 0100")];
 
         await Sync(clinicA);
 
         var rows = await Rows(clinicA);
+        Assert.Equal("Teléfono inválido o sin código de país; el número general no puede escribirle.", AppointmentReminderService.UnusablePhone);
         Assert.Equal(2, rows.Count(r => r.AppointmentId == appointmentA && r.Status == "pending"));
-        Assert.All(rows.Where(r => r.AppointmentId != appointmentA), r => Assert.Equal(("skipped", AppointmentReminderService.UnusablePhone, (string?)null), (r.Status, r.Reason, r.RecipientHash)));
-        Assert.Equal(4, rows.Count(r => r.AppointmentId != appointmentA));
+        Assert.All(rows.Where(r => r.AppointmentId == bad || r.AppointmentId == local), r => Assert.Equal(("skipped", AppointmentReminderService.UnusablePhone, (string?)null), (r.Status, r.Reason, r.RecipientHash)));
+        Assert.Equal(4, rows.Count(r => r.AppointmentId == bad || r.AppointmentId == local));
+        Assert.All(rows.Where(r => r.AppointmentId == foreign), r => Assert.Equal(("pending", (string?)null, Hash("14155550100")), (r.Status, r.Reason, r.RecipientHash)));
+        Assert.Equal(2, rows.Count(r => r.AppointmentId == foreign));
         await using (var db = Db(clinicA)) Assert.Contains("2 cita(s)", (await db.Tenants.AsNoTracking().SingleAsync(t => t.Id == clinicA)).ReminderSyncError);
-        // The day's re-read before the send has the bad phones in it too; the good one still goes out.
-        var day = rows.Single(r => r.AppointmentId == appointmentA && r.Window == "day_before");
-        await Dispatch(clinicA, day.Id, day.DueAt);
-        Assert.Equal("sent", (await Row(clinicA, day.Id)).Status);
-        Assert.DoesNotContain(kapso, k => k.Body.GetProperty("to").GetString() is "12" or "14155550100");
+        // The day's re-read before the send has the bad phones in it too; the good ones still go out, the foreign one to its own digits.
+        foreach (var id in new[] { appointmentA, foreign })
+        {
+            var day = rows.Single(r => r.AppointmentId == id && r.Window == "day_before");
+            await Dispatch(clinicA, day.Id, day.DueAt);
+            Assert.Equal("sent", (await Row(clinicA, day.Id)).Status);
+        }
+        Assert.Contains(kapso, k => k.Body.GetProperty("to").GetString() == "14155550100");
+        Assert.DoesNotContain(kapso, k => k.Body.GetProperty("to").GetString() is "12" or "70000000" or "50370000000");
+    }
+
+    // Criterio 18: a row skipped with the text used before OQ-2 reopens too, once Hospital's phone carries its country code.
+    [Fact]
+    public async Task ASkippedRowWithThePreviousTextReopensWhenThePhoneHasACountryCode()
+    {
+        Guid foreign = Guid.NewGuid(), patient = Guid.NewGuid();
+        await using (var db = Db(clinicA))
+        {
+            db.AppointmentReminders.Add(new() { TenantId = clinicA, PatientId = patient, AppointmentId = foreign, StartsAt = start, DueAt = start.AddDays(-1), Window = "day_before", CreatedAt = DateTimeOffset.UtcNow,
+                Status = "skipped", Reason = "Teléfono inválido o fuera de El Salvador (+503); el número general aún no lo admite." });
+            await db.SaveChangesAsync();
+        }
+        recipients[clinicA] = [Recipient(foreign, patient, start, "+1 415 555 0100")];
+
+        await Sync(clinicA);
+
+        var day = (await Rows(clinicA)).Single(r => r.AppointmentId == foreign && r.Window == "day_before");
+        Assert.Equal(("pending", (string?)null, Hash("14155550100")), (day.Status, day.Reason, day.RecipientHash));
+    }
+
+    // Criterio 17, INV-4: a BAJA sent from a foreign wa_id stops the same number when Hospital writes it in E.164.
+    [Fact]
+    public async Task ABajaFromAForeignWaIdStopsTheHospitalE164Recipient()
+    {
+        await using (var db = own.NewDb(new TenantScope())) { db.GeneralOptOuts.Add(new GeneralOptOut { PhoneHash = Hash("14155550100"), CreatedAt = DateTimeOffset.UtcNow }); await db.SaveChangesAsync(); }
+        recipients[clinicA] = [Recipient(appointmentA, patientA, start, "+14155550100")];
+
+        await Sync(clinicA);
+
+        Assert.Empty(await Rows(clinicA));
+        Assert.Empty(kapso);
+    }
+
+    // Criterio 17, INV-4 (guard: green before the change too): a BAJA from the wa_id stops Hospital's +503 number written with its «+».
+    [Fact]
+    public async Task ABajaFromTheWaIdStopsTheSameNumberWithPlus()
+    {
+        await using (var db = own.NewDb(new TenantScope())) { db.GeneralOptOuts.Add(new GeneralOptOut { PhoneHash = Hash(phone), CreatedAt = DateTimeOffset.UtcNow }); await db.SaveChangesAsync(); }
+        recipients[clinicA] = [Recipient(appointmentA, patientA, start, "+" + phone)];
+
+        await Sync(clinicA);
+
+        Assert.Empty(await Rows(clinicA));
+        Assert.Empty(kapso);
     }
 
     // Important 2: the hour before on the general number has its own template, with the clinic's phone and no «responde».

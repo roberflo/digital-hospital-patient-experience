@@ -121,6 +121,17 @@ public sealed class HospitalPrescriptionTests
         await client.GetVerifiedPatientAsync(tenant,patient,"50370000001");
         Assert.Equal(2,tokens);Assert.Equal(3,hospital);
     }
+    // Criterio 17: Hospital stores the phone in E.164 (+50370000001); the WhatsApp sender is its wa_id without «+». Same patient.
+    [Theory][InlineData("+50370000001")][InlineData("50370000001")]
+    public async Task AnE164HospitalPhoneVerifiesTheWaIdSender(string stored)
+    {
+        var tenant=Guid.NewGuid();var patient=Guid.NewGuid();
+        var token="e30."+Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(new{tenant_id=tenant,exp=DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds()})).TrimEnd('=').Replace('+','-').Replace('/','_')+".synthetic";
+        var config=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{
+            [$"Hospital:Tenants:{tenant}:BaseUrl"]="https://hospital.example.invalid/",[$"Hospital:Tenants:{tenant}:AccessToken"]=token}).Build();
+        var client=new HospitalClient(new HttpClient(new Handler(_=>new(HttpStatusCode.OK){Content=JsonContent.Create(new{patientId=patient,phone=stored})})),config);
+        await client.GetVerifiedPatientAsync(tenant,patient,"50370000001");
+    }
     sealed class Handler(Func<HttpRequestMessage,HttpResponseMessage> send):HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken ct)=>Task.FromResult(send(request));
