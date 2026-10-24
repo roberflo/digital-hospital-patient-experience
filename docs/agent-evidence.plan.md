@@ -1,10 +1,13 @@
 # Plan — Evidencia, no confianza (S1)
 
-> **No empezado.** Re-anclado el 2026-10-23 contra `main` `ff5a80c`, después de intake-voice
-> (`30081e5`) y slot-first (`37bb7ed`). EV-1…EV-7, EV-9 y EV-10 se pueden implementar. EV-8 está
-> **bloqueado** hasta que el propietario conteste la pregunta de abajo.
+> **Cerrado (2026-10-23)** — `2bbb8e5` (montajes), `21d1939` (EV-1…7, 9, 10), `a795e5b` (EV-8). EV-1…EV-10 hechos, **incluido EV-8**. Suite 1356 → 1368
+> (+12). Ejecución y salidas literales al final («Ejecución 2026-10-23»).
+>
+> Re-anclado el 2026-10-23 contra `main` `ff5a80c`, después de intake-voice (`30081e5`) y
+> slot-first (`37bb7ed`). **EV-8 decidido por el propietario el 2026-10-23: «sí a las dos».** Se
+> pregunta siempre el sexo del documento con los dos botones; desaparece P-1.
 
-## Pregunta para el propietario (junta A-2 de esta spec y B-1 de agent-intake-voice)
+## Pregunta para el propietario (junta A-2 de esta spec y B-1 de agent-intake-voice) — contestada: «sí a las dos» (2026-10-23)
 
 > **Cuando un paciente nuevo se registra por WhatsApp, ¿le pedimos siempre con los dos botones
 > (Femenino / Masculino) el sexo que aparece en su documento de identidad, aunque ya lo haya
@@ -138,8 +141,7 @@ EV-1, EV-4(a) y EV-4(d) nacen verdes.
 completa. El conteo debe ser la línea base más las pruebas nuevas. Para EV-1, añadir
 temporalmente `string? confidence = null` a `start_registration`, pegar el rojo y retirarlo.
 
-**Paso 4 — EV-8: bloqueado.** No se implementa hasta que el propietario conteste la pregunta de
-arriba (§6).
+**Paso 4 — EV-8: decidido («sí a las dos», 2026-10-23) y hecho** en su propio commit (§6).
 
 ## 3. Montajes que cambian (los asserts no)
 
@@ -210,7 +212,7 @@ El segundo turno «sí» de EV-7 existe porque, sin él, «cero POST» se cumple
 - EV-11: no tiene puerta. Desde aquí no se puede medir si la retención empeora `registro`.
 - INV-EV-3: solo tiene criterio para la fecha (EV-6). Para nombres y teléfono, «dos valores
   distintos» no se puede decidir sin saber a qué campo responden las palabras.
-- EV-8: bloqueado (§6).
+- EV-8: decidido y hecho (§6).
 
 ## 5. Riesgos
 
@@ -265,22 +267,25 @@ Las dos sesiones comparten además la base de pruebas (`docker compose exec db`)
 principal, `bin/obj`. Por eso cada una trabaja en su propio worktree y no se lanzan dos
 `test-backend.sh` desde el mismo directorio.
 
-## 6. EV-8 — BLOQUEADO hasta que el propietario conteste la pregunta de arriba
+## 6. EV-8 — DECIDIDO («sí a las dos», propietario, 2026-10-23) y HECHO
 
-- No se implementa ni se escribe su prueba hasta tener respuesta. Si la respuesta es «sí a las
-  dos», el cambio es mínimo: el campo 3 queda siempre nulo en el filtro de las dos lambdas, y
-  `SexOf` sale de `Wrote` (sigue en `case 4`).
+- Hecho: `Intake.Wrote` devuelve siempre falso para el campo 3, así que el sexo queda nulo en el
+  filtro que comparten las dos lambdas (`StartIntake`). `SexOf` ya no se usa en `Wrote`; sigue en
+  `case 4`.
 - Gracias a S2, el formulario pregunta solo el sexo y conserva el contacto (`AgentIntake.cs:31-34`).
   No hay que tocar `Intake.Start` ni `Answer`, y EV-10 no se roza. La duda del plan original sobre
   dos variantes del formulario ya no existe.
-- Prueba (spec EV-8): el paciente escribe «soy hombre, mi contacto es mi mujer Ana» y el modelo
-  pasa `sex`. Assert: `h.Sent[^1]` contiene «documento de identidad»; el JSON de la actividad
-  `intake` no trae `Sex`.
-- Asserts que cambiarían, porque necesitan un turno más con el toque «f» o «m»:
+- Prueba (spec EV-8): `AgentEvidenceTests.TheSexIsAlwaysTappedNeverTakenFromTheModel`, dos casos:
+  el de la spec («soy hombre, mi contacto es mi mujer Ana»), y uno con «hombre» como única palabra
+  de sexo. El modelo pasa `sex`. Assert: `h.Sent[^1]` contiene «documento de identidad» y «me falta
+  uno»; el JSON del `intake` trae `sex: null`; cero propuestas. El caso de la spec ya salía verde
+  con P-1 (dos palabras de sexo distintas: se retenía); el rojo lo da el segundo caso.
+- Asserts a los que se añadió el turno del toque «f» (el assert final no cambia):
   `AgentHandsTheFormWhatItAlreadyKnows`, `ARelationshipSaid…`, los dos usuarios de
   `ProposeAndGetCode`, `FirstAppointment…` (`:85`), los tres de `HospitalIdempotencyTests` y el
   caso `true` de `AFormThatStartsWithKnownDataReadsLikeAChat`. Este último ya pregunta el sexo y no
-  cambiaría.
+  cambió. También `AgentEvidenceTests.ADateAndAPhoneAreComparedAsADateAndAPhone` (EV-4(a)(d)), que
+  es nueva.
 - Si la respuesta es «el médico necesita otro dato», cambian la pregunta y las opciones
   (`AgentIntake.cs:68`, `:84`) y el valor que se envía a Hospital. Eso es una spec nueva, no este
   plan.
@@ -303,9 +308,118 @@ principal, `bin/obj`. Por eso cada una trabaja en su propio worktree y no se lan
 
 ## Asunciones del plan, a confirmar
 
-- **P-1 (sexo sin EV-8).** EV-4 no dice cómo se compara el sexo, y EV-3 exige tomarlo si consta.
+- ~~**P-1 (sexo sin EV-8).**~~ **Desaparecida** con EV-8 (2026-10-23). EV-4 no dice cómo se compara el sexo, y EV-3 exige tomarlo si consta.
   Se usa el vocabulario del paso 4 (`AgentIntake.cs:68`), incluidos «f» y «m», que son el toque del
   botón. Desaparece si el propietario contesta «sí a las dos».
 - **P-2 (nombres).** «Palabra completa» se lee palabra por palabra en cualquier mensaje de la
   conversación, no como frase contigua. El modelo puede recombinar palabras escritas; eso lo detiene
   la tarjeta, como admite «Límites conocidos».
+
+
+## Ejecución 2026-10-23
+
+Rama `feat/agent-evidence` desde `origin/main` `43b5eda`, en worktree privado. Servicio `db` de
+`recepcion` ya estaba arriba (se dejó arriba). Ni evals ni `AgentLiveJourney`.
+
+**Paso 0 — línea base** (`scripts/test-backend.sh`, sin filtro):
+
+```
+Passed!  - Failed:     0, Passed:  1356, Skipped:     0, Total:  1356, Duration: 3 m 24 s - Recepcion.Tests.dll (net10.0)
+```
+
+**Paso 1 — montajes** (`~AgentIntakeFlowTests|~AgentIntakeTests|~AgentVoiceTests|~HospitalIdempotencyTests`),
+mismos asserts, árbol verde:
+
+```
+Passed!  - Failed:     0, Passed:    87, Skipped:     0, Total:    87, Duration: 6 s - Recepcion.Tests.dll (net10.0)
+```
+
+**Paso 2 — rojos** (`~AgentEvidenceTests`, antes de tocar producción). Nació verde
+`ADateAndAPhoneAreComparedAsADateAndAPhone` (EV-4(a)(d)). EV-1 salió rojo por el conteo: el
+cuerpo trae **16** herramientas, no 17 (`hospital_agreement` sólo se ofrece con convenios
+activos); el assert se corrigió a 16 con ese comentario.
+
+```
+  Failed AgentEvidenceTests.ANameIsComparedWordByWordNeverApproximately [469 ms]
+   Assert.Contains() Failure: Sub-string not found
+String:    "Revisa tus datos:\n\n*Irene Sintética March"···
+Not found: "¿Y tus apellidos?"
+  Failed AgentEvidenceTests.WhatThePatientNeverWroteIsAskedAndKeptNowhere [11 ms]
+   Assert.Contains() Failure: Sub-string not found
+String:    "Revisa tus datos:\n\n*Irene Sintética Mora "···
+Not found: "¿Cuál es tu nombre?"
+  Failed AgentEvidenceTests.AnAdultDateOnlyTheModelGaveIsAskedAndKeptNowhere [14 ms]
+   Assert.Contains() Failure: Sub-string not found
+String:    "Revisa tus datos:\n\n*Irene Sintética Mora "···
+Not found: "¿Cuál es tu fecha de nacimiento?"
+  Failed AgentEvidenceTests.NoToolOffersTheModelAConfidenceAScoreOrASource [27 ms]
+   Assert.Equal() Failure: Values differ
+Expected: 17
+Actual:   16
+  Failed AgentEvidenceTests.TwoBirthDatesThePatientWroteAreBothWithheld [24 ms]
+   Assert.Contains() Failure: Sub-string not found
+String:    "Ya tengo parte de tus datos; me faltan 3."···
+Not found: "¿Cuál es tu fecha de nacimiento?"
+  Failed AgentEvidenceTests.ADateIsReadDayFirstAsTheFormReadsIt [15 ms]
+   Assert.Contains() Failure: Sub-string not found
+String:    "Revisa tus datos:\n\n*Irene Sintética Mora "···
+Not found: "¿Cuál es tu fecha de nacimiento?"
+  Failed AgentEvidenceTests.ASexThePatientNeverWroteIsAsked [17 ms]
+   Assert.Contains() Failure: Sub-string not found
+String:    "Revisa tus datos:\n\n*Irene Sintética Mora "···
+Not found: "documento de identidad"
+  Failed AgentEvidenceTests.AProposedRegistrationThePatientNeverWroteLeavesNoCardAndReachesNoHospital [18 ms]
+   Assert.Empty() Failure: Collection was not empty
+Collection: [PendingAction { Body = "{\"action\":\"register\",\"givenNames\":\"Irene Si"···, Code = "677B71", ConsumedAt = null, ConversationId = a1c51530-2529-40f9-8b1e-2162fdc9f7e4, CreatedAt = 2026-10-24T05:03:48.2106806+00:00, ··· }]
+  Failed AgentEvidenceTests.AMinorIsNotMadeAnAdultByTheModelsDate [16 ms]
+   Assert.Contains() Failure: Sub-string not found
+String:    "Revisa tus datos:\n\n*Diego Sintético Prueb"···
+Not found: "¿Cuál es tu fecha de nacimiento?"
+Failed!  - Failed:     9, Passed:     1, Skipped:     0, Total:    10, Duration: 1 s - Recepcion.Tests.dll (net10.0)
+```
+
+EV-1 con `string? confidence = null` temporal en `start_registration` (retirado después):
+
+```
+  Failed AgentEvidenceTests.NoToolOffersTheModelAConfidenceAScoreOrASource [383 ms]
+   Assert.DoesNotContain() Failure: Filter matched in collection
+                                                                                                                                                            ↓ (pos 33)
+Collection: [···, "start_registration.emergencyContactName", "start_registration.emergencyContactRelationship", "start_registration.emergencyContactPhone", "start_registration.confidence", "hospital_services.words"]
+Failed!  - Failed:     1, Passed:     0, Skipped:     0, Total:     1, Duration: 1 s - Recepcion.Tests.dll (net10.0)
+```
+
+**Paso 3 — verde.** `~AgentEvidenceTests`, luego `~AgentIntake`, luego la suite completa:
+
+```
+Passed!  - Failed:     0, Passed:    10, Skipped:     0, Total:    10, Duration: 1 s - Recepcion.Tests.dll (net10.0)
+Passed!  - Failed:     0, Passed:    56, Skipped:     0, Total:    56, Duration: 5 s - Recepcion.Tests.dll (net10.0)
+Passed!  - Failed:     0, Passed:  1366, Skipped:     0, Total:  1366, Duration: 1 m 21 s - Recepcion.Tests.dll (net10.0)
+```
+
+**Paso 4 — EV-8.** Rojo de `TheSexIsAlwaysTappedNeverTakenFromTheModel` (el caso de la spec ya
+salía verde con P-1; el rojo es el de «hombre» solo):
+
+```
+  Failed AgentEvidenceTests.TheSexIsAlwaysTappedNeverTakenFromTheModel(said: "Soy Pedro Sintético Prueba, hombre, nací el 2 de f"···) [1 s]
+   Assert.Contains() Failure: Sub-string not found
+String:    "Revisa tus datos:\n\n*Pedro Sintético Prueb"···
+Not found: "documento de identidad"
+Failed!  - Failed:     1, Passed:     1, Skipped:     0, Total:     2, Duration: 4 s - Recepcion.Tests.dll (net10.0)
+```
+
+Verde, suite completa sin filtro, con el turno del toque «f» añadido a las pruebas de §6:
+
+```
+Passed!  - Failed:     0, Passed:  1368, Skipped:     0, Total:  1368, Duration: 1 m 46 s - Recepcion.Tests.dll (net10.0)
+```
+
+Conteo final: 1356 + 12 nuevas (10 de los pasos 2–3, 2 casos de EV-8) = **1368**.
+
+### Desviaciones
+
+- EV-1 afirma 16 herramientas, no 17 (ver arriba).
+- El filtro vive en un método `StartIntake` de `AgentRuntime` que llaman las dos lambdas, en vez
+  de duplicar el cuerpo en cada una.
+- EV-4(c) afirma el `intake` guardado (apellidos nulos; fecha y teléfono conservados) en vez de
+  «me falta uno»: con EV-8 faltan dos (apellidos y sexo).
+- La spec (`agent-evidence.md`, A-2) sigue diciendo «pendiente de confirmar»; no se tocó.
