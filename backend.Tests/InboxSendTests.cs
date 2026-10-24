@@ -36,7 +36,7 @@ public sealed class InboxSendTests
         var second = Assert.IsAssignableFrom<IValueHttpResult>(await Post(h, svc, key)).Value as Message;
 
         Assert.NotNull(first); Assert.Equal(first.Id, second!.Id); Assert.Equal("sent", first.Status);
-        Assert.Equal(["50370000000"], to);
+        Assert.Equal(["+50370000000"], to); // INV-9, criterio 28: «+» and the country code
         Assert.Equal(1, await h.Db.Messages.CountAsync(x => x.ConversationId == h.Conversation.Id && x.Sender == "human"));
         var conversation = await h.Fresh();
         Assert.Equal("human", conversation.Status); Assert.Equal("staff-1", conversation.AssignedTo);
@@ -54,7 +54,7 @@ public sealed class InboxSendTests
 
         await Post(h, svc, "22222222-2222-4222-8222-222222222222");
 
-        Assert.Equal(["50370000001"], to);
+        Assert.Equal(["+50370000001"], to);
         Assert.Equal("70000001", (await h.Db.Contacts.AsNoTracking().SingleAsync(c => c.Id == h.Contact.Id)).Phone); // read, never rewritten
     }
 

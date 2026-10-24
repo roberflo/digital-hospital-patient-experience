@@ -371,7 +371,7 @@ public sealed partial class AgentIntegrationTests:IAsyncLifetime {
                 if(name.EndsWith("_v4")){components.Add(new{type="FOOTER",text="Para dejar de recibir recordatorios escribe BAJA."});components.Add(new{type="BUTTONS",buttons=new[]{new{type="QUICK_REPLY",text="Confirmar"},new{type="QUICK_REPLY",text="Cambiar fecha"},new{type="QUICK_REPLY",text="Cancelar"}}});}
                 return Json(new{data=new[]{new{name,language="es",status=scenario is "template" or "day_v4_pending"?"PENDING":"APPROVED",category="UTILITY",parameter_format="NAMED",components}}});
             }
-            sends++;using var payload=JsonDocument.Parse(await req.Content!.ReadAsStringAsync());sent=payload.RootElement.Clone();Assert.Equal("template",payload.RootElement.GetProperty("type").GetString());Assert.Equal(contact.Phone,payload.RootElement.GetProperty("to").GetString());Assert.DoesNotContain(contact.Name,payload.RootElement.GetRawText());
+            sends++;using var payload=JsonDocument.Parse(await req.Content!.ReadAsStringAsync());sent=payload.RootElement.Clone();Assert.Equal("template",payload.RootElement.GetProperty("type").GetString());Assert.Equal("+"+contact.Phone,payload.RootElement.GetProperty("to").GetString());Assert.DoesNotContain(contact.Name,payload.RootElement.GetRawText());
             if(scenario=="timeout")throw new HttpRequestException("Synthetic timeout");return Json(new{messages=new[]{new{id="reminder-"+Guid.NewGuid()}}});
         });
         var service=new AppointmentReminderService(db,scope,h,new KapsoClient(new HttpClient(k),cfg),Service(k),cfg);

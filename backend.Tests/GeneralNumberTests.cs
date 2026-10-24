@@ -482,6 +482,7 @@ public sealed class GeneralNumberTests : IAsyncLifetime
         var (key, path, body) = Assert.Single(kapso); // the second one, within 24 h, gets nothing
         Assert.Equal((PlatformKey, $"/meta/whatsapp/v24.0/{PlatformNumber}/messages"), (key, path));
         Assert.Equal(FreeText, body.GetProperty("text").GetProperty("body").GetString());
+        Assert.Equal("+" + phone, body.GetProperty("to").GetString()); // criterio 28: the wa_id with its «+»
         Assert.Equal(before, await Everywhere()); // no Contact, Conversation, Message or agent Job anywhere (INV-9, A17)
         await using var db = own.NewDb(new TenantScope());
         var cap = await db.GeneralReplyCaps.AsNoTracking().SingleAsync(c => c.PhoneHash == Hash(phone));
@@ -604,8 +605,8 @@ public sealed class GeneralNumberTests : IAsyncLifetime
             await Dispatch(clinicA, day.Id, day.DueAt);
             Assert.Equal("sent", (await Row(clinicA, day.Id)).Status);
         }
-        Assert.Contains(kapso, k => k.Body.GetProperty("to").GetString() == "14155550100");
-        Assert.DoesNotContain(kapso, k => k.Body.GetProperty("to").GetString() is "12" or "70000000" or "50370000000");
+        Assert.Contains(kapso, k => k.Body.GetProperty("to").GetString() == "+14155550100"); // criterio 28
+        Assert.DoesNotContain(kapso, k => k.Body.GetProperty("to").GetString()!.TrimStart('+') is "12" or "70000000" or "50370000000");
     }
 
     // Criterio 23 (OQ-4, branch B while Kapso's wa_id is unmeasured): only +503 and +1, where the wa_id is the E.164, are written to.
