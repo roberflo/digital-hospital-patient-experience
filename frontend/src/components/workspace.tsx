@@ -451,6 +451,9 @@ function PhoneField({
   const number = useRef<HTMLInputElement>(null);
   const result = phoneToSend(country, local, stored);
   const error = local.trim() && 'error' in result ? result.error : '';
+  // Said once the person leaves the number or tries to save, not on every keystroke.
+  const [touched, setTouched] = useState(false);
+  const shown = touched ? error : '';
   useEffect(() => number.current?.setCustomValidity(error), [error]);
   return (
     <div className="flex flex-col gap-2">
@@ -477,6 +480,8 @@ function PhoneField({
           required={required}
           value={local}
           onChange={(e) => setLocal(e.target.value)}
+          onBlur={() => setTouched(true)}
+          onInvalid={() => setTouched(true)}
           placeholder={
             country === OTHER_COUNTRY
               ? '+44 7700 900123'
@@ -484,12 +489,16 @@ function PhoneField({
                 ? '415 555 0100'
                 : '7000 0000'
           }
-          aria-invalid={error ? true : undefined}
-          aria-describedby={error ? id + '-error' : undefined}
+          aria-invalid={shown ? true : undefined}
+          aria-describedby={shown ? id + '-error' : undefined}
         />
         <input type="hidden" name={name} value={'phone' in result ? result.phone : ''} />
       </div>
-      {error && <FieldError id={id + '-error'}>{error}</FieldError>}
+      {shown && (
+        <FieldError id={id + '-error'} role={undefined}>
+          {shown}
+        </FieldError>
+      )}
     </div>
   );
 }

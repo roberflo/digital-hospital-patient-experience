@@ -72,6 +72,7 @@ test('contact creation and pipeline work through authenticated BFF', async ({ pa
   const local = '7' + Date.now().toString().slice(-7);
   const phone = page.getByLabel('Teléfono', { exact: true });
   await phone.fill('7000');
+  await phone.blur(); // said on leaving the number, not while typing
   await expect(phone).toHaveAccessibleDescription('Escribe 8 dígitos para El Salvador.');
   await phone.fill(local);
   const created = page.waitForRequest(
