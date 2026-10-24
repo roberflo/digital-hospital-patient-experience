@@ -399,3 +399,34 @@ $ python3 -I scripts/check-nim.py
 urllib.error.HTTPError: HTTP Error 404: Not Found
 ```
 
+
+**Repetición 2026-10-24 contra `hospital-api` construido desde Hospital `main` `78785e32`** (Recepción `6562991`): mismo resultado, así que los fallos son del proveedor de IA (404), no de un Hospital desfasado.
+
+```
+$ scripts/live-agent.sh NewClientRegistersAndBooksFromTheMenuWithoutTheModel
+  Passed AgentLiveJourney.NewClientRegistersAndBooksFromTheMenuWithoutTheModel [1 s]
+$ scripts/live-agent.sh TappedSlotBooksInHospitalWithoutTheModel
+  Passed AgentLiveJourney.TappedSlotBooksInHospitalWithoutTheModel [1 s]
+$ scripts/live-agent.sh HospitalAnswersItsDisciplinesCatalogueAndContact
+  Passed AgentLiveJourney.HospitalAnswersItsDisciplinesCatalogueAndContact [201 ms]
+$ scripts/live-agent.sh TappedHourKeepsWhatThePatientSaidTheAppointmentIsFor
+  Failed AgentLiveJourney.TappedHourKeepsWhatThePatientSaidTheAppointmentIsFor [1 s]
+   Assert.Contains() Failure: Sub-string not found
+String:    "*Cita:* sábado 24 de octubre a las 08:00\n"···
+Not found: "*Motivo:* Entrega de resultados"
+$ scripts/live-agent.sh AgentAnswersPriceAddressDisciplineAndAgreementFromHospital
+  Failed AgentLiveJourney.AgentAnswersPriceAddressDisciplineAndAgreementFromHospital [1 s]
+   Assert.Contains() Failure: Sub-string not found
+String:    "Disculpa, en este momento no puedo leer m"···
+Not found: "120"
+$ scripts/live-agent.sh NewClientRegistersBooksAndIsAttended
+  Failed AgentLiveJourney.NewClientRegistersBooksAndIsAttended [1 s]
+   Assert.Contains() Failure: Sub-string not found
+String:    "Hay espacio el *sábado 24 de octubre*.\nTo"···
+Not found: "son 7 datos cortos"
+$ scripts/live-agent.sh AgentKeepsThePriceToReceptionWhenPricesAreOff
+  Failed AgentLiveJourney.AgentKeepsThePriceToReceptionWhenPricesAreOff [1 s]
+   Assert.Contains() Failure: Sub-string not found
+String:    "Disculpa, en este momento no puedo leer m"···
+Not found: "Carilla"
+```
