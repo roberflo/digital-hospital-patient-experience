@@ -886,7 +886,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         if (sex is not ("female" or "male")) throw new ArgumentException("Sexo registral inválido");
         var born = DateOnly.ParseExact(birthDate, "yyyy-MM-dd"); var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, zone).DateTime);
         if (born > today.AddYears(-18) || born < today.AddYears(-120)) return Result(new { error = "Por WhatsApp sólo se registran personas adultas con fecha de nacimiento válida. Deriva a recepción." });
-        var payload = new JsonObject { ["action"] = "register", ["givenNames"] = Rules.Required(givenNames, 100), ["familyNames"] = Rules.Required(familyNames, 100), ["birthDate"] = birthDate, ["sex"] = sex, ["emergencyName"] = Rules.Required(emergencyContactName), ["emergencyRelationship"] = Rules.Required(emergencyContactRelationship, 60), ["emergencyPhone"] = Rules.Phone(emergencyContactPhone) };
+        var payload = new JsonObject { ["action"] = "register", ["givenNames"] = Rules.Required(givenNames, 100), ["familyNames"] = Rules.Required(familyNames, 100), ["birthDate"] = birthDate, ["sex"] = sex, ["emergencyName"] = Rules.Required(emergencyContactName), ["emergencyRelationship"] = Rules.Required(emergencyContactRelationship, 60), ["emergencyPhone"] = Rules.TypedPhone(emergencyContactPhone) };
         // The hour tapped before the form travels in the same proposal, with the keys an appointment proposal uses: one card, one Confirmar.
         // An hour that passed while the form was being filled is left out, and the card is the registration alone.
         var booking = "";

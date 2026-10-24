@@ -139,7 +139,7 @@ public sealed class AgentSlotFirstTests : IAsyncLifetime
 
         // The hour is checked before anything is written; the record is created, verified and linked; only then the appointment. No POST twice.
         Assert.Equal(["GET /v1/agenda/booking-options", "POST /v1/patients", $"GET /v1/patients/{Patient}", $"GET /v1/patients/{Patient}", "POST /v1/agenda"], seen);
-        Assert.Equal("+" + h.Contact.Phone, bodies[0].GetProperty("phone").GetString()); // E.164 (criterio 16) Assert.False(bodies[0].GetProperty("forceCreateDespiteDuplicate").GetBoolean());
+        Assert.Equal("+" + h.Contact.Phone, bodies[0].GetProperty("phone").GetString()); Assert.False(bodies[0].GetProperty("forceCreateDespiteDuplicate").GetBoolean()); // E.164 (criterio 16)
         Assert.Equal(("first-visit", Patient, Doctor, Start), (bodies[1].GetProperty("visitKind").GetString(), bodies[1].GetProperty("patientId").GetGuid(), bodies[1].GetProperty("clinicianId").GetGuid(), bodies[1].GetProperty("startsAt").GetDateTimeOffset()));
         await h.Db.Entry(h.Contact).ReloadAsync(); Assert.Equal(Patient, h.Contact.PatientId);
         Assert.StartsWith("Listo, Ana, ya te registré", done); Assert.Contains("quedó agendada", done); Assert.Contains("a las 09:00", done); ReadsLikeAChat(done);

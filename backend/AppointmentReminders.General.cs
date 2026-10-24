@@ -8,7 +8,6 @@ namespace Recepcion;
 /// HMAC, and the phone is read again from Hospital's minimal contract (criterio 41) right before each send.</summary>
 public sealed partial class AppointmentReminderService
 {
-    /// <summary>Why a recipient Hospital named is not written to (the row says it; nothing is sent).</summary>
     /// <summary>The note on a row whose withdrawal Hospital refused for good (4xx): no more retries; the owner's doubts list shows it.</summary>
     public const string WithdrawalRefused = "Hospital rechazó registrar el retiro de la autorización tras BAJA; revíselo con la clínica.";
     public const string UnusablePhone = "Teléfono inválido o sin código de país; el número general no puede escribirle.";

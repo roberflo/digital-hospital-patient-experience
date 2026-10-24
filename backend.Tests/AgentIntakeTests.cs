@@ -133,6 +133,21 @@ public sealed class AgentIntakeTests : IAsyncLifetime
         Assert.DoesNotContain(h.Sent, text => text.Contains("CONFIRMAR"));
     }
 
+    /// <summary>INV-7: seven digits the patient typed for the emergency phone, written in the chat and given by the model, are never proposed.</summary>
+    [Fact]
+    public async Task SevenTypedDigitsAreNeverProposedAsTheEmergencyPhone()
+    {
+        var posts = new List<JsonElement>(); var hospital = Registry(posts, id => new { created = true, patientId = id, duplicateCandidates = Array.Empty<object>() });
+        await h.Say("patient", "Soy Ana Sintética López Prueba, mujer, nací el 12/03/1990. Mi hermano Carlos Sintético, 700-0000.");
+        var arguments = new { givenNames = "Ana Sintética", familyNames = "López Prueba", birthDate = "1990-03-12", sex = "female", emergencyContactName = "Carlos Sintético", emergencyContactRelationship = "hermano", emergencyContactPhone = "700-0000" };
+
+        await h.Runtime(h.Model(AgentHarness.ToolCall("propose_registration", arguments), AgentHarness.Reply("Revisa tus datos y confirma.")), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
+        await Tap("f", hospital); // EV-8: the sex is always tapped
+
+        Assert.Empty(await h.Pending("proposal"));
+        Assert.Empty(posts);
+    }
+
     [Fact]
     public async Task LinkedPatientIsNeverRegisteredAgain()
     {
