@@ -65,7 +65,7 @@ public sealed partial record Intake(int Step, string? GivenNames = null, string?
                 // Said back in words: «03/04/1990» is two different days depending on who reads it.
                 return born > today.AddYears(-18) ? (this with { Step = -1 }, "", null) : Ask((this with { BirthDate = born.ToString("yyyy-MM-dd") }).Next(), $"Entonces tu fecha de nacimiento es el *{born.Day} de {Months[born.Month - 1]} de {born.Year}*.\n\n");
             case 4:
-                var sex = value.ToLowerInvariant() switch { "femenino" or "f" or "mujer" or "female" => "female", "masculino" or "m" or "hombre" or "male" => "male", _ => null };
+                var sex = SexOf(value);
                 return sex is null ? Ask(this, "Necesito una de las dos opciones.\n\n") : Ask((this with { Sex = sex }).Next());
             case 5: return Name().IsMatch(value) ? Ask((this with { EmergencyName = value }).Next()) : Ask(this, "No pude leer ese nombre.\n\n");
             case 6: return Name().IsMatch(value) && value.Length <= 60 ? Ask((this with { EmergencyRelationship = value }).Next()) : Ask(this, "No pude leer el parentesco.\n\n");
@@ -75,6 +75,36 @@ public sealed partial record Intake(int Step, string? GivenNames = null, string?
             default: return (this, "", null);
         }
     }
+
+    static string? SexOf(string value) => value.Trim().ToLowerInvariant() switch { "femenino" or "f" or "mujer" or "female" => "female", "masculino" or "m" or "hombre" or "male" => "male", _ => null };
+
+    /// <summary>Whether the patient wrote <paramref name="value"/> for the datum <paramref name="field"/> (0–6, the form's order) in one of
+    /// <paramref name="said"/>, the patient's messages of the conversation in progress (docs/agent-evidence.md). Compared by what the datum is,
+    /// never approximately: names word by word without accents or case, the date as the form reads it, the phone as its digits.
+    /// Two different valid birth dates written mean neither is taken.</summary>
+    public static bool Wrote(int field, string value, IReadOnlyCollection<string> said, DateOnly today)
+    {
+        switch (field)
+        {
+            case 2: return Date(value) is { } date && said.SelectMany(Dates).Where(d => d <= today && d >= today.AddYears(-120)).Distinct().SequenceEqual([date]);
+            case 3: return SexOf(value) is { } sex && said.SelectMany(Words).Select(SexOf).OfType<string>().Distinct().SequenceEqual([sex]);
+            case 6: return Phone(value) is { } phone && said.SelectMany(s => PhoneRun().Matches(s)).Any(run => Phone(run.Value) == phone);
+            default: var written = said.SelectMany(Words).ToHashSet(); return Words(value) is { Length: > 0 } words && words.All(written.Contains);
+        }
+    }
+    static string[] Words(string text) => AgentMemory.Fold(text).Split(' ', StringSplitOptions.RemoveEmptyEntries);
+    static string? Phone(string text) { try { return Rules.Phone(text); } catch (ArgumentException) { return null; } }
+    /// <summary>Every date in the text, by each of the form's four readings: <see cref="Date"/> stops at the first.</summary>
+    static IEnumerable<DateOnly> Dates(string text)
+    {
+        static int N(Match m, int group) => int.Parse(m.Groups[group].Value);
+        return Iso().Matches(text).Select(m => Valid(N(m, 1), N(m, 2), N(m, 3)))
+            .Concat(Numeric().Matches(text).Select(m => Valid(N(m, 3), N(m, 2), N(m, 1))))
+            .Concat(Worded().Matches(text).Select(m => Month(m.Groups[2].Value) is { } month ? Valid(N(m, 3), month, N(m, 1)) : null))
+            .Concat(MonthFirst().Matches(text).Select(m => Month(m.Groups[1].Value) is { } month ? Valid(N(m, 3), month, N(m, 2)) : null))
+            .OfType<DateOnly>();
+    }
+    static DateOnly? Valid(int year, int month, int day) => year is >= 1 and <= 9999 && month is >= 1 and <= 12 && day >= 1 && day <= DateTime.DaysInMonth(year, month) ? new DateOnly(year, month, day) : null;
 
     static (Intake State, string Prompt, Choices? Choices) Ask(Intake state, string lead = "") => state.Step switch
     {
@@ -98,7 +128,7 @@ public sealed partial record Intake(int Step, string? GivenNames = null, string?
         else if (Worded().Match(text) is { Success: true } w && Month(w.Groups[2].Value) is { } worded) (day, month, year) = (int.Parse(w.Groups[1].Value), worded, int.Parse(w.Groups[3].Value));
         else if (MonthFirst().Match(text) is { Success: true } mf && Month(mf.Groups[1].Value) is { } first) (day, month, year) = (int.Parse(mf.Groups[2].Value), first, int.Parse(mf.Groups[3].Value));
         else return null;
-        return year is >= 1 and <= 9999 && month is >= 1 and <= 12 && day >= 1 && day <= DateTime.DaysInMonth(year, month) ? new DateOnly(year, month, day) : null;
+        return Valid(year, month, day);
     }
 
     static int? Month(string word) => Array.IndexOf(Months, word.ToLowerInvariant().Replace("setiembre", "septiembre")) is >= 0 and var index ? index + 1 : null;
@@ -108,5 +138,7 @@ public sealed partial record Intake(int Step, string? GivenNames = null, string?
     [GeneratedRegex(@"(?i)(?<![\p{L}\d])(\p{L}{4,10})\s+(\d{1,2})(?:\s*,\s*|\s+(?:de|del)\s+|\s+)(\d{4})(?!\d)")] private static partial Regex MonthFirst();
     [GeneratedRegex(@"(?<!\d)(\d{4})-(\d{1,2})-(\d{1,2})(?!\d)")] private static partial Regex Iso();
     [GeneratedRegex(@"(?<!\d)(\d{1,2})[/\-. ](\d{1,2})[/\-. ](\d{4})(?!\d)")] private static partial Regex Numeric();
+    /// <summary>Digits a phone is written with. It never runs across «. » or «, »: «…1990. 7000 0001» is a year and a phone.</summary>
+    [GeneratedRegex(@"\+?\(?\d[\d)]*(?:[ .\-]\(?\d[\d)]*)*")] private static partial Regex PhoneRun();
     [GeneratedRegex(@"(?i)(?<!\d)(\d{1,2})\s+(?:de\s+)?(\p{L}{4,10})\s+(?:(?:de|del)\s+)?(\d{4})(?!\d)")] private static partial Regex Worded();
 }

@@ -57,7 +57,7 @@ public static partial class AgentMemory
     static (int From, int To)? Band(string folded) => folded.Contains("tarde") ? (12, 18) : folded.Contains("noche") ? (18, 24) : folded.Contains("temprano") ? (0, 10) : folded.Contains("manana") ? (0, 12) : null;
 
     static string Line(string text, int max) { var one = Regex.Replace(text, @"\s+", " ").Trim(); return one.Length > max ? one[..max] + "…" : one; }
-    static string Fold(string text) => new string(text.Normalize(NormalizationForm.FormD).Where(c => CharUnicodeInfo.GetUnicodeCategory(c) != UnicodeCategory.NonSpacingMark).Select(c => char.IsLetterOrDigit(c) ? char.ToLowerInvariant(c) : ' ').ToArray());
+    internal static string Fold(string text) => new string(text.Normalize(NormalizationForm.FormD).Where(c => CharUnicodeInfo.GetUnicodeCategory(c) != UnicodeCategory.NonSpacingMark).Select(c => char.IsLetterOrDigit(c) ? char.ToLowerInvariant(c) : ' ').ToArray());
     [GeneratedRegex(@"diab|hipertens|presi[oó]n|embaraz|al[eé]rgi|medic|pastilla|metformin|insulin|\bmg\b|dolor|enferm|diagn|c[aá]ncer|asma|tratamiento|recet|s[ií]ntoma|cirug|operaci|terapia|\bvih\b|depresi|ansiedad", RegexOptions.IgnoreCase)] private static partial Regex Health();
     [GeneratedRegex(@"mañana|tarde|noche|mediod[ií]a|temprano|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo|fin de semana|\d", RegexOptions.IgnoreCase)] private static partial Regex TimeOfDay();
     [GeneratedRegex(@"^[\p{L}.'’]+( [\p{L}.'’]+){0,4}$")] private static partial Regex ShortName();

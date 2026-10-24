@@ -584,6 +584,15 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         return result;
     }
     static JsonElement Result(object value) => JsonSerializer.SerializeToElement(value, Json);
+    /// <summary>Both registration tools start the form (docs/agent-evidence.md): it takes only what the patient wrote in this conversation, so a
+    /// value the model gives and the patient never wrote counts as not given and is asked. Nothing of it is kept.</summary>
+    JsonElement StartIntake(params string?[] given)
+    {
+        if (contact.PatientId is not null) throw new ArgumentException("El contacto ya tiene expediente");
+        var said = session.Where(x => x.Sender == "patient").Select(x => x.Body).ToList(); var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, zone).DateTime);
+        startIntake = true; known = given.Select((value, field) => !string.IsNullOrWhiteSpace(value) && Intake.Wrote(field, value, said, today) ? value : null).ToArray();
+        return Result(new { started = true, instruction = "El sistema pregunta al paciente sólo los datos que falten, uno por uno. No escribas nada más." });
+    }
 
     /// <summary>The only actions the model can take. Patient, phone and tenant come from the
     /// conversation, never from an argument.</summary>
@@ -631,13 +640,9 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
         AIFunctionFactory.Create((CancellationToken ct) => SendPrescription(null, ct), "send_latest_prescription", "Enviar la última receta firmada de este paciente cuando la solicita; el servidor elige la firma más reciente"),
         AIFunctionFactory.Create((string prescriptionId, CancellationToken ct) => SendPrescription(Guid.Parse(prescriptionId), ct), "send_prescription", "Entregar PDF firmado solicitado por el paciente"),
         AIFunctionFactory.Create(([Description("create, reschedule o cancel")] string action, string? doctorId = null, string? appointmentId = null, [Description("ISO8601 con zona")] string? startsAt = null, int? durationMinutes = null, [Description("Sólo al crear y sólo si el paciente dijo que la cita es para esto: procedure (un procedimiento ya indicado), results (recoger resultados) o paperwork (un trámite). Para una consulta no lo pongas")] string? kind = null, CancellationToken ct = default) => Propose(action, doctorId, appointmentId, startsAt, durationMinutes, ct, kind: kind), "propose_action", "Proponer crear, mover o cancelar cita. Requiere confirmación del paciente"),
-        AIFunctionFactory.Create((string givenNames, string familyNames, [Description("YYYY-MM-DD")] string birthDate, [Description("female o male")] string sex, string emergencyContactName, [Description("Parentesco con el paciente")] string emergencyContactRelationship, string emergencyContactPhone, CancellationToken ct) => ProposeRegistration(givenNames, familyNames, birthDate, sex, emergencyContactName, emergencyContactRelationship, emergencyContactPhone, ct), "propose_registration", "Proponer el registro como paciente de quien escribe, cuando no tiene expediente. Requiere confirmación del paciente"),
+        AIFunctionFactory.Create((string givenNames, string familyNames, [Description("YYYY-MM-DD")] string birthDate, [Description("female o male")] string sex, string emergencyContactName, [Description("Parentesco con el paciente")] string emergencyContactRelationship, string emergencyContactPhone, CancellationToken ct) => StartIntake(givenNames, familyNames, birthDate, sex, emergencyContactName, emergencyContactRelationship, emergencyContactPhone), "propose_registration", "Proponer el registro como paciente de quien escribe, cuando no tiene expediente. Requiere confirmación del paciente"),
         AIFunctionFactory.Create((string? givenNames = null, string? familyNames = null, [Description("Como la dijo el paciente")] string? birthDate = null, [Description("femenino o masculino")] string? sex = null, string? emergencyContactName = null, string? emergencyContactRelationship = null, string? emergencyContactPhone = null) =>
-        {
-            if (contact.PatientId is not null) throw new ArgumentException("El contacto ya tiene expediente");
-            startIntake = true; known = [givenNames, familyNames, birthDate, sex, emergencyContactName, emergencyContactRelationship, emergencyContactPhone];
-            return Result(new { started = true, instruction = "El sistema pregunta al paciente sólo los datos que falten, uno por uno. No escribas nada más." });
-        }, "start_registration", "Registrar a quien escribe cuando no tiene expediente. Pasa los datos que el paciente YA dijo, tal cual los dijo, sin completar ninguno; el sistema pide los que falten"),
+            StartIntake(givenNames, familyNames, birthDate, sex, emergencyContactName, emergencyContactRelationship, emergencyContactPhone), "start_registration", "Registrar a quien escribe cuando no tiene expediente. Pasa los datos que el paciente YA dijo, tal cual los dijo, sin completar ninguno; el sistema pide los que falten"),
         AIFunctionFactory.Create(async ([Description("Nombre o palabra del servicio; vacío para ver qué hay")] string? words = null, CancellationToken ct = default) =>
         {
             // Hospital's catalogue of active services. Whether a service exists is always answered; what it costs, only when the hospital turned prices on.
