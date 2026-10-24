@@ -263,6 +263,20 @@ public sealed class HospitalStaffTokenTests : IAsyncLifetime
         Assert.Null((await db.Opportunities.SingleAsync(o => o.Id == opportunity.Id)).HospitalPurchaseRequest);
     }
 
+    // Criterio 26: the contact form sends the stored phone back as it was (digits, no «+»). Saved unchanged, a wa_id of another country or an
+    // 8-digit number stored before 503 was assumed keeps its phone and its hash: only a phone the team actually retyped follows the new rule.
+    [Theory][InlineData("14155550100")][InlineData("70000001")]
+    public async Task AContactSavedWithItsPhoneUnchangedKeepsIt(string stored)
+    {
+        await using (var db = h.NewDb(h.Scope)) { var row = await db.Contacts.SingleAsync(c => c.Id == h.Contact.Id); row.Phone = stored; row.PhoneHash = "synthetic-hash"; await db.SaveChangesAsync(); }
+
+        await Call(App(Recorded()), "PUT /api/contacts/{id:guid}", "", new ContactInput("Paciente Sintético", stored, null, null), "admin");
+
+        await using var check = h.NewDb(h.Scope);
+        var saved = await check.Contacts.AsNoTracking().SingleAsync(c => c.Id == h.Contact.Id);
+        Assert.Equal((stored, "synthetic-hash", "Paciente Sintético"), (saved.Phone, saved.PhoneHash, saved.Name));
+    }
+
     readonly List<string> google = [];
     WebApplication App(HttpMessageHandler hospital)
     {
@@ -270,7 +284,7 @@ public sealed class HospitalStaffTokenTests : IAsyncLifetime
         builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["ConnectionStrings:Database"] = "Host=never-opened", ["Auth:Authority"] = "https://identity.example.test/realms/hospital", ["KEY_DIRECTORY"] = Path.GetTempPath(),
-            ["GOOGLE_CLIENT_ID"] = "synthetic", ["GOOGLE_CLIENT_SECRET"] = "synthetic",
+            ["GOOGLE_CLIENT_ID"] = "synthetic", ["GOOGLE_CLIENT_SECRET"] = "synthetic", ["PHONE_HASH_KEY"] = "synthetic-phone-hash-key",
             [$"Hospital:Tenants:{h.Scope.Id}:BaseUrl"] = "https://hospital.example.invalid/", [$"Hospital:Tenants:{h.Scope.Id}:AccessToken"] = Service
         });
         builder.Services.AddRecepcionServices(builder.Configuration, false);

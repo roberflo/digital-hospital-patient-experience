@@ -19,13 +19,17 @@ public sealed class SecurityTests {
     [Theory][InlineData("50370000000","50370000000")][InlineData("+503 7000-0000","50370000000")][InlineData("+683 4001","6834001")][InlineData("6834001","6834001")]
     public void PhoneCanonicalization(string input,string output)=>Assert.Equal(output,Rules.Phone(input));
     [Theory][InlineData("7000-0000","50370000000")][InlineData("2200 0000","50322000000")][InlineData("50370000000","50370000000")][InlineData("+503 7000-0000","50370000000")]
-    [InlineData("+50012345","50012345")][InlineData("51234567","51234567")][InlineData("14155550100","14155550100")][InlineData("+52 55 1234 5678","525512345678")][InlineData("+683 4001","6834001")]
+    [InlineData("+50012345","50012345")][InlineData("51234567","50351234567")][InlineData("+1 415 555 0100","14155550100")][InlineData("+52 55 1234 5678","525512345678")][InlineData("+683 4001","6834001")]
     public void ContactPhoneAssumesElSalvadorOnlyForLocalNumbers(string input,string output)=>Assert.Equal(output,Rules.ContactPhone(input));
     [Theory][InlineData("123")][InlineData("not a number")][InlineData("1234567890123456")][InlineData("123456")]
     public void BadPhoneRejected(string phone)=>Assert.Throws<ArgumentException>(()=>Rules.Phone(phone));
     /// <summary>INV-7: seven digits typed by a person without «+» are most likely a Salvadoran number missing a digit.</summary>
     [Theory][InlineData("7000000")][InlineData("700-0000")]
     public void ContactPhoneRejectsSevenLocalDigits(string phone)=>Assert.Throws<ArgumentException>(()=>Rules.ContactPhone(phone));
+    /// <summary>Criterio 26: without «+» only a Salvadoran number is understood (8 digits, or 11 starting with 503); anything else asks for the code.
+    /// <c>14155550100</c> without «+» was taken as written before; by decision it is now refused.</summary>
+    [Theory][InlineData("14155550100")][InlineData("123456789")][InlineData("5037000000")][InlineData("525512345678")]
+    public void ContactPhoneWithoutPlusIsOnlySalvadoran(string phone)=>Assert.Equal("Escriba el número con + y su código de país.",Assert.Throws<ArgumentException>(()=>Rules.ContactPhone(phone)).Message);
     [Theory][InlineData("+683 4001","6834001")][InlineData("50370000000","50370000000")][InlineData("123456",null)][InlineData("0123456",null)]
     public void HospitalPhonesMatchFromSevenDigits(string phone,string? digits)=>Assert.Equal(digits,Recepcion.Integrations.HospitalClient.NormalizePhone(phone));
     [Fact]public void HashUsesSecretAndNormalizedPhone(){Assert.Equal(Rules.PhoneHash("+503 7000-0000","secret"),Rules.PhoneHash("50370000000","secret"));Assert.NotEqual(Rules.PhoneHash("50370000000","secret"),Rules.PhoneHash("50370000000","other"));

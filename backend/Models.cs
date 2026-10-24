@@ -314,12 +314,14 @@ public static class Rules
         var value = new string(phone.Where(char.IsAsciiDigit).ToArray());
         if (value.Length is < 7 or > 15 || value.StartsWith("0")) throw new ArgumentException("Teléfono inválido. Escribe 8 dígitos (7000 0000) o el número con + y su código de país."); return value;
     }
-    /// <summary>A contact typed by the team: a Salvadoran number written locally (7000-0000) gets 503, the code WhatsApp delivers it with,
-    /// so it is the same contact as its messages. An explicit «+», another length or another first digit is taken as written.</summary>
+    /// <summary>A contact typed by the team (criterio 26): with «+» it is taken as written; without it only a Salvadoran number is understood,
+    /// 8 digits (7000-0000, which gets the 503 WhatsApp delivers it with, so it is the same contact as its messages) or 11 starting with 503.
+    /// Anything else asks for the country code: a number without it cannot be told from one that is missing digits.</summary>
     public static string ContactPhone(string phone)
     {
-        var value = TypedPhone(phone);
-        return value.Length == 8 && value[0] is '2' or '6' or '7' && !phone.TrimStart().StartsWith('+') ? "503" + value : value;
+        var value = Phone(phone);
+        if (phone.TrimStart().StartsWith('+')) return value;
+        return value.Length == 8 ? "503" + value : value.Length == 11 && value.StartsWith("503", StringComparison.Ordinal) ? value : throw new ArgumentException("Escriba el número con + y su código de país.");
     }
     /// <summary>A phone a person typed (INV-7): seven digits without «+» are most likely a Salvadoran number missing one, so they are refused
     /// as before; with «+» they are a whole number (+683 4001). A wa_id never comes through here.</summary>
@@ -328,6 +330,10 @@ public static class Rules
         var value = Phone(phone);
         return value.Length == 7 && !phone.TrimStart().StartsWith('+') ? throw new ArgumentException("Teléfono inválido. Escribe 8 dígitos (7000 0000) o el número con + y su código de país.") : value;
     }
+    /// <summary>A stored contact phone as WhatsApp's digits (criterio 27): 8 digits, stored before 503 was assumed, are a Salvadoran number.
+    /// Only read this way; the stored value and its hash stay. ponytail: a real E.164 of 8 digits in all (+677…) reads as +503, as Meta
+    /// already did with a «to» without «+»; if one ever matters, store the contact with its «+».</summary>
+    public static string StoredPhone(string phone) { var value = Phone(phone); return value.Length == 8 ? "503" + value : value; }
     public static string PhoneHash(string phone, string key) => Convert.ToHexString(HMACSHA256.HashData(Encoding.UTF8.GetBytes(key), Encoding.UTF8.GetBytes(Phone(phone))));
     public static string Required(string? value, int max = 200) => string.IsNullOrWhiteSpace(value) || value.Length > max ? throw new ArgumentException($"Campo requerido (máximo {max} caracteres)") : value.Trim();
     public static bool VerifySignature(byte[] body, string signature, string secret)

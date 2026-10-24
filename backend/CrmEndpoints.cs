@@ -43,13 +43,15 @@ public static class CrmEndpoints
         {
             using var contactLease = await locks.Lock(id);
             var row = await db.Contacts.SingleOrDefaultAsync(x => x.Id == id); if (row is null) return Results.NotFound();
-            // Both sides as a new contact would be saved: an 8-digit number stored before +503 was assumed is the same phone.
-            if (Rules.ContactPhone(row.Phone) != Rules.ContactPhone(b.Phone))
+            // The form sends the stored phone back as it was: unchanged, it is kept with its hash (criterio 26). Retyped, it follows ContactPhone,
+            // and both sides are read as WhatsApp's digits, so an 8-digit number stored before +503 was assumed is the same phone (criterio 27).
+            var same = b.Phone == row.Phone;
+            if (!same && Rules.StoredPhone(row.Phone) != Rules.ContactPhone(b.Phone))
             {
                 if (row.HospitalCustomerId is not null || await db.Opportunities.AnyAsync(x=>x.ContactId==id&&x.HospitalPurchaseRequest!=null) || await db.Conversations.AnyAsync(x => x.ContactId == id)) throw new ArgumentException("Este teléfono tiene conversaciones. Crea otro contacto para conservar separado su historial.");
                 row.PatientId = null;
             }
-            SetContact(row, b, c); Audit(db, t, u, "contact.updated", id); await db.SaveChangesAsync(); return Results.Ok(row);
+            SetContact(row, b, c, phone: !same); Audit(db, t, u, "contact.updated", id); await db.SaveChangesAsync(); return Results.Ok(row);
         });
         api.MapPost("/contacts/{id:guid}/patient", async (Guid id, PatientLinkInput b, HttpContext ctx, CrmDb db, TenantScope t, CurrentUser u, CommercialService commercial) =>
         {
@@ -158,7 +160,7 @@ public static class CrmEndpoints
         if (!hospitalConnected) { row.Name = name; row.TimeZone = b.TimeZone; }
         row.Guide = b.Guide; row.AgentEnabled = b.AgentEnabled;
     }
-    static void SetContact(Contact row, ContactInput b, IConfiguration c) { row.Name = Rules.Required(b.Name); row.Phone = Rules.ContactPhone(b.Phone); row.PhoneHash = Rules.PhoneHash(row.Phone, c["PHONE_HASH_KEY"]!); row.Email = b.Email ?? ""; row.Tags = b.Tags ?? ""; if (row.Email.Length > 320 || row.Tags.Length > 500) throw new ArgumentException("Campo demasiado largo"); }
+    static void SetContact(Contact row, ContactInput b, IConfiguration c, bool phone = true) { row.Name = Rules.Required(b.Name); if (phone) { row.Phone = Rules.ContactPhone(b.Phone); row.PhoneHash = Rules.PhoneHash(row.Phone, c["PHONE_HASH_KEY"]!); } row.Email = b.Email ?? ""; row.Tags = b.Tags ?? ""; if (row.Email.Length > 320 || row.Tags.Length > 500) throw new ArgumentException("Campo demasiado largo"); }
     static void ValidateStage(string stage) { if (stage is not ("new" or "contacted" or "scheduled" or "won" or "lost")) throw new ArgumentException("Etapa inválida"); }
 }
 public record ContactInput(string Name, string Phone, string? Email, string? Tags);
