@@ -31,6 +31,34 @@ public sealed class AgentIntakeTests : IAsyncLifetime
             throw new InvalidOperationException("Unexpected hospital request " + path);
         });
     }
+    /// <summary>Criterio 30, I-3: a contact of 8 digits (stored before +503 was assumed) is registered as Hospital will read it back, so the
+    /// verification that follows links it. Hospital here keeps the phone exactly as it was posted.</summary>
+    [Fact]
+    public async Task AnEightDigitContactIsRegisteredAndThenVerified()
+    {
+        h.Contact.Phone = "70000001"; await h.Db.SaveChangesAsync();
+        var posts = new List<JsonElement>(); var created = Guid.NewGuid();
+        var hospital = new AgentHarness.Fake(async request =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (path == "/v1/patients" && request.Method == HttpMethod.Post)
+            {
+                posts.Add(JsonDocument.Parse(await request.Content!.ReadAsStringAsync()).RootElement.Clone());
+                var response = AgentHarness.Json(new { created = true, patientId = created, duplicateCandidates = Array.Empty<object>() }); response.StatusCode = HttpStatusCode.Created; return response;
+            }
+            if (path == $"/v1/patients/{created}") return AgentHarness.Json(new { patientId = created, givenNames = "Ana Sintética", familyNames = "López Prueba", phone = posts[0].GetProperty("phone").GetString() });
+            if (path == "/v1/agenda/booking-options") return AgentHarness.Json(new { clinicalDayFrom = "", clinicalDayTo = "", maxDaysPerQuery = 31, rollState = "open", professionals = Array.Empty<object>() });
+            throw new InvalidOperationException("Unexpected hospital request " + path);
+        });
+
+        var code = await ProposeAndGetCode(hospital, Adult);
+        await h.Say("patient", "CONFIRMAR " + code);
+        await h.Runtime(h.Model(AgentHarness.Reply("No debe consultarse el modelo")), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
+
+        Assert.Equal("+50370000001", Assert.Single(posts).GetProperty("phone").GetString());
+        await h.Db.Entry(h.Contact).ReloadAsync();
+        Assert.Equal((created, "70000001"), (h.Contact.PatientId, h.Contact.Phone));
+    }
     /// <summary>What the patient wrote of <see cref="Adult"/>: only that reaches a registration (docs/agent-evidence.md).</summary>
     const string AdultSaid = "Soy Ana Sintética López Prueba, mujer, nací el 12/03/1990. Mi hermano Carlos Sintético, 70000001.";
     /// <summary>The patient taps one of the form's buttons; the form answers it with no model.</summary>

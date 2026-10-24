@@ -149,8 +149,9 @@ public sealed class HospitalPrescriptionTests
         Assert.Equal("hospital.patient_phone_mismatch",(await Assert.ThrowsAsync<HospitalIntegrationException>(()=>client.GetVerifiedPatientAsync(tenant,patient,"50329022345"))).Code);
         Assert.Equal("29022345",HospitalClient.NormalizePhone("+290 2234 5"));Assert.Equal("29022345",Rules.StoredPhone("+29022345"));
     }
-    // INV-5, criterio 16: the wa_id is already E.164; it is registered with its «+», never with a 503 put in front.
-    [Theory][InlineData("29022345","+29022345")][InlineData("50370000001","+50370000001")]
+    // Criterio 30 (replaces the I-2 row 29022345 ⇒ +29022345, by decision): registration reads the phone as verification and sending do, so
+    // 8 digits without «+» are +503 (an 8-digit wa_id never gets here: it is unusable); 11 digits are the wa_id as it is.
+    [Theory][InlineData("70000001","+50370000001")][InlineData("50370000001","+50370000001")][InlineData("14155550100","+14155550100")]
     public async Task TheWaIdIsRegisteredAsItIs(string waId,string sent)
     {
         var tenant=Guid.NewGuid();string? phone=null;

@@ -470,6 +470,18 @@ public sealed class GeneralNumberTests : IAsyncLifetime
         Assert.Equal(FreeText, replies[0].GetProperty("text").GetProperty("body").GetString());
     }
 
+    // Criterio 30: a wa_id of 8 digits in all is unusable on the general number too: no reply (it would go to +503…), nothing stored.
+    [Fact]
+    public async Task AnEightDigitWaIdGetsNoReply()
+    {
+        var before = await Everywhere();
+        await Inbound("29022345", text: "hola");
+        Assert.Empty(kapso);
+        Assert.Equal(before, await Everywhere());
+        await using var db = own.NewDb(new TenantScope());
+        Assert.False(await db.GeneralReplyCaps.AnyAsync(c => c.PhoneHash == Hash("29022345")));
+    }
+
     // ---------------- Criterios 24 y 26: free text, the cap and what is stored ----------------
     [Theory][InlineData("hola")][InlineData("quiero cambiar mi cita")][InlineData("ACTIVAR RECORDATORIOS")]
     public async Task FreeTextGetsOneFixedReplyPerDayAndLeavesOnlyTheCap(string text)

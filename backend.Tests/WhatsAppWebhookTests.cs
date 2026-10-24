@@ -127,6 +127,14 @@ public sealed class WhatsAppWebhookTests : IAsyncLifetime
     }
     // An unusable phone is one bad item, not a bad delivery: it used to throw a 500 halfway, and every
     // redelivery lost the rest of the batch again.
+    // Criterio 30: 8 digits are a Salvadoran number without its code everywhere, so a wa_id of 8 digits in all (+290, +500, part of +677) cannot be
+    // told apart from one; it is an unusable phone: no contact, no conversation, nothing sent.
+    [Fact] public async Task AnEightDigitWaIdIsUnusable()
+    {
+        Assert.Equal(200, await Post("{\"batch\":true,\"data\":[" + Inbound("wamid.e", "29022345") + "]}"));
+        await using var db = Db();
+        Assert.Equal((0, 0, 0), (await db.Contacts.CountAsync(), await db.Messages.CountAsync(), await db.Jobs.CountAsync()));
+    }
     [Fact] public async Task InvalidPhoneIsSkippedAndTheRestOfTheBatchIsProcessed()
     {
         var batch = "{\"batch\":true,\"data\":[" + Inbound("wamid.a", "50370000004") + "," + Inbound("wamid.b", "999abc999") + "," + Inbound("wamid.c", "50370000005") + "]}";

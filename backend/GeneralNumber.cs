@@ -75,7 +75,7 @@ public static partial class GeneralNumber
             {
                 var from = (item.TryGetProperty("conversation", out var conversation) ? WhatsAppEndpoints.Get(conversation, "phone_number") : null) ?? WhatsAppEndpoints.Get(msg, "from");
                 string hash;
-                try { hash = Rules.PhoneHash(from ?? "", config["PHONE_HASH_KEY"]!); } catch (ArgumentException) { continue; }
+                try { hash = Rules.PhoneHash(Rules.WaId(from ?? ""), config["PHONE_HASH_KEY"]!); } catch (ArgumentException) { continue; } // criterio 30
                 // Never the phone, the body or an id in the log (INV-8).
                 async Task Reply(string? text, object? interactive = null)
                 {

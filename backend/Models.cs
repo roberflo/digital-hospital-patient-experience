@@ -320,7 +320,8 @@ public static class Rules
     public static string ContactPhone(string phone)
     {
         var value = Phone(phone);
-        if (phone.TrimStart().StartsWith('+')) return value;
+        // Criterio 30: «+» with 8 digits in all would be read as +503 everywhere else.
+        if (phone.TrimStart().StartsWith('+')) return value.Length == 8 ? throw new ArgumentException("Ese número no se puede usar: con 8 dígitos se confunde con uno de El Salvador. Escriba otro.") : value;
         return value.Length == 8 ? "503" + value : value.Length == 11 && value.StartsWith("503", StringComparison.Ordinal) ? value : throw new ArgumentException("Escriba el número con + y su código de país.");
     }
     /// <summary>A phone a person typed (INV-7): seven digits without «+» are most likely a Salvadoran number missing one, so they are refused
@@ -334,6 +335,10 @@ public static class Rules
     /// Only read this way; the stored value and its hash stay. ponytail: a real E.164 of 8 digits in all (+677…) reads as +503, as Meta
     /// already did with a «to» without «+»; if one ever matters, store the contact with its «+».</summary>
     public static string StoredPhone(string phone) { var value = Phone(phone); return value.Length == 8 && !phone.TrimStart().StartsWith('+') ? "503" + value : value; }
+    /// <summary>The wa_id of an incoming message (criterio 30). 8 digits mean +503 everywhere in Recepción, so a wa_id of 8 digits in all cannot
+    /// be told from a Salvadoran number without its code: it is unusable. ponytail: +290, +500 and part of +677 are left out; if they ever
+    /// matter, the contact has to keep its «+».</summary>
+    public static string WaId(string phone) { var value = Phone(phone); return value.Length == 8 ? throw new ArgumentException("wa_id de 8 dígitos") : value; }
     /// <summary>The «to» of every message to WhatsApp (INV-9, criterio 28): «+» and the E.164 digits, after reading an old contact with its 503.</summary>
     public static string WhatsAppTo(string phone) => "+" + StoredPhone(phone);
     public static string PhoneHash(string phone, string key) => Convert.ToHexString(HMACSHA256.HashData(Encoding.UTF8.GetBytes(key), Encoding.UTF8.GetBytes(Phone(phone))));

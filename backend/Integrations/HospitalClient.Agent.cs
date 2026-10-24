@@ -11,10 +11,10 @@ public sealed partial class HospitalClient
     public async Task<HospitalRegistration> RegisterPatientAsync(Guid tenantId, HospitalPatientRegistration input, string idempotencyKey, CancellationToken ct = default)
     {
         IdempotencyKey(idempotencyKey);
-        // The wa_id is already E.164 without its «+» (INV-5): Hospital stores it canonical and never guesses a country for it (criterio 16).
-        // Taken as it is, never read as an old 8-digit contact: a Santa Elena wa_id (29022345) is +290, not +503.
+        // Criterio 30, I-3: the same reading as verification (NormalizePhone) and sending, so the record it creates is the one it then links:
+        // a wa_id is sent as it is, an old 8-digit contact as +503 (a wa_id of 8 digits in all never gets here: it is unusable).
         if (NormalizePhone(input.Phone) is null) throw new HospitalIntegrationException("hospital.patient_phone_mismatch", HttpStatusCode.BadRequest);
-        var phone = "+" + Rules.Phone(input.Phone);
+        var phone = Rules.WhatsAppTo(input.Phone);
         // Keyed (MR-41): sent again with the same key, Hospital answers the original registration instead of a second record. Nothing here retries it.
         using var response = await SendAsync(tenantId, HttpMethod.Post, "v1/patients", new
         {
