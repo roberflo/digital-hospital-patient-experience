@@ -643,16 +643,21 @@ public sealed class GeneralNumberTests : IAsyncLifetime
     [Theory][InlineData("+502 2345 6789", "50223456789")][InlineData("+504 9999 9999", "50499999999")]
     public async Task GuatemalaAndHondurasAreInTheList(string e164, string waId)
     {
-        Guid optedOut = Guid.NewGuid(), patient = Guid.NewGuid();
         recipients[clinicA] = [Recipient(appointmentA, patientA, start, e164)];
         await Sync(clinicA);
         Assert.All(await Rows(clinicA), r => Assert.Equal(("pending", Hash(waId)), (r.Status, r.RecipientHash)));
+        try
+        {
+            await Inbound(waId, text: "BAJA"); // the patient answers from WhatsApp: the wa_id, without «+»
 
-        await using (var db = own.NewDb(new TenantScope())) { db.GeneralOptOuts.Add(new GeneralOptOut { PhoneHash = Hash(waId), CreatedAt = DateTimeOffset.UtcNow }); await db.SaveChangesAsync(); }
-        recipients[clinicB] = [Recipient(optedOut, patient, start, e164)];
-        await Sync(clinicB);
-        Assert.Empty(await Rows(clinicB));
-        await using (var db = own.NewDb(new TenantScope())) { db.GeneralOptOuts.RemoveRange(db.GeneralOptOuts.Where(o => o.PhoneHash == Hash(waId))); await db.SaveChangesAsync(); } // the list is global
+            Assert.All(await Rows(clinicA), r => Assert.Equal("cancelled", r.Status));
+            Assert.Empty(kapso.Where(k => k.Body.TryGetProperty("template", out _))); // no reminder goes out
+        }
+        finally
+        {
+            await using var db = own.NewDb(new TenantScope());
+            db.GeneralOptOuts.RemoveRange(db.GeneralOptOuts.Where(o => o.PhoneHash == Hash(waId))); await db.SaveChangesAsync(); // the list is global
+        }
     }
 
     // Criterio 23: a row skipped for its country reopens once Hospital names a phone the general number writes to.
