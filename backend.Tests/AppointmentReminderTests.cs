@@ -18,7 +18,7 @@ public sealed class AppointmentReminderTests : IAsyncLifetime
     readonly Guid hanging = Guid.NewGuid(), answering = Guid.NewGuid(), appointment = Guid.NewGuid();
     readonly DateTimeOffset start = ReminderRules.Instant(DateTimeOffset.UtcNow.AddMinutes(50));
     DbContextOptions<CrmDb> options = null!; readonly IDataProtectionProvider protection = new EphemeralDataProtectionProvider();
-    Contact first = null!, second = null!; int sends; readonly System.Collections.Concurrent.ConcurrentQueue<Guid> reads = new(); HttpStatusCode delivery = HttpStatusCode.OK;
+    Contact first = null!, second = null!; int sends; readonly System.Collections.Concurrent.ConcurrentQueue<Guid> reads = new(); HttpStatusCode delivery = HttpStatusCode.OK; readonly System.Collections.Concurrent.ConcurrentQueue<string> sentTo = new();
 
     public async Task InitializeAsync()
     {
@@ -60,6 +60,22 @@ public sealed class AppointmentReminderTests : IAsyncLifetime
         await using var check = Db();
         Assert.Equal(1, sends);
         Assert.Equal("sent", (await check.AppointmentReminders.SingleAsync(r => r.Window == "hour_before" && r.AppointmentId == appointment)).Status);
+    }
+
+    // Criterio 27/28: a contact stored with 8 digits before 503 was assumed gets its own-number reminder at «+503…», read, never rewritten.
+    [Fact]
+    public async Task AnOldEightDigitContactGetsItsReminderWithTheCountryCode()
+    {
+        await using (var db = Db())
+        {
+            (await db.Contacts.SingleAsync(c => c.Id == second.Id)).Phone = "70000001"; second.Phone = "70000001";
+            db.Add(new AppointmentReminder { TenantId = tenant, ContactId = second.Id, PatientId = answering, ChannelId = (await db.Tenants.SingleAsync(t => t.Id == tenant)).ReminderChannelId!.Value, AppointmentId = appointment, StartsAt = start, DueAt = start.AddHours(-1), Window = "hour_before" });
+            await db.SaveChangesAsync();
+        }
+        await AppointmentReminderWorker.RunTenant(Services(), tenant, NullLogger.Instance, CancellationToken.None, contactBudget: TimeSpan.FromSeconds(3));
+        Assert.Equal(["+50370000001"], sentTo);
+        await using var check = Db();
+        Assert.Equal("70000001", (await check.Contacts.SingleAsync(c => c.Id == second.Id)).Phone);
     }
 
     // Kapso refusing the send (4xx) is a definite failure; a 5xx may have been delivered and stays uncertain. Neither is retried.
@@ -108,6 +124,7 @@ public sealed class AppointmentReminderTests : IAsyncLifetime
                 ? Json(new { data = new[] { new { name = "recepcion_cita_una_hora_v1", language = "es", status = "APPROVED", category = "UTILITY", parameter_format = "NAMED", components = new[] { new { type = "BODY", text = "Cita en {{hospital}} el {{fecha}} a las {{hora}}. BAJA" } } } } })
                 : Json(new { data = new { business_account_id = "synthetic-waba" } }));
             Interlocked.Increment(ref sends);
+            sentTo.Enqueue(JsonDocument.Parse(request.Content!.ReadAsStringAsync(CancellationToken.None).Result).RootElement.GetProperty("to").GetString()!);
             if (delivery != HttpStatusCode.OK) return Task.FromResult(new HttpResponseMessage(delivery) { Content = new StringContent("{}", Encoding.UTF8, "application/json") });
             return Task.FromResult(Json(new { messages = new[] { new { id = "reminder-" + Guid.NewGuid() } } }));
         });
