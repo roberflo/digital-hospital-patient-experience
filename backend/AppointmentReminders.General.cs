@@ -70,6 +70,8 @@ public sealed partial class AppointmentReminderService
                     var reopen = existing.AttemptedAt is null && existing.ContactId is null && existing.PatientId == r.PatientId && r.Hash is not null
                         && (existing.Status == "cancelled" || existing.Status == "skipped" && existing.Reason is UnusablePhone or PreviousUnusablePhone or OutsideList);
                     if (reopen) { existing.RecipientHash = r.Hash; existing.Status = "pending"; existing.Reason = null; }
+                    // Still unwritable: the row says why today (a text from before criterio 23 is replaced by the current one).
+                    else if (r.Hash is null && existing.Status == "skipped" && existing.Reason is UnusablePhone or PreviousUnusablePhone or OutsideList) existing.Reason = r.Refusal;
                     continue;
                 }
                 var due = ReminderRules.Due(r.Start, window, tenant.TimeZone);

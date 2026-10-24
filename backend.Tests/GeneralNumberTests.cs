@@ -641,6 +641,25 @@ public sealed class GeneralNumberTests : IAsyncLifetime
         Assert.All(await Rows(clinicA), r => Assert.Equal(("pending", (string?)null, Hash("14155550100")), (r.Status, r.Reason, r.RecipientHash)));
     }
 
+    // Criterio 23: a row still skipped says why today; one skipped with the text before OQ-2 for a country outside the list now says so.
+    [Fact]
+    public async Task ASkippedRowShowsTheCurrentReason()
+    {
+        Guid mexico = Guid.NewGuid(), patient = Guid.NewGuid();
+        await using (var db = Db(clinicA))
+        {
+            db.AppointmentReminders.Add(new() { TenantId = clinicA, PatientId = patient, AppointmentId = mexico, StartsAt = start, DueAt = start.AddDays(-1), Window = "day_before", CreatedAt = DateTimeOffset.UtcNow,
+                Status = "skipped", Reason = "Teléfono inválido o fuera de El Salvador (+503); el número general aún no lo admite." });
+            await db.SaveChangesAsync();
+        }
+        recipients[clinicA] = [Recipient(mexico, patient, start, "+52 55 1234 5678")];
+
+        await Sync(clinicA);
+
+        var day = (await Rows(clinicA)).Single(r => r.AppointmentId == mexico && r.Window == "day_before");
+        Assert.Equal(("skipped", AppointmentReminderService.OutsideList, (string?)null), (day.Status, day.Reason, day.RecipientHash));
+    }
+
     // Criterio 18: a row skipped with the text used before OQ-2 reopens too, once Hospital's phone carries its country code.
     [Fact]
     public async Task ASkippedRowWithThePreviousTextReopensWhenThePhoneHasACountryCode()
