@@ -76,14 +76,15 @@ public static class PlatformEndpoints
         var u = Operator(ctx); var key = config["PHONE_HASH_KEY"] ?? throw new InvalidOperationException("PHONE_HASH_KEY"); var write = apply == true;
         // The phone is encrypted at rest, so its length is read here, not in SQL. ponytail: every contact in one read; page it by reception if
         // a deployment ever holds many.
-        var contacts = await db.Contacts.IgnoreQueryFilters().AsNoTracking().Where(c => tenantId == null || c.TenantId == tenantId).ToListAsync(ct);
+        // Only what it needs: name and e-mail are never decrypted.
+        var contacts = await db.Contacts.IgnoreQueryFilters().Where(c => tenantId == null || c.TenantId == tenantId).Select(c => new { c.Id, c.TenantId, c.Phone, c.PhoneHash }).ToListAsync(ct);
         var conflicts = new List<PhoneConflict>(); var rewritten = 0;
-        foreach (var reception in contacts.Where(c => c.Phone.Length == 8).GroupBy(c => c.TenantId).OrderBy(g => g.Key))
+        foreach (var reception in contacts.GroupBy(c => c.TenantId).OrderBy(g => g.Key)) // every reception read is audited, also one with nothing to complete
         {
             scope.Id = reception.Key;
             // Audited before any write: each write commits on its own, so a run cut halfway still leaves its record (a second run rewrites 0).
             CrmEndpoints.Audit(db, scope, u, write ? "contact_phones.completed" : "contact_phones.simulated", reception.Key); await db.SaveChangesAsync(ct);
-            foreach (var contact in reception)
+            foreach (var contact in reception.Where(c => c.Phone.Length == 8))
             {
                 var phone = "503" + contact.Phone; var hash = Rules.PhoneHash(phone, key);
                 var taken = await db.Contacts.IgnoreQueryFilters().AnyAsync(c => c.TenantId == contact.TenantId && c.Id != contact.Id && c.PhoneHash == hash, ct);

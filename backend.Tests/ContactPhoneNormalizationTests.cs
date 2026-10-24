@@ -134,6 +134,14 @@ public sealed class ContactPhoneNormalizationTests : IAsyncLifetime
         Assert.Equal(1, await db.Audits.CountAsync(a => a.Action == "contact_phones.completed" && a.Resource == h.Scope.Id.ToString()));
     }
 
+    // Only what the completion needs is read: a contact whose name or e-mail cannot be decrypted does not stop it.
+    [Fact]
+    public async Task OnlyThePhoneIsDecrypted()
+    {
+        await using (var db = h.NewDb(h.Scope)) await db.Database.ExecuteSqlInterpolatedAsync($"UPDATE \"Contacts\" SET \"Name\" = {"not-a-ciphertext"} WHERE \"Id\" = {alone}");
+        var result = await Run(apply: null);
+        Assert.Equal(1, result.Rewritten);
+    }
 
     // Without a reception, every reception is read. In a database of its own: «every reception» of the shared test database holds other
     // tests' contacts, encrypted with other key rings. The suite runs its tests one at a time (AgentGuardTests), so the variable can be swapped.
@@ -147,7 +155,13 @@ public sealed class ContactPhoneNormalizationTests : IAsyncLifetime
         try
         {
             await using var own = new AgentHarness(phone: "50370000009"); await own.Start();
-            var b = Guid.NewGuid(); var expected = new List<PlatformEndpoints.PhoneConflict>();
+            var b = Guid.NewGuid(); var canonicalOnly = Guid.NewGuid(); var expected = new List<PlatformEndpoints.PhoneConflict>();
+            await using (var db = own.NewDb(new TenantScope { Id = canonicalOnly }))
+            {
+                db.Tenants.Add(new Tenant { Id = canonicalOnly, Name = "Hospital Sintético C" });
+                db.Add(new Contact { TenantId = canonicalOnly, Name = "Paciente Sintético", Phone = "50370000006", PhoneHash = Rules.PhoneHash("50370000006", Key) });
+                await db.SaveChangesAsync();
+            }
             foreach (var tenant in new[] { own.Scope.Id, b })
             {
                 await using var db = own.NewDb(new TenantScope { Id = tenant });
@@ -159,8 +173,10 @@ public sealed class ContactPhoneNormalizationTests : IAsyncLifetime
             var scope = new TenantScope(); await using var endpointDb = own.NewDb(scope);
             var result = await PlatformEndpoints.NormalizeContactPhones(null, null, Principal("platform-owner"), endpointDb, scope, config, CancellationToken.None);
 
-            Assert.Equal((false, 2, 3), (result.Applied, result.Rewritten, result.AlreadyCanonical)); // 70000005 in each; 50370000004 in each and the harness's own contact
+            Assert.Equal((false, 2, 4), (result.Applied, result.Rewritten, result.AlreadyCanonical)); // 70000005 in each; 50370000004 in each, the harness's own contact and C's
             Assert.Equal(expected.OrderBy(c => c.TenantId), result.Conflicts.OrderBy(c => c.TenantId));
+            await using var audits = own.NewDb(new TenantScope()); // every reception read is audited, also one with nothing to complete
+            Assert.Equal(new[] { own.Scope.Id, b, canonicalOnly }.Select(t => t.ToString()).Order(), (await audits.Audits.IgnoreQueryFilters().Where(a => a.Action == "contact_phones.simulated").Select(a => a.Resource).ToListAsync()).Order());
         }
         finally
         {
