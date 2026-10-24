@@ -138,6 +138,7 @@ import {
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { dayInZone, inZone, whatsAppPhone, zoneName } from '@/lib/format';
+import { OTHER_COUNTRY, phoneCountries, phoneToSend, splitPhone } from '@/lib/phone';
 import { defaultInboxFilters, filtersActive, inboxQuery } from '@/lib/inbox-filters';
 import { ConfirmAction } from './confirm-action';
 import { AppointmentReminders, ReminderConsent, TomorrowReminders } from './appointment-reminders';
@@ -366,7 +367,14 @@ function FormDialog({
             {fields.map((f) => (
               <UiField key={f.name}>
                 <FieldLabel htmlFor={'field-' + f.name}>{f.label}</FieldLabel>
-                {f.type === 'contact' ? (
+                {f.type === 'phone' ? (
+                  <PhoneField
+                    id={'field-' + f.name}
+                    name={f.name}
+                    stored={f.value}
+                    required={f.required}
+                  />
+                ) : f.type === 'contact' ? (
                   <ContactPicker
                     id={'field-' + f.name}
                     name={f.name}
@@ -426,6 +434,62 @@ function FormDialog({
 }
 /** Finds a contact on the server, not in the first page of 100 (MR-17). With `patientId` it
  * resolves the one contact linked to that Hospital patient. */
+/** Criterio 29: country (El Salvador +503 by default) and local number; the form sends E.164, or the stored value when untouched. */
+function PhoneField({
+  id,
+  name,
+  stored,
+  required,
+}: {
+  id: string;
+  name: string;
+  stored?: string;
+  required?: boolean;
+}) {
+  const start = splitPhone(stored);
+  const [country, setCountry] = useState(start.country);
+  const [local, setLocal] = useState(start.local);
+  const number = useRef<HTMLInputElement>(null);
+  const result = phoneToSend(country, local, stored);
+  const error = local.trim() && 'error' in result ? result.error : '';
+  useEffect(() => number.current?.setCustomValidity(error), [error]);
+  return (
+    <div className="flex gap-2">
+      <NativeSelect
+        aria-label="País del teléfono"
+        className="w-40 shrink-0"
+        value={country}
+        onChange={(e) => setCountry(e.target.value)}
+      >
+        {phoneCountries.map((c) => (
+          <NativeSelectOption key={c.code} value={c.code}>
+            {c.name} +{c.code}
+          </NativeSelectOption>
+        ))}
+        <NativeSelectOption value={OTHER_COUNTRY}>Otro (+ código)</NativeSelectOption>
+      </NativeSelect>
+      <Input
+        ref={number}
+        id={id}
+        type="tel"
+        inputMode="tel"
+        autoComplete="tel"
+        required={required}
+        value={local}
+        onChange={(e) => setLocal(e.target.value)}
+        placeholder={
+          country === OTHER_COUNTRY
+            ? '+44 7700 900123'
+            : country === '1'
+              ? '415 555 0100'
+              : '7000 0000'
+        }
+        aria-invalid={error ? true : undefined}
+      />
+      <input type="hidden" name={name} value={'phone' in result ? result.phone : ''} />
+    </div>
+  );
+}
 function ContactPicker({
   id,
   name = 'contactId',
@@ -2080,12 +2144,11 @@ function ContactsView({ search }: { search: string }) {
           {
             name: 'phone',
             label: 'Teléfono',
-            type: 'tel',
+            type: 'phone',
             required: true,
             value: edit?.phone,
-            placeholder: '7000 0000',
             description:
-              'Ejemplo: 7000 0000 (se agrega +503). De otro país, escríbelo con + y su código.',
+              'Elige el país y escribe el número. Para otro país, elige «Otro» y escríbelo con + y su código.',
           },
           { name: 'email', label: 'Correo electrónico', type: 'email', value: edit?.email },
           { name: 'tags', label: 'Etiquetas', value: edit?.tags },
