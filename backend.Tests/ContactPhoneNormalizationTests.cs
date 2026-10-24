@@ -114,15 +114,38 @@ public sealed class ContactPhoneNormalizationTests : IAsyncLifetime
         Assert.Equal(change == "edited" ? "50370000099" : "70000002", (await Contacts())[alone].Phone);
     }
 
-    // Without a reception, every reception is read; a simulation, so the other tests' data is never written.
+    // Without a reception, every reception is read. In a database of its own: «every reception» of the shared test database holds other
+    // tests' contacts, encrypted with other key rings. The suite runs its tests one at a time (AgentGuardTests), so the variable can be swapped.
     [Fact]
     public async Task WithoutAReceptionEveryReceptionIsRead()
     {
-        var scope = new TenantScope(); await using var db = h.NewDb(scope);
-        var result = await PlatformEndpoints.NormalizeContactPhones(null, null, Principal("platform-owner"), db, scope, config, CancellationToken.None);
-        Assert.False(result.Applied);
-        Assert.Contains(new PlatformEndpoints.PhoneConflict(h.Scope.Id, clash), result.Conflicts);
-        Assert.Contains(new PlatformEndpoints.PhoneConflict(other, otherClash), result.Conflicts);
+        var shared = Environment.GetEnvironmentVariable("TEST_DATABASE")!; var name = "phones_" + Guid.NewGuid().ToString("N");
+        async Task Admin(string sql) { await using var c = new Npgsql.NpgsqlConnection(shared); await c.OpenAsync(); await using var cmd = new Npgsql.NpgsqlCommand(sql, c); await cmd.ExecuteNonQueryAsync(); }
+        await Admin($"CREATE DATABASE \"{name}\"");
+        Environment.SetEnvironmentVariable("TEST_DATABASE", new Npgsql.NpgsqlConnectionStringBuilder(shared) { Database = name }.ConnectionString);
+        try
+        {
+            await using var own = new AgentHarness(phone: "50370000009"); await own.Start();
+            var b = Guid.NewGuid(); var expected = new List<PlatformEndpoints.PhoneConflict>();
+            foreach (var tenant in new[] { own.Scope.Id, b })
+            {
+                await using var db = own.NewDb(new TenantScope { Id = tenant });
+                if (tenant == b) db.Tenants.Add(new Tenant { Id = b, Name = "Hospital Sintético B" });
+                foreach (var phone in new[] { "70000004", "50370000004", "70000005" }) { var c = new Contact { TenantId = tenant, Name = "Paciente Sintético", Phone = phone, PhoneHash = Rules.PhoneHash(phone, Key) }; db.Add(c); if (phone == "70000004") expected.Add(new(tenant, c.Id)); }
+                await db.SaveChangesAsync();
+            }
+
+            var scope = new TenantScope(); await using var endpointDb = own.NewDb(scope);
+            var result = await PlatformEndpoints.NormalizeContactPhones(null, null, Principal("platform-owner"), endpointDb, scope, config, CancellationToken.None);
+
+            Assert.Equal((false, 2, 3), (result.Applied, result.Rewritten, result.AlreadyCanonical)); // 70000005 in each; 50370000004 in each and the harness's own contact
+            Assert.Equal(expected.OrderBy(c => c.TenantId), result.Conflicts.OrderBy(c => c.TenantId));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("TEST_DATABASE", shared); Npgsql.NpgsqlConnection.ClearAllPools();
+            await Admin($"DROP DATABASE IF EXISTS \"{name}\" WITH (FORCE)");
+        }
     }
 
     // Through the mapped route: authorization metadata, the 403 of the Errors middleware, and how apply and tenantId bind from the query.
