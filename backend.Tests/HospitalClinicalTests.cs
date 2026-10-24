@@ -62,12 +62,14 @@ public sealed class HospitalClinicalTests
         await client.ReadAsync(tenant, actor.ToString(), Token(), patient, "50370000001", "timeline");
         Assert.Equal(2, seen.Distinct().Count());
     }
-    [Theory][InlineData("phone")][InlineData("patient")]
+    [Theory][InlineData("phone")][InlineData("patient")][InlineData("review")]
     public async Task LinkMismatchStopsBeforeClinicalRead(string mismatch)
     {
         var calls = 0;
-        var client = Client(_ => { calls++; return Json(new { patientId = mismatch == "patient" ? Guid.NewGuid() : patient, phone = mismatch == "phone" ? "50370000002" : "50370000001" }); });
-        await Assert.ThrowsAsync<HospitalIntegrationException>(() => client.ReadAsync(tenant, actor.ToString(), Token(), patient, "50370000001", "allergies"));
+        // Criterio 25: a phone Hospital marks for review is not the patient's verified number, even with the same digits.
+        var client = Client(_ => { calls++; return Json(new { patientId = mismatch == "patient" ? Guid.NewGuid() : patient, phone = mismatch == "phone" ? "50370000002" : "50370000001", phoneNeedsReview = mismatch == "review" }); });
+        var error = await Assert.ThrowsAsync<HospitalIntegrationException>(() => client.ReadAsync(tenant, actor.ToString(), Token(), patient, "50370000001", "allergies"));
+        if (mismatch != "patient") Assert.Equal("hospital.patient_phone_mismatch", error.Code);
         Assert.Equal(1, calls);
     }
     [Theory][InlineData("role")][InlineData("subject")][InlineData("tenant")]

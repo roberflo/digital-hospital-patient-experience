@@ -33,7 +33,8 @@ public sealed class HospitalClinicalClient(HttpClient http, IConfiguration confi
         RequireId(identity, "patientId", patient);
         if (HospitalClient.NormalizePhone(phone) is not { } normalized
             || !identity.TryGetProperty("phone", out var linkedPhone)
-            || HospitalClient.NormalizePhone(linkedPhone.GetString()) != normalized)
+            || HospitalClient.NormalizePhone(linkedPhone.GetString()) != normalized
+            || identity.TryGetProperty("phoneNeedsReview", out var review) && review.ValueKind == JsonValueKind.True) // criterio 25
             throw new HospitalIntegrationException("hospital.patient_phone_mismatch", HttpStatusCode.NotFound);
         var result = await Get(path);
         if (section == "prescriptions")

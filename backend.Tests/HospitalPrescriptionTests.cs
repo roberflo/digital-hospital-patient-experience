@@ -132,6 +132,27 @@ public sealed class HospitalPrescriptionTests
         var client=new HospitalClient(new HttpClient(new Handler(_=>new(HttpStatusCode.OK){Content=JsonContent.Create(new{patientId=patient,phone=stored})})),config);
         await client.GetVerifiedPatientAsync(tenant,patient,"50370000001");
     }
+    // Criterio 25: Hospital marks the phone for review ⇒ not verified, and no clinical read follows; a Hospital without the field behaves as before.
+    [Theory][InlineData(true)][InlineData(false)][InlineData(null)]
+    public async Task APhoneToReviewIsNotVerified(bool? needsReview)
+    {
+        var tenant=Guid.NewGuid();var patient=Guid.NewGuid();var prescription=Guid.NewGuid();var reads=0;
+        var token="e30."+Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(new{tenant_id=tenant,exp=DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds()})).TrimEnd('=').Replace('+','-').Replace('/','_')+".synthetic";
+        var config=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{
+            [$"Hospital:Tenants:{tenant}:BaseUrl"]="https://hospital.example.invalid/",[$"Hospital:Tenants:{tenant}:AccessToken"]=token,
+            [$"Hospital:Tenants:{tenant}:AllowClinicalDelivery"]="true",[$"Hospital:Tenants:{tenant}:UseReceptionBridge"]="true"}).Build();
+        var client=new HospitalClient(new HttpClient(new Handler(request=>{
+            if(request.RequestUri!.AbsolutePath==$"/v1/patients/{patient}")return new(HttpStatusCode.OK){Content=needsReview is {} review?JsonContent.Create(new{patientId=patient,phone="50370000001",phoneNeedsReview=review}):JsonContent.Create(new{patientId=patient,phone="50370000001"})};
+            reads++;return new(HttpStatusCode.OK){Content=JsonContent.Create(new{prescriptionId=prescription,patientId=patient,encounterId=Guid.NewGuid(),state="signed",signedAt=DateTimeOffset.UtcNow,lines=Array.Empty<object>(),contentWithheld=false})};
+        })),config);
+        if(needsReview is true)
+        {
+            Assert.Equal("hospital.patient_phone_mismatch",(await Assert.ThrowsAsync<HospitalIntegrationException>(()=>client.GetVerifiedPatientAsync(tenant,patient,"50370000001"))).Code);
+            await Assert.ThrowsAsync<HospitalIntegrationException>(()=>client.GetPrescriptionPdfAsync(tenant,patient,"50370000001",prescription));
+            Assert.Equal(0,reads);
+        }
+        else await client.GetVerifiedPatientAsync(tenant,patient,"50370000001");
+    }
     sealed class Handler(Func<HttpRequestMessage,HttpResponseMessage> send):HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken ct)=>Task.FromResult(send(request));

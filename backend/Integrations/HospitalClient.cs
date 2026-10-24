@@ -40,7 +40,8 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
         Guid tenantId, Guid patientId, string senderPhone, CancellationToken ct = default)
     {
         var patient = await ReadAsync<HospitalPatient>(tenantId, $"v1/patients/{patientId:D}", ct);
-        if (patient.PatientId != patientId || NormalizePhone(patient.Phone) != NormalizePhone(senderPhone)
+        // Criterio 25: a phone Hospital marks for review is nobody's verified number, whatever its digits.
+        if (patient.PatientId != patientId || patient.PhoneNeedsReview || NormalizePhone(patient.Phone) != NormalizePhone(senderPhone)
             || NormalizePhone(senderPhone) is null)
             throw new HospitalIntegrationException("hospital.patient_phone_mismatch", HttpStatusCode.NotFound);
         return patient;
@@ -460,7 +461,7 @@ public sealed class HospitalIntegrationException(string code, HttpStatusCode sta
     public HttpStatusCode StatusCode { get; } = statusCode;
 }
 
-public sealed record HospitalPatient(Guid PatientId, string GivenNames, string FamilyNames, string? Phone, string? Email)
+public sealed record HospitalPatient(Guid PatientId, string GivenNames, string FamilyNames, string? Phone, string? Email, bool PhoneNeedsReview = false)
 {
     public override string ToString() => $"HospitalPatient {PatientId}";
 }
