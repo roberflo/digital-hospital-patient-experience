@@ -632,11 +632,27 @@ public sealed class GeneralNumberTests : IAsyncLifetime
         await Sync(clinicA);
 
         var rows = await Rows(clinicA);
-        Assert.Equal("País fuera de la lista del número general (+503, +1).", AppointmentReminderService.OutsideList);
+        Assert.Equal("País fuera de la lista del número general (+503, +502, +504, +1).", AppointmentReminderService.OutsideList); // criterio 31
         Assert.All(rows.Where(r => r.AppointmentId == appointmentA), r => Assert.Equal(("pending", Hash(phone)), (r.Status, r.RecipientHash)));
         Assert.All(rows.Where(r => r.AppointmentId == us), r => Assert.Equal(("pending", Hash("14155550100")), (r.Status, r.RecipientHash)));
         Assert.All(rows.Where(r => r.AppointmentId == mexico), r => Assert.Equal(("skipped", AppointmentReminderService.OutsideList, (string?)null), (r.Status, r.Reason, r.RecipientHash)));
         Assert.Equal(6, rows.Count);
+    }
+
+    // Criterio 31: the closed list is +503, +502, +504 and +1; Guatemala and Honduras are written to, and a BAJA from their wa_id stops them.
+    [Theory][InlineData("+502 2345 6789", "50223456789")][InlineData("+504 9999 9999", "50499999999")]
+    public async Task GuatemalaAndHondurasAreInTheList(string e164, string waId)
+    {
+        Guid optedOut = Guid.NewGuid(), patient = Guid.NewGuid();
+        recipients[clinicA] = [Recipient(appointmentA, patientA, start, e164)];
+        await Sync(clinicA);
+        Assert.All(await Rows(clinicA), r => Assert.Equal(("pending", Hash(waId)), (r.Status, r.RecipientHash)));
+
+        await using (var db = own.NewDb(new TenantScope())) { db.GeneralOptOuts.Add(new GeneralOptOut { PhoneHash = Hash(waId), CreatedAt = DateTimeOffset.UtcNow }); await db.SaveChangesAsync(); }
+        recipients[clinicB] = [Recipient(optedOut, patient, start, e164)];
+        await Sync(clinicB);
+        Assert.Empty(await Rows(clinicB));
+        await using (var db = own.NewDb(new TenantScope())) { db.GeneralOptOuts.RemoveRange(db.GeneralOptOuts.Where(o => o.PhoneHash == Hash(waId))); await db.SaveChangesAsync(); } // the list is global
     }
 
     // Criterio 23: a row skipped for its country reopens once Hospital names a phone the general number writes to.

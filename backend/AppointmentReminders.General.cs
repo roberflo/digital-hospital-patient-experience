@@ -12,19 +12,19 @@ public sealed partial class AppointmentReminderService
     public const string WithdrawalRefused = "Hospital rechazó registrar el retiro de la autorización tras BAJA; revíselo con la clínica.";
     public const string UnusablePhone = "Teléfono inválido o sin código de país; el número general no puede escribirle.";
     /// <summary>Why a valid number of another country is not written to (criterio 23); it reopens like the others.</summary>
-    public const string OutsideList = "País fuera de la lista del número general (+503, +1).";
+    public const string OutsideList = "País fuera de la lista del número general (+503, +502, +504, +1).";
     /// <summary>The text rows were skipped with while only +503 was written to; they reopen like the current one (criterio 18).</summary>
     const string PreviousUnusablePhone = "Teléfono inválido o fuera de El Salvador (+503); el número general aún no lo admite.";
 
-    /// <summary>Why the general number does not write to <paramref name="phone"/>, or null when it does. Criterio 23 (OQ-4, branch B): only
-    /// +503 and +1, the countries whose WhatsApp wa_id is their E.164, so a BAJA from the wa_id matches the recipient (INV-8). Without «+»,
+    /// <summary>Why the general number does not write to <paramref name="phone"/>, or null when it does. Criterios 23 and 31 (OQ-4, branch B):
+    /// only +503, +502, +504 and +1, the countries whose WhatsApp wa_id is taken to be their E.164, so a BAJA from the wa_id matches the recipient (INV-8). Without «+»,
     /// only 11 digits starting with 503, as a Hospital deployed before E.164 sends them; the country of anything else is not guessed.
     /// ponytail: a closed list until Kapso's reply is measured (criterio 21); branch A (criterio 22) stores the wa_id's hash and opens it.</summary>
     public static string? Refusal(string? phone)
     {
         string digits;
         try { digits = Rules.Phone(phone ?? ""); } catch (ArgumentException) { return UnusablePhone; }
-        var listed = digits.StartsWith("503", StringComparison.Ordinal) || phone!.TrimStart().StartsWith('+') && digits.StartsWith('1');
+        var listed = digits.StartsWith("503", StringComparison.Ordinal) || phone!.TrimStart().StartsWith('+') && (digits.StartsWith("502", StringComparison.Ordinal) || digits.StartsWith("504", StringComparison.Ordinal) || digits.StartsWith('1'));
         return listed && digits.Length == 11 ? null : listed || !phone!.TrimStart().StartsWith('+') ? UnusablePhone : OutsideList;
     }
     /// <summary>The HMAC of a recipient the general number may write to (<see cref="Refusal"/> is null), or null.</summary>
