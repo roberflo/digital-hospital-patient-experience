@@ -302,6 +302,16 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
         Assert.Equal(("Carlos Sintético", "hermano", "70000001"), (state.EmergencyName, state.EmergencyRelationship, state.EmergencyPhone));
     }
 
+    /// <summary>INV-7: an emergency phone is typed by the patient; seven digits without «+» are a Salvadoran number missing one.</summary>
+    [Theory][InlineData("700-0000")][InlineData("7000000")]
+    public void SevenTypedDigitsAreNotAnEmergencyPhone(string phone)
+    {
+        var (state, prompt, _) = new Intake(7, "Rosa Sintética", "Prueba", "1985-01-08", "female", "Carlos Sintético", "hermano").Answer(phone, Today);
+
+        Assert.Equal((7, (string?)null), (state.Step, state.EmergencyPhone));
+        Assert.StartsWith("Ese teléfono no parece completo.", prompt);
+    }
+
     [Fact]
     public void AfterAnAcceptedAnswerTheNextMissingDatumIsAsked()
     {

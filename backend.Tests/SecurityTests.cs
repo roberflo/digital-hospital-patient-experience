@@ -16,13 +16,18 @@ public sealed class SecurityTests {
     public void InvalidSignaturesFailClosed(string signature)=>Assert.False(Rules.VerifySignature(Encoding.UTF8.GetBytes("{}"),signature,"secret"));
     [Fact]public void SignatureCoversExactBody(){var body=Encoding.UTF8.GetBytes("{\"text\":\"á\"}");var sig=Convert.ToHexString(HMACSHA256.HashData(Encoding.UTF8.GetBytes("secret"),body));Assert.True(Rules.VerifySignature(body,sig,"secret"));Assert.False(Rules.VerifySignature(Encoding.UTF8.GetBytes("{}"),sig,"secret"));Assert.False(Rules.VerifySignature(body,sig,"different"));}
     [Fact]public void EmptySecretNeverAccepted()=>Assert.False(Rules.VerifySignature([],Convert.ToHexString(HMACSHA256.HashData([],[])),""));
-    [Theory][InlineData("50370000000","50370000000")][InlineData("+503 7000-0000","50370000000")]
+    [Theory][InlineData("50370000000","50370000000")][InlineData("+503 7000-0000","50370000000")][InlineData("+683 4001","6834001")][InlineData("6834001","6834001")]
     public void PhoneCanonicalization(string input,string output)=>Assert.Equal(output,Rules.Phone(input));
     [Theory][InlineData("7000-0000","50370000000")][InlineData("2200 0000","50322000000")][InlineData("50370000000","50370000000")][InlineData("+503 7000-0000","50370000000")]
-    [InlineData("+50012345","50012345")][InlineData("51234567","51234567")][InlineData("14155550100","14155550100")][InlineData("+52 55 1234 5678","525512345678")]
+    [InlineData("+50012345","50012345")][InlineData("51234567","51234567")][InlineData("14155550100","14155550100")][InlineData("+52 55 1234 5678","525512345678")][InlineData("+683 4001","6834001")]
     public void ContactPhoneAssumesElSalvadorOnlyForLocalNumbers(string input,string output)=>Assert.Equal(output,Rules.ContactPhone(input));
-    [Theory][InlineData("123")][InlineData("not a number")][InlineData("1234567890123456")]
+    [Theory][InlineData("123")][InlineData("not a number")][InlineData("1234567890123456")][InlineData("123456")]
     public void BadPhoneRejected(string phone)=>Assert.Throws<ArgumentException>(()=>Rules.Phone(phone));
+    /// <summary>INV-7: seven digits typed by a person without «+» are most likely a Salvadoran number missing a digit.</summary>
+    [Theory][InlineData("7000000")][InlineData("700-0000")]
+    public void ContactPhoneRejectsSevenLocalDigits(string phone)=>Assert.Throws<ArgumentException>(()=>Rules.ContactPhone(phone));
+    [Theory][InlineData("+683 4001","6834001")][InlineData("50370000000","50370000000")][InlineData("123456",null)][InlineData("0123456",null)]
+    public void HospitalPhonesMatchFromSevenDigits(string phone,string? digits)=>Assert.Equal(digits,Recepcion.Integrations.HospitalClient.NormalizePhone(phone));
     [Fact]public void HashUsesSecretAndNormalizedPhone(){Assert.Equal(Rules.PhoneHash("+503 7000-0000","secret"),Rules.PhoneHash("50370000000","secret"));Assert.NotEqual(Rules.PhoneHash("50370000000","secret"),Rules.PhoneHash("50370000000","other"));
         // Criterio 20, INV-4: the hash domain is pinned. Computed before 7-digit numbers were allowed; a change here orphans every BAJA.
         Assert.Equal(Rules.PhoneHash("+50370000000","secret"),Rules.PhoneHash("50370000000","secret"));Assert.Equal("27E626995EAA1BC0B82B6F2BB5D743226E17B7FB23ABA62E7D7C7C4DC944400A",Rules.PhoneHash("50370000000","secret"));}

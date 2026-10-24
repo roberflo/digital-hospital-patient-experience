@@ -423,7 +423,7 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
         if (string.IsNullOrWhiteSpace(value)) return null;
         // No guessed country code or suffix matching: ambiguous local numbers need correction.
         var digits = new string(value.Where(c => c is >= '0' and <= '9').ToArray());
-        return digits.Length is >= 8 and <= 15 && digits[0] != '0' ? digits : null;
+        return digits.Length is >= 7 and <= 15 && digits[0] != '0' ? digits : null;
     }
 
     private static void ValidateAppointment(Guid clinicianId, DateTimeOffset startsAt, int durationMinutes)

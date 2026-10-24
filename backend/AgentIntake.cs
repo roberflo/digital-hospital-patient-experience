@@ -70,7 +70,7 @@ public sealed partial record Intake(int Step, string? GivenNames = null, string?
             case 5: return Name().IsMatch(value) ? Ask((this with { EmergencyName = value }).Next()) : Ask(this, "No pude leer ese nombre.\n\n");
             case 6: return Name().IsMatch(value) && value.Length <= 60 ? Ask((this with { EmergencyRelationship = value }).Next()) : Ask(this, "No pude leer el parentesco.\n\n");
             case 7:
-                try { return Ask((this with { EmergencyPhone = Rules.Phone(value) }).Next()); }
+                try { return Ask((this with { EmergencyPhone = Rules.TypedPhone(value) }).Next()); }
                 catch (ArgumentException) { return Ask(this, "Ese teléfono no parece completo.\n\n"); }
             default: return (this, "", null);
         }
