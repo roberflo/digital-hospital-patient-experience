@@ -143,7 +143,7 @@ public sealed class AgentIntakeFlowTests : IAsyncLifetime
         var confirm = h.Interactive[^1].GetProperty("action").GetProperty("buttons")[0].GetProperty("reply").GetProperty("id").GetString()!;
         var registered = await Say(confirm);
 
-        Assert.Equal(h.Contact.Phone, Assert.Single(posts).GetProperty("phone").GetString());
+        Assert.Equal("+" + h.Contact.Phone, Assert.Single(posts).GetProperty("phone").GetString()); // E.164 (criterio 16)
         Assert.Contains("ya te registré", registered);
         Assert.Equal("list", h.Interactive[^1].GetProperty("type").GetString()); // the free hours come with the confirmation, unasked
         Assert.Equal("agent", (await h.Fresh()).Status);

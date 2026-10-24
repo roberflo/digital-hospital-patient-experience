@@ -59,7 +59,7 @@ public sealed class AgentIntakeTests : IAsyncLifetime
         Assert.Equal("Ana Sintética", post.GetProperty("givenNames").GetString());
         Assert.Equal("1990-03-12", post.GetProperty("birthDate").GetString());
         Assert.Equal("female", post.GetProperty("sex").GetString());
-        Assert.Equal(h.Contact.Phone, post.GetProperty("phone").GetString()); // the verified WhatsApp number, never an argument
+        Assert.Equal("+" + h.Contact.Phone, post.GetProperty("phone").GetString()); // the verified WhatsApp number in E.164 (criterio 16), never an argument
         Assert.False(post.GetProperty("forceCreateDespiteDuplicate").GetBoolean());
         Assert.Equal("Carlos Sintético", post.GetProperty("emergencyContacts")[0].GetProperty("fullName").GetString());
         await h.Db.Entry(h.Contact).ReloadAsync();

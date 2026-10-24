@@ -11,13 +11,14 @@ public sealed partial class HospitalClient
     public async Task<HospitalRegistration> RegisterPatientAsync(Guid tenantId, HospitalPatientRegistration input, string idempotencyKey, CancellationToken ct = default)
     {
         IdempotencyKey(idempotencyKey);
-        if (NormalizePhone(input.Phone) is null) throw new HospitalIntegrationException("hospital.patient_phone_mismatch", HttpStatusCode.BadRequest);
+        // The wa_id is already E.164 without its «+» (INV-5): Hospital stores it canonical and never guesses a country for it (criterio 16).
+        var phone = "+" + (NormalizePhone(input.Phone) ?? throw new HospitalIntegrationException("hospital.patient_phone_mismatch", HttpStatusCode.BadRequest));
         // Keyed (MR-41): sent again with the same key, Hospital answers the original registration instead of a second record. Nothing here retries it.
         using var response = await SendAsync(tenantId, HttpMethod.Post, "v1/patients", new
         {
             input.GivenNames, input.FamilyNames, birthDate = input.BirthDate.ToString("yyyy-MM-dd"), input.Sex,
             emergencyContacts = new[] { new { fullName = input.EmergencyName, relationship = input.EmergencyRelationship, phone = input.EmergencyPhone } },
-            forceCreateDespiteDuplicate = false, input.Phone
+            forceCreateDespiteDuplicate = false, phone
         }, ct, idempotencyKey);
         return await ParseAsync<HospitalRegistration>(response, ct);
     }
