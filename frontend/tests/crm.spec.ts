@@ -70,7 +70,10 @@ test('contact creation and pipeline work through authenticated BFF', async ({ pa
   // Criterio 29: El Salvador +503 is chosen by default and the form sends the number in E.164.
   await expect(page.getByLabel('País del teléfono')).toHaveValue('503');
   const local = '7' + Date.now().toString().slice(-7);
-  await page.getByLabel('Teléfono', { exact: true }).fill(local);
+  const phone = page.getByLabel('Teléfono', { exact: true });
+  await phone.fill('7000');
+  await expect(phone).toHaveAccessibleDescription('Escribe 8 dígitos para El Salvador.');
+  await phone.fill(local);
   const created = page.waitForRequest(
     (r) => r.method() === 'POST' && new URL(r.url()).pathname.endsWith('/contacts'),
   );

@@ -92,6 +92,7 @@ import {
   Field as UiField,
   FieldContent,
   FieldDescription,
+  FieldError,
   FieldGroup,
   FieldLabel,
 } from './ui/field';
@@ -432,8 +433,6 @@ function FormDialog({
     </Dialog>
   );
 }
-/** Finds a contact on the server, not in the first page of 100 (MR-17). With `patientId` it
- * resolves the one contact linked to that Hospital patient. */
 /** Criterio 29: country (El Salvador +503 by default) and local number; the form sends E.164, or the stored value when untouched. */
 function PhoneField({
   id,
@@ -454,42 +453,48 @@ function PhoneField({
   const error = local.trim() && 'error' in result ? result.error : '';
   useEffect(() => number.current?.setCustomValidity(error), [error]);
   return (
-    <div className="flex gap-2">
-      <NativeSelect
-        aria-label="País del teléfono"
-        className="w-40 shrink-0"
-        value={country}
-        onChange={(e) => setCountry(e.target.value)}
-      >
-        {phoneCountries.map((c) => (
-          <NativeSelectOption key={c.code} value={c.code}>
-            {c.name} +{c.code}
-          </NativeSelectOption>
-        ))}
-        <NativeSelectOption value={OTHER_COUNTRY}>Otro (+ código)</NativeSelectOption>
-      </NativeSelect>
-      <Input
-        ref={number}
-        id={id}
-        type="tel"
-        inputMode="tel"
-        autoComplete="tel"
-        required={required}
-        value={local}
-        onChange={(e) => setLocal(e.target.value)}
-        placeholder={
-          country === OTHER_COUNTRY
-            ? '+44 7700 900123'
-            : country === '1'
-              ? '415 555 0100'
-              : '7000 0000'
-        }
-        aria-invalid={error ? true : undefined}
-      />
-      <input type="hidden" name={name} value={'phone' in result ? result.phone : ''} />
+    <div className="flex flex-col gap-2">
+      <div className="flex gap-2">
+        <NativeSelect
+          aria-label="País del teléfono"
+          className="w-40 shrink-0"
+          value={country}
+          onChange={(e) => setCountry(e.target.value)}
+        >
+          {phoneCountries.map((c) => (
+            <NativeSelectOption key={c.code} value={c.code}>
+              {c.name} +{c.code}
+            </NativeSelectOption>
+          ))}
+          <NativeSelectOption value={OTHER_COUNTRY}>Otro (+ código)</NativeSelectOption>
+        </NativeSelect>
+        <Input
+          ref={number}
+          id={id}
+          type="tel"
+          inputMode="tel"
+          autoComplete="tel"
+          required={required}
+          value={local}
+          onChange={(e) => setLocal(e.target.value)}
+          placeholder={
+            country === OTHER_COUNTRY
+              ? '+44 7700 900123'
+              : country === '1'
+                ? '415 555 0100'
+                : '7000 0000'
+          }
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? id + '-error' : undefined}
+        />
+        <input type="hidden" name={name} value={'phone' in result ? result.phone : ''} />
+      </div>
+      {error && <FieldError id={id + '-error'}>{error}</FieldError>}
     </div>
   );
 }
+/** Finds a contact on the server, not in the first page of 100 (MR-17). With `patientId` it
+ * resolves the one contact linked to that Hospital patient. */
 function ContactPicker({
   id,
   name = 'contactId',
