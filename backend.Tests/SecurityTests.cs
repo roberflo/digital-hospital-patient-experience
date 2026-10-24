@@ -23,7 +23,9 @@ public sealed class SecurityTests {
     public void ContactPhoneAssumesElSalvadorOnlyForLocalNumbers(string input,string output)=>Assert.Equal(output,Rules.ContactPhone(input));
     [Theory][InlineData("123")][InlineData("not a number")][InlineData("1234567890123456")]
     public void BadPhoneRejected(string phone)=>Assert.Throws<ArgumentException>(()=>Rules.Phone(phone));
-    [Fact]public void HashUsesSecretAndNormalizedPhone(){Assert.Equal(Rules.PhoneHash("+503 7000-0000","secret"),Rules.PhoneHash("50370000000","secret"));Assert.NotEqual(Rules.PhoneHash("50370000000","secret"),Rules.PhoneHash("50370000000","other"));}
+    [Fact]public void HashUsesSecretAndNormalizedPhone(){Assert.Equal(Rules.PhoneHash("+503 7000-0000","secret"),Rules.PhoneHash("50370000000","secret"));Assert.NotEqual(Rules.PhoneHash("50370000000","secret"),Rules.PhoneHash("50370000000","other"));
+        // Criterio 20, INV-4: the hash domain is pinned. Computed before 7-digit numbers were allowed; a change here orphans every BAJA.
+        Assert.Equal(Rules.PhoneHash("+50370000000","secret"),Rules.PhoneHash("50370000000","secret"));Assert.Equal("27E626995EAA1BC0B82B6F2BB5D743226E17B7FB23ABA62E7D7C7C4DC944400A",Rules.PhoneHash("50370000000","secret"));}
     [Fact]public void WhatsAppWindowBoundary(){var now=DateTimeOffset.UtcNow;Assert.False(Rules.WithinWindow(null,now));Assert.False(Rules.WithinWindow(now.AddHours(-24),now));Assert.False(Rules.WithinWindow(now.AddMinutes(1),now));Assert.True(Rules.WithinWindow(now.AddHours(-23),now));}
     [Theory][InlineData("[]")][InlineData("{\"roles\":42}")][InlineData("invalid")]
     public void MalformedRolesDenied(string json){var p=new ClaimsPrincipal(new ClaimsIdentity([new Claim("realm_access",json)],"test"));Assert.Null(Identity.MapRole(p));}
