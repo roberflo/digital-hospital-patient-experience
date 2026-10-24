@@ -608,6 +608,38 @@ public sealed class GeneralNumberTests : IAsyncLifetime
         Assert.DoesNotContain(kapso, k => k.Body.GetProperty("to").GetString() is "12" or "70000000" or "50370000000");
     }
 
+    // Criterio 23 (OQ-4, branch B while Kapso's wa_id is unmeasured): only +503 and +1, where the wa_id is the E.164, are written to.
+    // Elsewhere (Mexico: E.164 +52 55…, wa_id 521 55…) a BAJA from the wa_id would not match the recipient (INV-8).
+    [Fact]
+    public async Task OnlyCountriesWhoseWaIdIsTheirE164AreWrittenTo()
+    {
+        Guid us = Guid.NewGuid(), mexico = Guid.NewGuid();
+        recipients[clinicA] = [Recipient(appointmentA, patientA, start, "+" + phone), Recipient(us, Guid.NewGuid(), start, "+1 415 555 0100"), Recipient(mexico, Guid.NewGuid(), start, "+52 55 1234 5678")];
+
+        await Sync(clinicA);
+
+        var rows = await Rows(clinicA);
+        Assert.Equal("País fuera de la lista del número general (+503, +1).", AppointmentReminderService.OutsideList);
+        Assert.All(rows.Where(r => r.AppointmentId == appointmentA), r => Assert.Equal(("pending", Hash(phone)), (r.Status, r.RecipientHash)));
+        Assert.All(rows.Where(r => r.AppointmentId == us), r => Assert.Equal(("pending", Hash("14155550100")), (r.Status, r.RecipientHash)));
+        Assert.All(rows.Where(r => r.AppointmentId == mexico), r => Assert.Equal(("skipped", AppointmentReminderService.OutsideList, (string?)null), (r.Status, r.Reason, r.RecipientHash)));
+        Assert.Equal(6, rows.Count);
+    }
+
+    // Criterio 23: a row skipped for its country reopens once Hospital names a phone the general number writes to.
+    [Fact]
+    public async Task ARowSkippedForItsCountryReopensWhenThePhoneIsInTheList()
+    {
+        Guid appointment = Guid.NewGuid(), patient = Guid.NewGuid();
+        recipients[clinicA] = [Recipient(appointment, patient, start, "+52 55 1234 5678")];
+        await Sync(clinicA);
+        recipients[clinicA] = [Recipient(appointment, patient, start, "+1 415 555 0100")];
+
+        await Sync(clinicA, DateTimeOffset.UtcNow.AddMinutes(16));
+
+        Assert.All(await Rows(clinicA), r => Assert.Equal(("pending", (string?)null, Hash("14155550100")), (r.Status, r.Reason, r.RecipientHash)));
+    }
+
     // Criterio 18: a row skipped with the text used before OQ-2 reopens too, once Hospital's phone carries its country code.
     [Fact]
     public async Task ASkippedRowWithThePreviousTextReopensWhenThePhoneHasACountryCode()
@@ -631,8 +663,10 @@ public sealed class GeneralNumberTests : IAsyncLifetime
     [Fact]
     public async Task ABajaFromAForeignWaIdStopsTheHospitalE164Recipient()
     {
-        await using (var db = own.NewDb(new TenantScope())) { db.GeneralOptOuts.Add(new GeneralOptOut { PhoneHash = Hash("14155550100"), CreatedAt = DateTimeOffset.UtcNow }); await db.SaveChangesAsync(); }
-        recipients[clinicA] = [Recipient(appointmentA, patientA, start, "+14155550100")];
+        // Its own number: the opt-out list is global, and 14155550100 is written to by the other tests of this class.
+        var waId = "1415" + Random.Shared.Next(1000000, 9999999).ToString(CultureInfo.InvariantCulture);
+        await using (var db = own.NewDb(new TenantScope())) { db.GeneralOptOuts.Add(new GeneralOptOut { PhoneHash = Hash(waId), CreatedAt = DateTimeOffset.UtcNow }); await db.SaveChangesAsync(); }
+        recipients[clinicA] = [Recipient(appointmentA, patientA, start, "+" + waId)];
 
         await Sync(clinicA);
 

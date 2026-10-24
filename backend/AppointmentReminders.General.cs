@@ -11,18 +11,24 @@ public sealed partial class AppointmentReminderService
     /// <summary>The note on a row whose withdrawal Hospital refused for good (4xx): no more retries; the owner's doubts list shows it.</summary>
     public const string WithdrawalRefused = "Hospital rechazó registrar el retiro de la autorización tras BAJA; revíselo con la clínica.";
     public const string UnusablePhone = "Teléfono inválido o sin código de país; el número general no puede escribirle.";
+    /// <summary>Why a valid number of another country is not written to (criterio 23); it reopens like the others.</summary>
+    public const string OutsideList = "País fuera de la lista del número general (+503, +1).";
     /// <summary>The text rows were skipped with while only +503 was written to; they reopen like the current one (criterio 18).</summary>
     const string PreviousUnusablePhone = "Teléfono inválido o fuera de El Salvador (+503); el número general aún no lo admite.";
 
-    /// <summary>The HMAC of a recipient the general number may write to, or null (criterio 18, OQ-2): any country written with its «+»
-    /// (Hospital's E.164), or 11 digits starting with 503 without it, as a Hospital deployed before E.164 sends them. A number without
-    /// its country code is not guessed: the general number cannot know the country.</summary>
-    public static string? GeneralRecipientHash(string? phone, string key)
+    /// <summary>Why the general number does not write to <paramref name="phone"/>, or null when it does. Criterio 23 (OQ-4, branch B): only
+    /// +503 and +1, the countries whose WhatsApp wa_id is their E.164, so a BAJA from the wa_id matches the recipient (INV-8). Without «+»,
+    /// only 11 digits starting with 503, as a Hospital deployed before E.164 sends them; the country of anything else is not guessed.
+    /// ponytail: a closed list until Kapso's reply is measured (criterio 21); branch A (criterio 22) stores the wa_id's hash and opens it.</summary>
+    public static string? Refusal(string? phone)
     {
         string digits;
-        try { digits = Rules.Phone(phone ?? ""); } catch (ArgumentException) { return null; }
-        return phone!.TrimStart().StartsWith('+') || digits.Length == 11 && digits.StartsWith("503", StringComparison.Ordinal) ? Rules.PhoneHash(digits, key) : null;
+        try { digits = Rules.Phone(phone ?? ""); } catch (ArgumentException) { return UnusablePhone; }
+        var listed = digits.StartsWith("503", StringComparison.Ordinal) || phone!.TrimStart().StartsWith('+') && digits.StartsWith('1');
+        return listed && digits.Length == 11 ? null : listed || !phone!.TrimStart().StartsWith('+') ? UnusablePhone : OutsideList;
     }
+    /// <summary>The HMAC of a recipient the general number may write to (<see cref="Refusal"/> is null), or null.</summary>
+    public static string? GeneralRecipientHash(string? phone, string key) => Refusal(phone) is null ? Rules.PhoneHash(phone!, key) : null;
     string? Hash(string? phone) => GeneralRecipientHash(phone, config["PHONE_HASH_KEY"]!);
 
     /// <summary>Criterio 19, A20: a phone on the general number's opt-out list gets nothing in this hospital, unless Hospital says this hospital
@@ -42,7 +48,7 @@ public sealed partial class AppointmentReminderService
         var day = HospitalClient.ClinicalDay(now, tenant.TimeZone);
         var current = await hospital.GetReminderRecipientsAsync(scope.Id, day, day.AddDays(2), ct);
         // One unusable phone never stops the others: its rows say why (criterio 19).
-        var recipients = current.Select(r => (Id: r.AppointmentId, Start: ReminderRules.Instant(r.ScheduledStart), r.PatientId, Hash: Hash(r.Phone), r.ConsentSince)).ToList();
+        var recipients = current.Select(r => (Id: r.AppointmentId, Start: ReminderRules.Instant(r.ScheduledStart), r.PatientId, Hash: Hash(r.Phone), Refusal: Refusal(r.Phone), r.ConsentSince)).ToList();
         var pending = await db.AppointmentReminders.Where(r => r.Status == "pending" || r.Status == "sending").ToListAsync(ct);
         foreach (var row in pending.Where(r => r.Status == "sending" && r.AttemptedAt < now.AddMinutes(-10))) { row.Status = "uncertain"; row.Reason = "Envío interrumpido; no se repite."; }
         var optedOut = await OptedOut(recipients.Select(r => r.Hash).Concat(pending.Select(r => r.RecipientHash)), ct);
@@ -62,14 +68,14 @@ public sealed partial class AppointmentReminderService
                 if (existing is not null)
                 {
                     var reopen = existing.AttemptedAt is null && existing.ContactId is null && existing.PatientId == r.PatientId && r.Hash is not null
-                        && (existing.Status == "cancelled" || existing.Status == "skipped" && existing.Reason is UnusablePhone or PreviousUnusablePhone);
+                        && (existing.Status == "cancelled" || existing.Status == "skipped" && existing.Reason is UnusablePhone or PreviousUnusablePhone or OutsideList);
                     if (reopen) { existing.RecipientHash = r.Hash; existing.Status = "pending"; existing.Reason = null; }
                     continue;
                 }
                 var due = ReminderRules.Due(r.Start, window, tenant.TimeZone);
                 var late = due < now.AddMinutes(-15);
                 db.AppointmentReminders.Add(new() { TenantId = scope.Id, PatientId = r.PatientId, RecipientHash = r.Hash, AppointmentId = r.Id, StartsAt = r.Start, DueAt = due, Window = window, CreatedAt = now,
-                    Status = late || r.Hash is null ? "skipped" : "pending", Reason = late ? "El horario del recordatorio ya pasó." : r.Hash is null ? UnusablePhone : null });
+                    Status = late || r.Hash is null ? "skipped" : "pending", Reason = late ? "El horario del recordatorio ya pasó." : r.Hash is null ? r.Refusal : null });
             }
         }
         tenant.ReminderLastSyncAt = now;
