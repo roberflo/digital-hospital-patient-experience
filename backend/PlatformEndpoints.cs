@@ -64,10 +64,39 @@ public static class PlatformEndpoints
         return doubts;
     }
 
+    public record PhoneNormalization(bool Applied, int Rewritten, IReadOnlyList<Guid> Conflicts);
+    /// <summary>Criterio 32: completes the contacts stored with 8 digits (before +503 was assumed) to 503 + digits and recomputes their hash, in
+    /// every reception or only <paramref name="tenantId"/>. Simulated unless <paramref name="apply"/> is true. A contact whose new hash another
+    /// contact of its reception already has is neither changed nor merged: it comes back by id for a person. BAJA, reply caps and reminder rows
+    /// are not touched. Idempotent; counts and ids only, never a phone. Running it on real data is a deployment the owner asks for.</summary>
+    public static async Task<PhoneNormalization> NormalizeContactPhones(Guid? tenantId, bool? apply, HttpContext ctx, CrmDb db, TenantScope scope, IConfiguration config, CancellationToken ct)
+    {
+        var u = Operator(ctx); var key = config["PHONE_HASH_KEY"] ?? throw new InvalidOperationException("PHONE_HASH_KEY");
+        // The phone is encrypted at rest, so its length is read here, not in SQL. ponytail: every contact in one read; page it by reception if
+        // a deployment ever holds many.
+        var old = (await db.Contacts.IgnoreQueryFilters().Where(c => tenantId == null || c.TenantId == tenantId).OrderBy(c => c.TenantId).ToListAsync(ct)).Where(c => c.Phone.Length == 8).ToList();
+        var conflicts = new List<Guid>(); var rewritten = 0;
+        foreach (var reception in old.GroupBy(c => c.TenantId))
+        {
+            scope.Id = reception.Key;
+            foreach (var contact in reception)
+            {
+                var phone = "503" + contact.Phone; var hash = Rules.PhoneHash(phone, key);
+                if (await db.Contacts.IgnoreQueryFilters().AnyAsync(c => c.TenantId == contact.TenantId && c.Id != contact.Id && c.PhoneHash == hash, ct)) { conflicts.Add(contact.Id); continue; }
+                rewritten++;
+                if (apply == true) { contact.Phone = phone; contact.PhoneHash = hash; }
+            }
+            if (apply == true) { CrmEndpoints.Audit(db, scope, u, "contact_phones.completed", reception.Key); await db.SaveChangesAsync(ct); }
+        }
+        return new(apply == true, rewritten, conflicts);
+    }
+
+
     public static void MapPlatform(this WebApplication app)
     {
         app.MapGet("/platform/reminder-clinics/doubts", Doubts).RequireAuthorization();
         app.MapPut("/platform/reminder-clinics/{tenantId:guid}", Put).RequireAuthorization();
         app.MapDelete("/platform/reminder-clinics/{tenantId:guid}", Delete).RequireAuthorization();
+        app.MapPost("/platform/contact-phones/complete", NormalizeContactPhones).RequireAuthorization();
     }
 }
