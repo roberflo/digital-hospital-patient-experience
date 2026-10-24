@@ -83,14 +83,20 @@ public sealed class ContactPhoneNormalizationTests : IAsyncLifetime
         Assert.Equal(0, (await Run(apply: true)).Rewritten);
     }
 
-    /// <summary>Runs <paramref name="act"/> once, right after the endpoint checks whether the new hash is taken and before it writes.</summary>
-    sealed class BetweenCheckAndWrite(Func<Task> act) : Microsoft.EntityFrameworkCore.Diagnostics.DbCommandInterceptor
+    /// <summary>Acts on the endpoint's first contact UPDATE: <paramref name="before"/> runs right before it (an edit, a new contact: deterministic,
+    /// whatever the order of the checks), and <paramref name="after"/> fails the run right after it committed (a cancellation, a dropped connection).</summary>
+    sealed class OnFirstUpdate(Func<Task>? before = null, Exception? after = null) : Microsoft.EntityFrameworkCore.Diagnostics.DbCommandInterceptor
     {
-        bool done;
-        public override async ValueTask<System.Data.Common.DbDataReader> ReaderExecutedAsync(System.Data.Common.DbCommand command, Microsoft.EntityFrameworkCore.Diagnostics.CommandExecutedEventData data, System.Data.Common.DbDataReader result, CancellationToken ct = default)
+        bool started, finished;
+        public override async ValueTask<Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int>> NonQueryExecutingAsync(System.Data.Common.DbCommand command, Microsoft.EntityFrameworkCore.Diagnostics.CommandEventData data, Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int> result, CancellationToken ct = default)
         {
-            if (!done && command.CommandText.Contains("EXISTS")) { done = true; await act(); }
+            if (!started && command.CommandText.Contains("UPDATE \"Contacts\"")) { started = true; if (before is not null) await before(); }
             return result;
+        }
+        public override ValueTask<int> NonQueryExecutedAsync(System.Data.Common.DbCommand command, Microsoft.EntityFrameworkCore.Diagnostics.CommandExecutedEventData data, int result, CancellationToken ct = default)
+        {
+            if (!finished && after is not null && command.CommandText.Contains("UPDATE \"Contacts\"")) { finished = true; throw after; }
+            return ValueTask.FromResult(result);
         }
     }
     // I-1: a person edits the contact (or a message creates the same number) while the completion runs: the edit survives, the contact is
@@ -99,7 +105,7 @@ public sealed class ContactPhoneNormalizationTests : IAsyncLifetime
     public async Task AConcurrentChangeIsNeverUndoneAndIsReported(string change)
     {
         var other = Guid.NewGuid();
-        var interceptor = new BetweenCheckAndWrite(async () =>
+        var interceptor = new OnFirstUpdate(async () =>
         {
             await using var db = h.NewDb(h.Scope);
             if (change == "edited") { var c = await db.Contacts.SingleAsync(x => x.Id == alone); c.Phone = "50370000099"; c.PhoneHash = Rules.PhoneHash("50370000099", Key); }
@@ -113,6 +119,21 @@ public sealed class ContactPhoneNormalizationTests : IAsyncLifetime
         Assert.Contains(new PlatformEndpoints.PhoneConflict(h.Scope.Id, alone), result.Conflicts);
         Assert.Equal(change == "edited" ? "50370000099" : "70000002", (await Contacts())[alone].Phone);
     }
+
+    // A run cut halfway (cancelled, a dropped connection) after a contact was rewritten: the reception's audit is already there, because a
+    // second run rewrites 0 and could never record it.
+    [Fact]
+    public async Task AnInterruptedRunHasAlreadyAuditedTheReception()
+    {
+        var scope = new TenantScope(); await using var endpointDb = h.NewDb(scope, new OnFirstUpdate(after: new OperationCanceledException("synthetic cancellation")));
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => PlatformEndpoints.NormalizeContactPhones(h.Scope.Id, true, Principal("platform-owner"), endpointDb, scope, config, CancellationToken.None));
+
+        Assert.Equal("50370000002", (await Contacts())[alone].Phone); // the write before the cut stays
+        await using var db = h.NewDb(h.Scope);
+        Assert.Equal(1, await db.Audits.CountAsync(a => a.Action == "contact_phones.completed" && a.Resource == h.Scope.Id.ToString()));
+    }
+
 
     // Without a reception, every reception is read. In a database of its own: «every reception» of the shared test database holds other
     // tests' contacts, encrypted with other key rings. The suite runs its tests one at a time (AgentGuardTests), so the variable can be swapped.

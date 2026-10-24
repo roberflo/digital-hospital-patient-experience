@@ -81,6 +81,8 @@ public static class PlatformEndpoints
         foreach (var reception in contacts.Where(c => c.Phone.Length == 8).GroupBy(c => c.TenantId).OrderBy(g => g.Key))
         {
             scope.Id = reception.Key;
+            // Audited before any write: each write commits on its own, so a run cut halfway still leaves its record (a second run rewrites 0).
+            CrmEndpoints.Audit(db, scope, u, write ? "contact_phones.completed" : "contact_phones.simulated", reception.Key); await db.SaveChangesAsync(ct);
             foreach (var contact in reception)
             {
                 var phone = "503" + contact.Phone; var hash = Rules.PhoneHash(phone, key);
@@ -96,7 +98,6 @@ public static class PlatformEndpoints
                     catch (Exception e) when (e is Npgsql.PostgresException { SqlState: "23505" } || e.InnerException is Npgsql.PostgresException { SqlState: "23505" }) { taken = true; }
                 if (taken) conflicts.Add(new(contact.TenantId, contact.Id)); else rewritten++;
             }
-            CrmEndpoints.Audit(db, scope, u, write ? "contact_phones.completed" : "contact_phones.simulated", reception.Key); await db.SaveChangesAsync(ct);
         }
         return new(write, rewritten, contacts.Count(c => c.Phone.Length != 8), conflicts);
     }
