@@ -6,7 +6,7 @@ public sealed partial class HospitalClient
 {
     public Task<HospitalCommercialPage<HospitalCompany>> Companies(Guid tenant,string? q,int page,CancellationToken ct=default) => ReadAsync<HospitalCommercialPage<HospitalCompany>>(tenant,$"v1/commercial/companies?q={Uri.EscapeDataString(q??"")}&page={page}&pageSize=100",ct);
     public Task<HospitalCommercialPage<HospitalService>> Services(Guid tenant,string? q,int page,CancellationToken ct=default) => ReadAsync<HospitalCommercialPage<HospitalService>>(tenant,$"v1/commercial/services?active=true&q={Uri.EscapeDataString(q??"")}&page={page}&pageSize=100",ct);
-    public Task<HospitalCommercialPage<HospitalCustomer>> Customers(Guid tenant,string phone,CancellationToken ct=default) => ReadAsync<HospitalCommercialPage<HospitalCustomer>>(tenant,$"v1/commercial/customers?phone={Uri.EscapeDataString(Rules.StoredPhone(phone))}&pageSize=100",ct);
+    public Task<HospitalCommercialPage<HospitalCustomer>> Customers(Guid tenant,string phone,CancellationToken ct=default) => ReadAsync<HospitalCommercialPage<HospitalCustomer>>(tenant,$"v1/commercial/customers?phone={Uri.EscapeDataString(phone)}&pageSize=100",ct);
     public Task<HospitalCustomer> Customer(Guid tenant,Guid id,CancellationToken ct=default) => ReadAsync<HospitalCustomer>(tenant,$"v1/commercial/customers/{id}",ct);
     public async Task<HospitalCustomer> LinkCustomerPatient(Guid tenant,Guid patientId,Guid contactId,Guid? customerId=null,int? version=null,CancellationToken ct=default)
     {

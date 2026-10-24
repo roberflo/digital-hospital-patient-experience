@@ -277,22 +277,24 @@ public sealed class HospitalStaffTokenTests : IAsyncLifetime
         Assert.Equal((stored, "synthetic-hash", "Paciente Sintético"), (saved.Phone, saved.PhoneHash, saved.Name));
     }
 
-    // Criterio 27: an old 8-digit contact is searched and matched in Hospital's commercial customers as 503 + digits; its phone is not rewritten.
+    // Criterio 27, INV-6: an old 8-digit contact still finds the customer Recepción created with it. Hospital indexes the customer phone by its
+    // raw digits (CommercialStore.FilterCustomers), so the search goes with the stored value; the match is read as 503 + digits on both sides.
     [Fact]
     public async Task AnOldEightDigitContactSeesItsCommercialCandidate()
     {
         await using (var db = h.NewDb(h.Scope)) { (await db.Contacts.SingleAsync(c => c.Id == h.Contact.Id)).Phone = "70000001"; await db.SaveChangesAsync(); }
-        string? searched = null;
+        HospitalCustomer[] store = [Customer() with { Phone = "70000001", PatientId = null }];
+        static string Digits(string? value) => new((value ?? "").Where(char.IsAsciiDigit).ToArray());
         var hospital = Recorded(r =>
         {
             if (r.RequestUri!.AbsolutePath != "/v1/commercial/customers" || r.Method != HttpMethod.Get) return null;
-            searched = System.Web.HttpUtility.ParseQueryString(r.RequestUri.Query)["phone"];
-            return AgentHarness.Json(new { items = new[] { Customer() with { Phone = "+50370000001", PatientId = null } }, total = 1, page = 1, pageSize = 100 });
+            var searched = Digits(System.Web.HttpUtility.ParseQueryString(r.RequestUri.Query)["phone"]);
+            var items = store.Where(c => Digits(c.Phone) == searched).ToArray();
+            return AgentHarness.Json(new { items, total = items.Length, page = 1, pageSize = 100 });
         });
 
         using var body = JsonDocument.Parse(await CallBody(App(hospital), "GET /api/commercial/contacts/{id:guid}", "", null, "admin"));
 
-        Assert.Equal("50370000001", searched);
         Assert.Equal(customer, Assert.Single(body.RootElement.GetProperty("candidates").EnumerateArray()).GetProperty("id").GetGuid());
         Assert.Equal("70000001", body.RootElement.GetProperty("contact").GetProperty("phone").GetString());
     }
