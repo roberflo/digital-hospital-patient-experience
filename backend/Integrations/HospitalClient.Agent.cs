@@ -12,7 +12,9 @@ public sealed partial class HospitalClient
     {
         IdempotencyKey(idempotencyKey);
         // The wa_id is already E.164 without its «+» (INV-5): Hospital stores it canonical and never guesses a country for it (criterio 16).
-        var phone = "+" + (NormalizePhone(input.Phone) ?? throw new HospitalIntegrationException("hospital.patient_phone_mismatch", HttpStatusCode.BadRequest));
+        // Taken as it is, never read as an old 8-digit contact: a Santa Elena wa_id (29022345) is +290, not +503.
+        if (NormalizePhone(input.Phone) is null) throw new HospitalIntegrationException("hospital.patient_phone_mismatch", HttpStatusCode.BadRequest);
+        var phone = "+" + Rules.Phone(input.Phone);
         // Keyed (MR-41): sent again with the same key, Hospital answers the original registration instead of a second record. Nothing here retries it.
         using var response = await SendAsync(tenantId, HttpMethod.Post, "v1/patients", new
         {

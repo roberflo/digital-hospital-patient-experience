@@ -333,7 +333,7 @@ public static class Rules
     /// <summary>A stored contact phone as WhatsApp's digits (criterio 27): 8 digits, stored before 503 was assumed, are a Salvadoran number.
     /// Only read this way; the stored value and its hash stay. ponytail: a real E.164 of 8 digits in all (+677…) reads as +503, as Meta
     /// already did with a «to» without «+»; if one ever matters, store the contact with its «+».</summary>
-    public static string StoredPhone(string phone) { var value = Phone(phone); return value.Length == 8 ? "503" + value : value; }
+    public static string StoredPhone(string phone) { var value = Phone(phone); return value.Length == 8 && !phone.TrimStart().StartsWith('+') ? "503" + value : value; }
     /// <summary>The «to» of every message to WhatsApp (INV-9, criterio 28): «+» and the E.164 digits, after reading an old contact with its 503.</summary>
     public static string WhatsAppTo(string phone) => "+" + StoredPhone(phone);
     public static string PhoneHash(string phone, string key) => Convert.ToHexString(HMACSHA256.HashData(Encoding.UTF8.GetBytes(key), Encoding.UTF8.GetBytes(Phone(phone))));

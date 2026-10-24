@@ -422,10 +422,12 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
     public static string? NormalizePhone(string? value)
     {
         if (string.IsNullOrWhiteSpace(value)) return null;
-        // No suffix matching: ambiguous numbers need correction. 8 digits are a Salvadoran number written without its code, on either side:
-        // an old contact (criterio 27) or an old Hospital phone (INV-2); both are read as 503 + digits, as Rules.StoredPhone reads them.
+        // No suffix matching: ambiguous numbers need correction. 8 digits without «+» are a Salvadoran number written without its code, on
+        // either side: an old contact (criterio 27) or an old Hospital phone (INV-2), read as 503 + digits like Rules.StoredPhone does.
+        // With «+» the country is already there (INV-5: +290 2234 5 is Santa Elena).
         var digits = new string(value.Where(c => c is >= '0' and <= '9').ToArray());
-        return digits.Length is >= 7 and <= 15 && digits[0] != '0' ? digits.Length == 8 ? "503" + digits : digits : null;
+        if (digits.Length is < 7 or > 15 || digits[0] == '0') return null;
+        return digits.Length == 8 && !value.TrimStart().StartsWith('+') ? "503" + digits : digits;
     }
 
     private static void ValidateAppointment(Guid clinicianId, DateTimeOffset startsAt, int durationMinutes)

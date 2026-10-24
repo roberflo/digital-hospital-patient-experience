@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
+using Recepcion;
 using Recepcion.Integrations;
 using Xunit;
 
@@ -135,6 +136,33 @@ public sealed class HospitalPrescriptionTests
             [$"Hospital:Tenants:{tenant}:BaseUrl"]="https://hospital.example.invalid/",[$"Hospital:Tenants:{tenant}:AccessToken"]=token}).Build();
         var client=new HospitalClient(new HttpClient(new Handler(_=>new(HttpStatusCode.OK){Content=JsonContent.Create(new{patientId=patient,phone=stored})})),config);
         await client.GetVerifiedPatientAsync(tenant,patient,contact);
+    }
+    // INV-5: a phone written with its «+» already carries its country; 8 digits are only read as +503 without it. Santa Elena (+290) has 8 digits.
+    [Fact]
+    public async Task AnEightDigitE164IsNeverTakenForSalvadoran()
+    {
+        var tenant=Guid.NewGuid();var patient=Guid.NewGuid();
+        var token="e30."+Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(new{tenant_id=tenant,exp=DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds()})).TrimEnd('=').Replace('+','-').Replace('/','_')+".synthetic";
+        var config=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{
+            [$"Hospital:Tenants:{tenant}:BaseUrl"]="https://hospital.example.invalid/",[$"Hospital:Tenants:{tenant}:AccessToken"]=token}).Build();
+        var client=new HospitalClient(new HttpClient(new Handler(_=>new(HttpStatusCode.OK){Content=JsonContent.Create(new{patientId=patient,phone="+29022345"})})),config);
+        Assert.Equal("hospital.patient_phone_mismatch",(await Assert.ThrowsAsync<HospitalIntegrationException>(()=>client.GetVerifiedPatientAsync(tenant,patient,"50329022345"))).Code);
+        Assert.Equal("29022345",HospitalClient.NormalizePhone("+290 2234 5"));Assert.Equal("29022345",Rules.StoredPhone("+29022345"));
+    }
+    // INV-5, criterio 16: the wa_id is already E.164; it is registered with its «+», never with a 503 put in front.
+    [Theory][InlineData("29022345","+29022345")][InlineData("50370000001","+50370000001")]
+    public async Task TheWaIdIsRegisteredAsItIs(string waId,string sent)
+    {
+        var tenant=Guid.NewGuid();string? phone=null;
+        var token="e30."+Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(new{tenant_id=tenant,exp=DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds()})).TrimEnd('=').Replace('+','-').Replace('/','_')+".synthetic";
+        var config=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{
+            [$"Hospital:Tenants:{tenant}:BaseUrl"]="https://hospital.example.invalid/",[$"Hospital:Tenants:{tenant}:AccessToken"]=token}).Build();
+        var client=new HospitalClient(new HttpClient(new Handler(r=>{
+            phone=JsonDocument.Parse(r.Content!.ReadAsStringAsync().Result).RootElement.GetProperty("phone").GetString();
+            return new(HttpStatusCode.Created){Content=JsonContent.Create(new{created=true,patientId=Guid.NewGuid()})};
+        })),config);
+        await client.RegisterPatientAsync(tenant,new HospitalPatientRegistration("Ana Sintética","López Prueba",new DateOnly(1990,3,12),"female",waId,"Carlos Sintético","hermano","70000002"),Guid.NewGuid().ToString());
+        Assert.Equal(sent,phone);
     }
     // Criterio 25: Hospital marks the phone for review ⇒ not verified, and no clinical read follows; a Hospital without the field behaves as before.
     [Theory][InlineData(true)][InlineData(false)][InlineData(null)]
