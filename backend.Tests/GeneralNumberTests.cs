@@ -832,6 +832,35 @@ public sealed class GeneralNumberTests : IAsyncLifetime
         }
         finally { await ForgetMexico(); }
     }
+    // Review nit 1: once Kapso accepted the send, nothing after it uses the worker's token. A worker stopping right then must not turn a
+    // delivered reminder (and its wa_id's hash) into a doubt.
+    [Fact]
+    public async Task AWorkerStoppingRightAfterTheSendKeepsItSent()
+    {
+        waIds["5255" + MexicoDigits] = MexicoWaId;
+        recipients[clinicA] = [Recipient(appointmentA, patientA, start, MexicoE164)];
+        await Sync(clinicA);
+        var day = (await Rows(clinicA)).Single(r => r.Window == "day_before");
+        using var stop = new CancellationTokenSource();
+        var afterTheSend = new StopAfter(() => kapso.Any(k => k.Body.TryGetProperty("template", out _)), stop);
+
+        await using (var db = own.NewDb(new TenantScope { Id = clinicA }, afterTheSend)) await Service(clinicA, db, Kapso()).Dispatch(day.Id, day.DueAt, stop.Token);
+
+        Assert.True(stop.IsCancellationRequested); // the worker did stop after the send
+        var row = await Row(clinicA, day.Id);
+        Assert.Equal(("sent", Hash(MexicoWaId)), (row.Status, row.WaIdHash));
+    }
+    /// <summary>Cancels the worker's token at the first database read once <paramref name="when"/> holds.</summary>
+    sealed class StopAfter(Func<bool> when, CancellationTokenSource stop) : Microsoft.EntityFrameworkCore.Diagnostics.DbCommandInterceptor
+    {
+        public override ValueTask<Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<System.Data.Common.DbDataReader>> ReaderExecutingAsync(System.Data.Common.DbCommand command,
+            Microsoft.EntityFrameworkCore.Diagnostics.CommandEventData eventData, Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<System.Data.Common.DbDataReader> result, CancellationToken cancellationToken = default)
+        {
+            if (when()) stop.Cancel();
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+    }
+
     // Criterio 22, regression: without the wa_id's hash (a row sent before it was stored), a BAJA from a different wa_id does not match, as before.
     [Fact]
     public async Task ABajaFromADifferentWaIdWithoutItsHashDoesNotStop()

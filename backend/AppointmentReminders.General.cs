@@ -148,7 +148,8 @@ public sealed partial class AppointmentReminderService
             if (row.WaIdHash is null && outside) db.Activities.Add(new Activity { TenantId = scope.Id, Actor = "Recordatorios", ActorRole = "system", Kind = "general_wa_id_missing", Body = WaIdMissing });
             // A BAJA from this wa_id that came before any send returned it (review Important 1): now it is known to be this patient's, so the
             // withdrawal is asked of Hospital, at the BAJA's moment, by the worker's retry (criterio 25b); OptedOut stops the next sends.
-            if (row.WaIdHash is { } wa && await db.GeneralOptOuts.AsNoTracking().Where(o => o.PhoneHash == wa).Select(o => (DateTimeOffset?)o.CreatedAt).SingleOrDefaultAsync(ct) is { } baja
+            // After the external send: never the worker's token, or stopping it would turn a delivered reminder into a doubt (like the save below).
+            if (row.WaIdHash is { } wa && await db.GeneralOptOuts.AsNoTracking().Where(o => o.PhoneHash == wa).Select(o => (DateTimeOffset?)o.CreatedAt).SingleOrDefaultAsync(CancellationToken.None) is { } baja
                 && !(recipient.ConsentSince > baja)) row.OptOutPendingAt = baja;
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or ArgumentException)
