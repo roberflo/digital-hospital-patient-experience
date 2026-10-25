@@ -693,6 +693,9 @@ namespace Recepcion.Api.Migrations
                     b.Property<string>("ExternalId")
                         .HasColumnType("text");
 
+                    b.Property<Guid?>("HospitalAttachmentId")
+                        .HasColumnType("uuid");
+
                     b.Property<bool>("IsHistory")
                         .HasColumnType("boolean");
 

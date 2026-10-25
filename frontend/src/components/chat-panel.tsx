@@ -38,6 +38,7 @@ import { Spinner } from './ui/spinner';
 import { Textarea } from './ui/textarea';
 import { api, fetcher, type Me, type Chat, type Message, type Activity } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { canSaveToRecord, recordBody, recordCategories } from '@/lib/record-file';
 import { dayInZone, whatsAppPhone } from '@/lib/format';
 import { ConfirmAction } from './confirm-action';
 import { ReminderConsent } from './appointment-reminders';
@@ -99,6 +100,8 @@ export function ChatPanel({
   const [note, setNote] = useState(false);
   const [patient, setPatient] = useState(false);
   const [details, setDetails] = useState(false);
+  // RXE-C: the patient's file a clinician is filing in the Hospital record.
+  const [record, setRecord] = useState<Message | null>(null);
   // A chosen file waits for the person to confirm whom it goes to.
   // One key per chosen file: retrying after a lost answer never sends it twice.
   const [file, setFile] = useState<{ file: File; key: string } | null>(null);
@@ -489,6 +492,22 @@ export function ChatPanel({
                         </a>
                       </Button>
                     )}
+                    {m.hospitalAttachmentId ? (
+                      <Badge variant="secondary" className="self-start">
+                        <Check /> Guardado en el expediente
+                      </Badge>
+                    ) : (
+                      canSaveToRecord(m, chat.contact, me.role) && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="self-start"
+                          onClick={() => setRecord(m)}
+                        >
+                          <FileText /> Guardar en el expediente
+                        </Button>
+                      )
+                    )}
                     <div className="flex items-center justify-end gap-1 text-xs text-muted-foreground">
                       <time>{time(m.createdAt, me.tenant.timeZone)}</time>
                       {m.sender !== 'patient' && (
@@ -643,6 +662,28 @@ export function ChatPanel({
             conversationId: c.id,
           });
           refreshActivities();
+        }}
+      />
+      <FormDialog
+        title="Guardar en el expediente"
+        description="El archivo pasa del WhatsApp del paciente a su expediente en Hospital, a tu nombre. Recepción no guarda una copia."
+        open={!!record}
+        onClose={() => setRecord(null)}
+        fields={[
+          {
+            name: 'categoryCode',
+            label: 'Categoría',
+            options: recordCategories,
+            value: 'prior-study',
+            required: true,
+          },
+          { name: 'clinicalDate', label: 'Fecha clínica (opcional)', type: 'date' },
+          { name: 'description', label: 'Descripción (opcional)' },
+        ]}
+        onSubmit={async (v) => {
+          if (!record) return;
+          await api(`/messages/${record.id}/hospital-attachment`, 'POST', recordBody(v));
+          await mutate();
         }}
       />
       <PatientLink

@@ -242,6 +242,34 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
         return await response.Content.ReadAsByteArrayAsync(ct);
     }
 
+    /// <summary>RXE-C3: files a document in the patient's record (Documents' multipart upload), always as the signed-in clinician
+    /// (<see cref="AsUser"/>): Hospital decides who may. Hospital names the type from the content, so the declared one is only a hint.
+    /// No idempotency key exists on that route: a timeout is «unconfirmed», never retried here.</summary>
+    public async Task<Guid> UploadAttachmentAsync(Guid tenantId, Guid patientId, byte[] content, string fileName, string mediaType,
+        string categoryCode, DateTimeOffset? clinicalDate, string? description, CancellationToken ct = default)
+    {
+        if (userBearer is null) throw new InvalidOperationException("A record upload is made by a person, never by the service account.");
+        using var form = new MultipartFormDataContent();
+        var file = new ByteArrayContent(content);
+        file.Headers.ContentType = MediaTypeHeaderValue.TryParse(mediaType, out var type) ? type : new("application/octet-stream");
+        form.Add(file, "file", fileName);
+        form.Add(new StringContent(categoryCode), "categoryCode");
+        if (clinicalDate is { } date) form.Add(new StringContent(date.ToString("O")), "clinicalDate");
+        if (!string.IsNullOrEmpty(description)) form.Add(new StringContent(description), "description");
+        HttpResponseMessage response;
+        try { response = await SendAsync(tenantId, HttpMethod.Post, $"v1/patients/{patientId:D}/attachments", form, ct); }
+        catch (HttpRequestException) { throw new HospitalIntegrationException("hospital.unavailable", HttpStatusCode.ServiceUnavailable); }
+        catch (HospitalIntegrationException ex) when (ex.StatusCode == HttpStatusCode.NotFound) { throw new HospitalIntegrationException("hospital.patient_not_found", HttpStatusCode.NotFound); }
+        catch (HospitalIntegrationException ex) when (ex.Code == "hospital.timeout") { throw new HospitalIntegrationException("hospital.attachment_unconfirmed", HttpStatusCode.GatewayTimeout); }
+        catch (HospitalIntegrationException ex) when (ex.Code.StartsWith("hospital.http_5", StringComparison.Ordinal)) { throw new HospitalIntegrationException("hospital.unavailable", HttpStatusCode.ServiceUnavailable); }
+        using (response)
+        {
+            try { return (await response.Content.ReadFromJsonAsync<JsonElement>(Json, ct)).GetProperty("attachmentId").GetGuid(); }
+            catch (Exception e) when (e is JsonException or KeyNotFoundException or InvalidOperationException or FormatException)
+            { throw new HospitalIntegrationException("hospital.invalid_response", HttpStatusCode.BadGateway); }
+        }
+    }
+
     private async Task VerifyAppointmentAsync(Guid tenantId, Guid patientId, string phone,
         Guid appointmentId, CancellationToken ct)
     {
@@ -293,7 +321,8 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         request.Headers.Add("X-Correlation-Id", (correlation ?? Guid.NewGuid()).ToString("D"));
         if (idempotencyKey is not null) request.Headers.Add("Idempotency-Key", idempotencyKey);
-        if (body is not null) request.Content = JsonContent.Create(body, options: Json);
+        // A multipart body (RXE-C3) goes as built; everything else is JSON.
+        if (body is not null) request.Content = body as HttpContent ?? JsonContent.Create(body, options: Json);
         HttpResponseMessage response;
         // HttpClient.Timeout, not the caller giving up. Hospital may still have applied a write: never retried here.
         try { response = await http.SendAsync(request, ct); }
@@ -312,14 +341,16 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
             // Only the entry holding the rejected token: one another request has just stored stays.
             if (status == HttpStatusCode.Unauthorized) foreach (var entry in Tokens.Where(e => e.Key.Tenant == tenantId && e.Value.Token == token)) Tokens.TryRemove(entry);
             var commercial=path.StartsWith("v1/commercial/",StringComparison.Ordinal);
+            // RXE-C5: Documents names why it refused a file (type, size); the code carries no PHI, the response's text is never read.
+            var documents=body is MultipartFormDataContent && status==HttpStatusCode.BadRequest;
             // A keyed create refused for its key is named (MR-41): the caller reconciles it instead of reading a generic 409.
-            if(commercial || idempotencyKey is not null && status==HttpStatusCode.Conflict)
+            if(commercial || documents || idempotencyKey is not null && status==HttpStatusCode.Conflict)
             {
                 try
                 {
                     var problem=await response.Content.ReadFromJsonAsync<JsonElement>(ct);
-                    if(problem.TryGetProperty("code",out var value)&&value.GetString() is {} named && (commercial
-                        ? named.StartsWith("commercial.",StringComparison.Ordinal) && named.Length<100 && named.All(c=>char.IsAsciiLetterOrDigit(c)||c is '.' or '_')
+                    if(problem.TryGetProperty("code",out var value)&&value.GetString() is {} named && (commercial || documents
+                        ? named.StartsWith(commercial ? "commercial." : "documents.",StringComparison.Ordinal) && named.Length<100 && named.All(c=>char.IsAsciiLetterOrDigit(c)||c is '.' or '_')
                         : named is "scheduling.idempotency_key_reused" or "patient.idempotency_key_reused"))code=named;
                 }
                 catch(JsonException) { }
@@ -462,6 +493,11 @@ public sealed class HospitalIntegrationException(string code, HttpStatusCode sta
         "scheduling.idempotency_key_reused" or "patient.idempotency_key_reused" => "Hospital ya tiene esta solicitud registrada con otros datos. Comprueba la agenda del paciente antes de repetirla.",
         "hospital.http_409" => "La información cambió en Hospital. Actualiza la agenda antes de continuar.",
         "hospital.timeout" => "Hospital no respondió a tiempo. Comprueba la agenda antes de reintentar.",
+        "documents.attachment_media_type_unsupported" => "Hospital no admite este tipo de archivo en el expediente.",
+        "documents.attachment_file_too_large" => "El archivo es demasiado grande para el expediente.",
+        "hospital.patient_not_found" => "Hospital no encontró al paciente vinculado. Revisa el vínculo del contacto.",
+        "hospital.unavailable" => "Hospital no está disponible ahora. El archivo no se guardó; inténtalo más tarde.",
+        "hospital.attachment_unconfirmed" => "Hospital no respondió a tiempo; el archivo pudo haberse guardado. Revisa el expediente antes de reintentar.",
         _ => "No pudimos completar la operación en Hospital. Revisa la conexión desde Mi hospital y vuelve a intentar."
     };
     public HttpStatusCode StatusCode { get; } = statusCode;
