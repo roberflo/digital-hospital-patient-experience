@@ -1,5 +1,7 @@
 using System.ClientModel;
+using System.ClientModel.Primitives;
 using Microsoft.Extensions.AI;
+using OpenAI;
 namespace Recepcion;
 
 /// <summary>The model gateway's configuration: which providers, which model answers first, and how long a turn and a request may take.</summary>
@@ -23,6 +25,41 @@ public sealed partial class AgentRuntime
 
     /// <summary>One of the gateway's providers has a key (NVIDIA_API_KEY, OPENAI_API_KEY with OPENAI_MODEL, or ANTHROPIC_API_KEY).</summary>
     public static bool AiConfigured(IConfiguration config) => !string.IsNullOrEmpty(config["NVIDIA_API_KEY"]) || !string.IsNullOrEmpty(config["OPENAI_API_KEY"]) && !string.IsNullOrEmpty(config["OPENAI_MODEL"]) || !string.IsNullOrEmpty(config["ANTHROPIC_API_KEY"]);
+
+    /// <summary>The gateway: NVIDIA NIM, then OpenAI, then Claude, each one that is configured; a failed model call goes to the next.</summary>
+    IChatClient Chat()
+    {
+        IChatClient Provider(string key, string endpoint, string model)
+        {
+            var client = new OpenAI.Chat.ChatClient(model, new ApiKeyCredential(key), new OpenAIClientOptions { Endpoint = new Uri(endpoint.TrimEnd('/')), Transport = new HttpClientPipelineTransport(http), RetryPolicy = new ClientRetryPolicy(1), NetworkTimeout = Attempt(config, http.Timeout) }).AsIChatClient();
+            if (!new Uri(endpoint).Host.EndsWith("openai.com", StringComparison.OrdinalIgnoreCase)) return client;
+            // OpenAI's own models, probed 2026-10-04: a temperature other than the default is rejected (gpt-5-nano), and tools in Chat
+            // Completions need the reasoning effort stated on some (gpt-6-luna: none). So no temperature, and the effort is configuration.
+            var effort = config["OPENAI_REASONING_EFFORT"];
+#pragma warning disable SCME0001 // JsonPatch is how the OpenAI client sends a body field its options do not model
+            return client.AsBuilder().ConfigureOptions(options => { options.Temperature = null; if (effort is { Length: > 0 }) options.RawRepresentationFactory = _ => { var raw = new OpenAI.Chat.ChatCompletionOptions(); raw.Patch.Set("$.reasoning_effort"u8, BinaryData.FromString($"\"{effort}\"")); return raw; }; }).Build();
+#pragma warning restore SCME0001
+        }
+        var chain = new List<IChatClient>();
+        if (config["NVIDIA_API_KEY"] is { Length: > 0 } nimKey)
+        {
+            var nim = Provider(nimKey, config["AI_BASE_URL"] ?? "https://integrate.api.nvidia.com/v1", config["AI_MODEL"] ?? DefaultModel);
+            // Thinking stays on: measured on the evals, turning it off halves latency and drops 102/107 to 82/107 (invented slots,
+            // announced actions never taken). AI_DISABLE_THINKING=true is for a model that passes the evals without it. NIM only: OpenAI rejects the field.
+#pragma warning disable SCME0001 // JsonPatch is how the OpenAI client sends a provider-specific body field
+            if (config["AI_DISABLE_THINKING"] == "true") nim = nim.AsBuilder().ConfigureOptions(options => options.RawRepresentationFactory = _ => { var raw = new OpenAI.Chat.ChatCompletionOptions(); raw.Patch.Set("$.chat_template_kwargs"u8, BinaryData.FromString("""{"enable_thinking":false}""")); return raw; }).Build();
+#pragma warning restore SCME0001
+            chain.Add(nim);
+        }
+        if (config["OPENAI_API_KEY"] is { Length: > 0 } key && config["OPENAI_MODEL"] is { Length: > 0 } model) chain.Add(Provider(key, config["OPENAI_BASE_URL"] ?? "https://api.openai.com/v1", model));
+        if (config["ANTHROPIC_API_KEY"] is { Length: > 0 } claudeKey)
+            // Official SDK on the same HttpClient. Claude Opus 5.5 rejects sampling parameters and always thinks (adaptive, default effort),
+            // and thinking counts toward max_tokens: no temperature, and room past the agent's 4096 so a turn is not cut mid-reply.
+            chain.Add(new Anthropic.AnthropicClient { ApiKey = claudeKey, HttpClient = http, MaxRetries = 1, Timeout = Attempt(config, http.Timeout) }
+                .AsIChatClient(config["ANTHROPIC_MODEL"] is { Length: > 0 } claudeModel ? claudeModel : ClaudeDefaultModel)
+                .AsBuilder().ConfigureOptions(options => { options.Temperature = null; options.MaxOutputTokens = 16000; }).Build());
+        return Gateway(chain, () => db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "agent_provider", Actor = "Sistema", ActorRole = "system", Body = "El proveedor principal de IA no respondió; se usó el de respaldo." }));
+    }
 }
 
 /// <summary>Repeats one failed model call on the next provider. Only the model request is
