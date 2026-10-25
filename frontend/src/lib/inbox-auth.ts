@@ -1,7 +1,7 @@
 import 'server-only';
 import { NextRequest, NextResponse } from 'next/server';
 import { getToken } from 'next-auth/jwt';
-import { forward } from './crm-proxy.ts';
+import { forward, sameOrigin } from './crm-proxy.ts';
 import { isPlatformOwner } from './acting.ts';
 import { getConversation, InboxError, type Message } from './kapso.ts';
 // Reuse the BFF's refresh + cookie chunking; the API validates membership on every request.
@@ -163,7 +163,5 @@ export function errorResponse(error: unknown, headers?: Headers) {
   return response;
 }
 export function requireOrigin(req: NextRequest) {
-  const origin = process.env.NEXTAUTH_URL;
-  if (!origin || req.headers.get('origin') !== new URL(origin).origin)
-    throw new InboxError(403, 'Origen inválido.');
+  if (!sameOrigin(req)) throw new InboxError(403, 'Origen inválido.');
 }

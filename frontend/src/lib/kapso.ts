@@ -11,11 +11,6 @@ export class InboxError extends Error {
     this.headers = headers;
   }
 }
-export function phoneNumberId() {
-  const id = process.env.KAPSO_PHONE_NUMBER_ID;
-  if (!id || !/^\d+$/.test(id)) throw new InboxError(503, 'WhatsApp no está configurado.');
-  return id;
-}
 // Reads only: sending goes through Recepción's API (MR-36, inbox-auth.ts).
 async function request<T>(path: string): Promise<T> {
   if (!process.env.KAPSO_API_KEY) throw new InboxError(503, 'WhatsApp no está configurado.');

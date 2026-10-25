@@ -5,7 +5,7 @@
 export type StepState = 'done' | 'pending' | 'failed' | 'loading' | 'unknown' | 'blocked';
 export type StepId = 'hospital' | 'whatsapp' | 'team' | 'agent';
 export type Read<T> = { data?: T; error?: unknown };
-export type Checked<T> = Read<T> & { validating?: boolean };
+type Checked<T> = Read<T> & { validating?: boolean };
 export type Installation = {
   kapsoKey: boolean;
   webhookUrl: boolean;
@@ -31,7 +31,7 @@ export type Step = {
   channel?: StepChannel;
 };
 
-export function readState<T>(read: Read<T>, done: (data: T) => boolean): StepState {
+function readState<T>(read: Read<T>, done: (data: T) => boolean): StepState {
   if (read.error) return 'unknown';
   if (read.data === undefined) return 'loading';
   return done(read.data) ? 'done' : 'pending';

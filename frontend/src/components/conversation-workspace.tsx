@@ -43,7 +43,7 @@ export const priorities = [
   ['high', 'Alta'],
   ['urgent', 'Urgente'],
 ] as const;
-const stages = [
+export const stages = [
   ['new', 'Nuevo'],
   ['contacted', 'En seguimiento'],
   ['scheduled', 'Agendado'],

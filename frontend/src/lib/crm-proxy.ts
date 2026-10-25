@@ -7,7 +7,6 @@ const ALLOWED = new Set([
   'me',
   'overview',
   'contacts',
-  'companies',
   'commercial',
   'opportunities',
   'activities',

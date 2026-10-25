@@ -16,7 +16,7 @@ import {
   X,
 } from 'lucide-react';
 import { fetcher, type Me } from '@/lib/api';
-import { zoneName } from '@/lib/format';
+import { dayInZone, inZone, zoneName } from '@/lib/format';
 import { AgentMetrics } from './agent-metrics';
 import { Alert, AlertDescription } from './ui/alert';
 import { Badge } from './ui/badge';
@@ -168,8 +168,7 @@ function EventCard({
               {careOptions.find(([key]) => key === event.careType)?.[1] ?? 'Histórico sin rol'}
             </Badge>
             <time dateTime={event.createdAt} className="text-xs text-muted-foreground">
-              {new Date(event.createdAt).toLocaleTimeString('es-SV', {
-                timeZone: zone,
+              {inZone(event.createdAt, zone, {
                 hour: '2-digit',
                 minute: '2-digit',
               })}
@@ -282,9 +281,7 @@ export function ActivityWorkspace({
   );
   const groups = new Map<string, Event[]>();
   for (const event of data?.items ?? []) {
-    const day = new Intl.DateTimeFormat('en-CA', { timeZone: me.tenant.timeZone }).format(
-      new Date(event.createdAt),
-    );
+    const day = dayInZone(event.createdAt, me.tenant.timeZone);
     groups.set(day, [...(groups.get(day) ?? []), event]);
   }
   function clear() {

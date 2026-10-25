@@ -20,7 +20,7 @@ import {
 } from './ui/item';
 import { NativeSelect, NativeSelectOption } from './ui/native-select';
 import { Separator } from './ui/separator';
-import { zoneName } from '@/lib/format';
+import { inZone, zoneName } from '@/lib/format';
 
 type Reminder = {
   id: string;
@@ -93,8 +93,7 @@ export function AppointmentReminders({ me }: { me: Me }) {
     }
   }
   const format = (value: string) =>
-    new Date(value).toLocaleString('es-SV', {
-      timeZone: me.tenant.timeZone,
+    inZone(value, me.tenant.timeZone, {
       dateStyle: 'short',
       timeStyle: 'short',
     });
@@ -339,8 +338,7 @@ export function TomorrowReminders({ me }: { me: Me }) {
     refreshInterval: 30000,
   });
   const time = (value: string) =>
-    new Date(value).toLocaleTimeString('es-SV', {
-      timeZone: me.tenant.timeZone,
+    inZone(value, me.tenant.timeZone, {
       hour: '2-digit',
       minute: '2-digit',
     });

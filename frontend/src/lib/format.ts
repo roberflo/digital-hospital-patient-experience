@@ -1,5 +1,5 @@
 // Dates and times are the hospital's: its zone and es-SV, never the browser's (MR-23).
-export const hospitalLocale = 'es-SV';
+const hospitalLocale = 'es-SV';
 export const fallbackZone = 'America/El_Salvador';
 export const inZone = (
   value: string | number | Date,

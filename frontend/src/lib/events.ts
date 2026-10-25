@@ -41,7 +41,7 @@ export function acceptReceipt(key: string | null, body: Buffer, now = Date.now()
   bus.seen.set(id, now + 3600000);
   return true;
 }
-export const eventNames = new Set([
+const eventNames = new Set([
   'whatsapp.message.received',
   'whatsapp.message.sent',
   'whatsapp.message.delivered',

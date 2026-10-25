@@ -3,7 +3,7 @@ import { useState } from 'react';
 import useSWR from 'swr';
 import { AlertCircle, CalendarDays, RefreshCw } from 'lucide-react';
 import { fetcher, type Contact, type Me } from '@/lib/api';
-import { noShowLine, zoneName } from '@/lib/format';
+import { dayInZone, inZone, noShowLine, zoneName } from '@/lib/format';
 import { Alert, AlertDescription } from './ui/alert';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -19,9 +19,7 @@ type Appointment = {
 };
 export function PatientAppointments({ contact, me }: { contact: Contact; me: Me }) {
   const [expanded, setExpanded] = useState(false);
-  const today = new Intl.DateTimeFormat('en-CA', { timeZone: me.tenant.timeZone }).format(
-    new Date(),
-  );
+  const today = dayInZone(new Date(), me.tenant.timeZone);
   const end = new Date(today + 'T12:00:00Z');
   end.setUTCDate(end.getUTCDate() + 30);
   const { data, error, isLoading, mutate } = useSWR<{ rows: Appointment[] }>(
@@ -84,8 +82,7 @@ export function PatientAppointments({ contact, me }: { contact: Contact; me: Me 
                   <ItemContent className="min-w-0">
                     <ItemTitle>{a.clinicianName}</ItemTitle>
                     <p className="text-xs text-muted-foreground">
-                      {new Date(a.scheduledStart).toLocaleString('es-SV', {
-                        timeZone: me.tenant.timeZone,
+                      {inZone(a.scheduledStart, me.tenant.timeZone, {
                         dateStyle: 'short',
                         timeStyle: 'short',
                       })}{' '}

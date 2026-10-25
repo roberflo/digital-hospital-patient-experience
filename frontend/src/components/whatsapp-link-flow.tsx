@@ -2,6 +2,8 @@
 // The number-linking flow shared by /whatsapp and the administrator's «Primeros pasos»:
 // hosted Kapso link → automatic verification on return → sync result with its warnings.
 import { sessionFetch } from '@/lib/session-client';
+import { inZone } from '@/lib/format';
+import { useHospitalZone } from '@/hooks/use-hospital-zone';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ExternalLink, Info, MessageCircle, RefreshCw, TriangleAlert } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -15,7 +17,7 @@ import {
   ItemTitle,
 } from '@/components/ui/item';
 
-export type Sync = { connected: number; added: number; webhooksReady: number; warnings: string[] };
+type Sync = { connected: number; added: number; webhooksReady: number; warnings: string[] };
 export async function whatsappApi<T>(path: string, method = 'GET'): Promise<T> {
   const response = await sessionFetch('/api/crm' + path, {
     method,
@@ -118,6 +120,7 @@ export function useWhatsAppConnect(admin: boolean, onSynced: () => unknown) {
 
 export function WhatsAppLinkFlow({ flow }: { flow: ReturnType<typeof useWhatsAppConnect> }) {
   const { link, busy, checking, result, error, waiting, attempts, start, verify, opened } = flow;
+  const zone = useHospitalZone();
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap gap-2">
@@ -151,8 +154,13 @@ export function WhatsAppLinkFlow({ flow }: { flow: ReturnType<typeof useWhatsApp
           {link.expiresAt && (
             <ItemFooter>
               <p className="text-xs text-muted-foreground">
-                Válido hasta {new Date(link.expiresAt).toLocaleDateString('es')}. Generar otro
-                enlace reemplaza el anterior.
+                Válido hasta{' '}
+                {inZone(link.expiresAt, zone, {
+                  day: 'numeric',
+                  month: 'numeric',
+                  year: 'numeric',
+                })}
+                . Generar otro enlace reemplaza el anterior.
               </p>
             </ItemFooter>
           )}

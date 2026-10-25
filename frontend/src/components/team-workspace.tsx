@@ -25,10 +25,10 @@ import { Spinner } from './ui/spinner';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { ConfirmAction } from './confirm-action';
 
-export type WorkloadMember = Member & { open: number; pending: number; snoozed: number };
+type WorkloadMember = Member & { open: number; pending: number; snoozed: number };
 export type Workload = { members: WorkloadMember[]; unassigned: number };
 export const managesTeam = (me: Me) => me.role === 'admin';
-const roles: Record<string, string> = {
+export const roles: Record<string, string> = {
   admin: 'Administrador',
   agent: 'Recepcionista',
   doctor: 'Doctor',
