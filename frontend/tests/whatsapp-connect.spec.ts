@@ -40,9 +40,10 @@ test('business admin gets hosted connection link and imports verified number wit
   await expect(hosted).toHaveAttribute('rel', 'noopener noreferrer');
   await page.getByRole('button', { name: 'Verificar conexión', exact: true }).click();
   await expect(page.getByText('1 número(s) agregado(s) a tu hospital.')).toBeVisible();
+  // The history opens the working inbox filtered to that number, not /inbox (unset in production).
   await expect(page.getByRole('link', { name: 'Consultar historial →' })).toHaveAttribute(
     'href',
-    '/inbox?phoneNumberId=1234567890',
+    '/?view=inbox&channelId=channel',
   );
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({
@@ -84,4 +85,22 @@ test('onboarding reports retryable reception setup failure', async ({ page }) =>
   await expect(page.getByRole('link', { name: 'Continuar conexión en Kapso' })).toHaveCount(0);
   await page.getByRole('button', { name: 'Verificar conexión', exact: true }).click();
   await expect(page.getByText('Número guardado. Reintenta configurar recepción.')).toBeVisible();
+});
+
+test('a number history link opens the inbox filtered to that number in every state', async ({
+  page,
+}) => {
+  await login(page);
+  await page.route('**/api/crm/channels', (route) =>
+    route.fulfill({ json: [{ id: 'channel', name: 'WhatsApp · +503 7000 0000' }] }),
+  );
+  const asked: URLSearchParams[] = [];
+  await page.route('**/api/crm/conversations?*', (route) => {
+    asked.push(new URL(route.request().url()).searchParams);
+    return route.fulfill({ json: [] });
+  });
+  await page.goto('/?view=inbox&channelId=channel');
+  await expect.poll(() => asked.some((q) => q.get('channelId') === 'channel')).toBe(true);
+  const filtered = asked.find((q) => q.get('channelId') === 'channel')!;
+  expect(filtered.has('state')).toBe(false);
 });

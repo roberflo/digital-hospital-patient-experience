@@ -61,6 +61,7 @@ export function InboxView({
   const [linkedPhone, setLinkedPhone] = useState('');
   const [linkedNumber, setLinkedNumber] = useState('');
   const [linkedConversation, setLinkedConversation] = useState('');
+  const [channelId, setChannelId] = useState('');
   function clearLinkedConversation() {
     setLinkedPhone('');
     setLinkedNumber('');
@@ -81,8 +82,12 @@ export function InboxView({
       setLinkedNumber(params.get('phoneNumberId') ?? '');
       setState('');
     }
+    // A number's history (WhatsApp settings): every conversation on that channel, in any state.
+    if (params.get('channelId')) {
+      setChannelId(params.get('channelId')!);
+      setState('');
+    }
   }, []);
-  const [channelId, setChannelId] = useState('');
   const [priority, setPriority] = useState('');
   const [label, setLabel] = useState('');
   const [filter, setFilter] = useState('all');

@@ -144,7 +144,7 @@ export default function WhatsAppConnect() {
                   </ItemContent>
                   <ItemActions>
                     <Button variant="outline" size="sm" asChild>
-                      <Link href={`/inbox?phoneNumberId=${encodeURIComponent(c.phoneNumberId)}`}>
+                      <Link href={`/?view=inbox&channelId=${encodeURIComponent(c.id)}`}>
                         Consultar historial →
                       </Link>
                     </Button>
