@@ -26,10 +26,14 @@ public sealed class AgentEvals(ITestOutputHelper output)
         var openAi = Environment.GetEnvironmentVariable("AGENT_EVAL_PROVIDER") == "openai";
         string Env(string nim, string openai) => Environment.GetEnvironmentVariable(openAi ? openai : nim) ?? "";
         var key = Env("NVIDIA_API_KEY", "OPENAI_API_KEY");
-        if (key.Length == 0) throw new InvalidOperationException("The agent evals need a model key; a skipped eval is not a pass.");
+        if (key.Length == 0 && Environment.GetEnvironmentVariable("AGENT_EVAL_PROVIDER") != "claude") throw new InvalidOperationException("The agent evals need a model key; a skipped eval is not a pass.");
         var model = Environment.GetEnvironmentVariable("AGENT_EVAL_MODEL") is { Length: > 0 } chosen ? chosen : Env("AI_MODEL", "OPENAI_MODEL") is { Length: > 0 } configured ? configured : AgentRuntime.DefaultModel;
         var provider = new Dictionary<string, string?> { ["NVIDIA_API_KEY"] = key, ["AI_MODEL"] = model, ["AI_BASE_URL"] = Env("AI_BASE_URL", "OPENAI_BASE_URL") is { Length: > 0 } url ? url : openAi ? "https://api.openai.com/v1" : null,
             ["OPENAI_REASONING_EFFORT"] = Environment.GetEnvironmentVariable("AGENT_EVAL_REASONING") is { Length: > 0 } reasoning ? reasoning : Environment.GetEnvironmentVariable("OPENAI_REASONING_EFFORT") };
+        // AGENT_EVAL_PROVIDER=claude: the gateway is Claude alone (ANTHROPIC_API_KEY, ANTHROPIC_MODEL or AGENT_EVAL_MODEL).
+        if (Environment.GetEnvironmentVariable("AGENT_EVAL_PROVIDER") == "claude")
+            provider = new() { ["ANTHROPIC_API_KEY"] = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY") is { Length: > 0 } claude ? claude : throw new InvalidOperationException("The agent evals need a model key; a skipped eval is not a pass."),
+                ["ANTHROPIC_MODEL"] = Environment.GetEnvironmentVariable("AGENT_EVAL_MODEL") is { Length: > 0 } claudeModel ? claudeModel : Environment.GetEnvironmentVariable("ANTHROPIC_MODEL") };
 
         var spec = AgentEvalCases.Load().Single(c => c.GetProperty("id").GetString() == id);
         var today = DateOnly.FromDateTime(DateTimeOffset.UtcNow.ToOffset(Offset).Date);

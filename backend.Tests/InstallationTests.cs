@@ -21,10 +21,13 @@ public sealed class InstallationTests
     [InlineData("")]
     public void WebhookUrlMustBeAbsoluteHttps(string url) =>
         Assert.False(InstallationEndpoints.Read(Admin, Config(("KAPSO_WEBHOOK_URL", url), ("KAPSO_WEBHOOK_SECRET", "s"))).WebhookUrl);
-    [Fact] public void OpenAiAloneDoesNotMakeTheAgentReadyAndManualSendIsNotAutomatic()
+    // The gateway (NIM, OpenAI, Claude) runs with any one of them: OpenAI alone is ready, its key without a model is not.
+    [Fact] public void AnyGatewayProviderMakesTheAgentReadyAndManualSendIsNotAutomatic()
     {
         var read = InstallationEndpoints.Read(Admin, Config(("OPENAI_API_KEY", "k"), ("OPENAI_MODEL", "m"), ("KAPSO_MANUAL_SEND_ENABLED", "true")));
-        Assert.False(read.AgentModel); Assert.False(read.AutoSend);
+        Assert.True(read.AgentModel); Assert.False(read.AutoSend);
+        Assert.False(InstallationEndpoints.Read(Admin, Config(("OPENAI_API_KEY", "k"))).AgentModel);
+        Assert.True(InstallationEndpoints.Read(Admin, Config(("ANTHROPIC_API_KEY", "k"))).AgentModel);
     }
     // docs/platform-owner.md AC 16: the platform owner reads the same booleans, so the view can name what the
     // operator still owes (Kapso key, webhook URL and signature) instead of offering a button that would fail.

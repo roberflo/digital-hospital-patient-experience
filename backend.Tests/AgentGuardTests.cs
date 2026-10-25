@@ -904,6 +904,48 @@ public sealed class AgentGuardTests : IAsyncLifetime
         Assert.Contains("Respuesta de respaldo", h.Sent);
     }
 
+    static readonly Dictionary<string, string?> AllThree = new() { ["OPENAI_API_KEY"] = "synthetic-openai", ["OPENAI_MODEL"] = "synthetic-fallback", ["ANTHROPIC_API_KEY"] = "synthetic-claude" };
+    static HttpResponseMessage Down() => new(HttpStatusCode.ServiceUnavailable) { Content = new StringContent("{}", Encoding.UTF8, "application/json") };
+    static HttpResponseMessage ClaudeReply(string text) => new(HttpStatusCode.OK) { Content = new StringContent(JsonSerializer.Serialize(new { id = "msg_synthetic", type = "message", role = "assistant", model = "claude-opus-5-5", content = new[] { new { type = "text", text } }, stop_reason = "end_turn", stop_sequence = (string?)null, usage = new { input_tokens = 1, output_tokens = 1 } }), Encoding.UTF8, "application/json") };
+
+    [Fact]
+    public async Task WhenNimAndOpenAiFailClaudeAnswersThroughTheOfficialSdk()
+    {
+        // The gateway's order is NIM, OpenAI, Claude. Claude Opus 5.5 answers 400 to a temperature, and thinking counts toward max_tokens.
+        var bodies = new List<(string Host, string Body)>();
+        var model = new AgentHarness.Fake(async request =>
+        {
+            bodies.Add((request.RequestUri!.Host, await request.Content!.ReadAsStringAsync()));
+            return request.RequestUri.Host == "api.anthropic.com" ? ClaudeReply("Respuesta de Claude") : Down();
+        });
+
+        await h.Runtime(model, h.Sender(), extra: AllThree).Run(h.Job, CancellationToken.None);
+
+        Assert.Equal(["integrate.api.nvidia.com", "api.openai.com", "api.anthropic.com"], bodies.Select(b => b.Host).Distinct());
+        using var claude = JsonDocument.Parse(bodies.First(b => b.Host == "api.anthropic.com").Body);
+        Assert.Equal("claude-opus-5-5", claude.RootElement.GetProperty("model").GetString());
+        Assert.False(claude.RootElement.TryGetProperty("temperature", out _));
+        Assert.Equal(16000, claude.RootElement.GetProperty("max_tokens").GetInt32());
+        Assert.Contains("Respuesta de Claude", h.Sent);
+        Assert.Equal("agent", (await h.Fresh()).Status);
+    }
+
+    [Fact]
+    public async Task ClaudeAloneIsEnoughAndItsFailureStillGivesTheMenu()
+    {
+        // No NIM key: the gateway is just Claude. When Claude is down too, the patient gets the menu, not silence.
+        var hosts = new List<string>();
+        var model = new AgentHarness.Fake(request => { hosts.Add(request.RequestUri!.Host); return Task.FromResult(Down()); });
+
+        await h.Runtime(model, h.Sender(), extra: new() { ["NVIDIA_API_KEY"] = "", ["ANTHROPIC_API_KEY"] = "synthetic-claude" }).Run(h.Job, CancellationToken.None);
+
+        Assert.All(hosts, host => Assert.Equal("api.anthropic.com", host));
+        Assert.NotEmpty(hosts);
+        Assert.StartsWith("Disculpa, en este momento no puedo leer mensajes escritos", Assert.Single(h.Sent));
+        Assert.True(AgentRuntime.AiConfigured(h.Config(new() { ["NVIDIA_API_KEY"] = "", ["ANTHROPIC_API_KEY"] = "synthetic-claude" })));
+        Assert.False(AgentRuntime.AiConfigured(h.Config(new() { ["NVIDIA_API_KEY"] = "" })));
+    }
+
     [Theory]
     [InlineData(HttpStatusCode.ServiceUnavailable)]
     [InlineData(HttpStatusCode.TooManyRequests)] // measured: after sustained traffic the provider answers 429 for minutes

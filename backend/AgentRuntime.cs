@@ -239,7 +239,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             if (calls == 0 && fault is null && Final(response).Length == 0) response = await agent.RunAsync(turns, cancellationToken: budget.Token);
         }
         // Attempts that never answered come back from the retry policy as one AggregateException.
-        catch (Exception ex) when (ex is ClientResultException or HttpRequestException or AggregateException { InnerException: HttpRequestException or OperationCanceledException } || (ex is OperationCanceledException && !ct.IsCancellationRequested))
+        catch (Exception ex) when (ex is ClientResultException or Anthropic.Exceptions.AnthropicException or HttpRequestException or AggregateException { InnerException: HttpRequestException or OperationCanceledException } || (ex is OperationCanceledException && !ct.IsCancellationRequested))
         {
             // No provider answered (outage, rate limit, no credit). The patient is told a person will answer instead of being left in silence;
             // anything a tool already did stays recorded in the history for that person.
@@ -540,7 +540,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
     public static TimeSpan Budget(IConfiguration config) => Seconds(config, "AI_TURN_BUDGET_SECONDS", 90) is var budget && budget < AgentWorker.TurnDeadline - TimeSpan.FromSeconds(20) ? budget : AgentWorker.TurnDeadline - TimeSpan.FromSeconds(20);
     /// <summary>How long one model request may take (AI_ATTEMPT_TIMEOUT_SECONDS); never past the HttpClient's own timeout, which would end the request first.</summary>
     public static TimeSpan Attempt(IConfiguration config, TimeSpan httpTimeout) => Seconds(config, "AI_ATTEMPT_TIMEOUT_SECONDS", 30) is var attempt && attempt < httpTimeout ? attempt : httpTimeout;
-    /// <summary>NVIDIA NIM first; OpenAI repeats a failed model call when its key and model are configured.</summary>
+    /// <summary>The gateway: NVIDIA NIM, then OpenAI, then Claude, each one that is configured; a failed model call goes to the next.</summary>
     IChatClient Chat()
     {
         IChatClient Provider(string key, string endpoint, string model)
@@ -554,15 +554,33 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             return client.AsBuilder().ConfigureOptions(options => { options.Temperature = null; if (effort is { Length: > 0 }) options.RawRepresentationFactory = _ => { var raw = new OpenAI.Chat.ChatCompletionOptions(); raw.Patch.Set("$.reasoning_effort"u8, BinaryData.FromString($"\"{effort}\"")); return raw; }; }).Build();
 #pragma warning restore SCME0001
         }
-        var nim = Provider(config["NVIDIA_API_KEY"] ?? throw new ArgumentException("IA no configurada"), config["AI_BASE_URL"] ?? "https://integrate.api.nvidia.com/v1", config["AI_MODEL"] ?? DefaultModel);
-        // Thinking stays on: measured on the evals, turning it off halves latency and drops 102/107 to 82/107 (invented slots,
-        // announced actions never taken). AI_DISABLE_THINKING=true is for a model that passes the evals without it. NIM only: OpenAI rejects the field.
+        var chain = new List<IChatClient>();
+        if (config["NVIDIA_API_KEY"] is { Length: > 0 } nimKey)
+        {
+            var nim = Provider(nimKey, config["AI_BASE_URL"] ?? "https://integrate.api.nvidia.com/v1", config["AI_MODEL"] ?? DefaultModel);
+            // Thinking stays on: measured on the evals, turning it off halves latency and drops 102/107 to 82/107 (invented slots,
+            // announced actions never taken). AI_DISABLE_THINKING=true is for a model that passes the evals without it. NIM only: OpenAI rejects the field.
 #pragma warning disable SCME0001 // JsonPatch is how the OpenAI client sends a provider-specific body field
-        if (config["AI_DISABLE_THINKING"] == "true") nim = nim.AsBuilder().ConfigureOptions(options => options.RawRepresentationFactory = _ => { var raw = new OpenAI.Chat.ChatCompletionOptions(); raw.Patch.Set("$.chat_template_kwargs"u8, BinaryData.FromString("""{"enable_thinking":false}""")); return raw; }).Build();
+            if (config["AI_DISABLE_THINKING"] == "true") nim = nim.AsBuilder().ConfigureOptions(options => options.RawRepresentationFactory = _ => { var raw = new OpenAI.Chat.ChatCompletionOptions(); raw.Patch.Set("$.chat_template_kwargs"u8, BinaryData.FromString("""{"enable_thinking":false}""")); return raw; }).Build();
 #pragma warning restore SCME0001
-        if (config["OPENAI_API_KEY"] is not { Length: > 0 } key || config["OPENAI_MODEL"] is not { Length: > 0 } model) return nim;
-        return new FallbackChatClient(nim, Provider(key, config["OPENAI_BASE_URL"] ?? "https://api.openai.com/v1", model), () => db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "agent_provider", Actor = "Sistema", ActorRole = "system", Body = "El proveedor principal de IA no respondió; se usó el de respaldo." }));
+            chain.Add(nim);
+        }
+        if (config["OPENAI_API_KEY"] is { Length: > 0 } key && config["OPENAI_MODEL"] is { Length: > 0 } model) chain.Add(Provider(key, config["OPENAI_BASE_URL"] ?? "https://api.openai.com/v1", model));
+        if (config["ANTHROPIC_API_KEY"] is { Length: > 0 } claudeKey)
+            // Official SDK on the same HttpClient. Claude Opus 5.5 rejects sampling parameters and always thinks (adaptive, default effort),
+            // and thinking counts toward max_tokens: no temperature, and room past the agent's 4096 so a turn is not cut mid-reply.
+            chain.Add(new Anthropic.AnthropicClient { ApiKey = claudeKey, HttpClient = http, MaxRetries = 1, Timeout = Attempt(config, http.Timeout) }
+                .AsIChatClient(config["ANTHROPIC_MODEL"] is { Length: > 0 } claudeModel ? claudeModel : "claude-opus-5-5")
+                .AsBuilder().ConfigureOptions(options => { options.Temperature = null; options.MaxOutputTokens = 16000; }).Build());
+        return Gateway(chain, () => db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "agent_provider", Actor = "Sistema", ActorRole = "system", Body = "El proveedor principal de IA no respondió; se usó el de respaldo." }));
     }
+
+    /// <summary>Each provider falls back to the rest of the chain, in order.</summary>
+    public static IChatClient Gateway(IReadOnlyList<IChatClient> chain, Action onFallback) => chain.Count == 0 ? throw new ArgumentException("IA no configurada")
+        : chain.SkipLast(1).Reverse().Aggregate(chain[^1], (rest, provider) => new FallbackChatClient(provider, rest, onFallback));
+
+    /// <summary>One of the gateway's providers has a key (NVIDIA_API_KEY, OPENAI_API_KEY with OPENAI_MODEL, or ANTHROPIC_API_KEY).</summary>
+    public static bool AiConfigured(IConfiguration config) => !string.IsNullOrEmpty(config["NVIDIA_API_KEY"]) || !string.IsNullOrEmpty(config["OPENAI_API_KEY"]) && !string.IsNullOrEmpty(config["OPENAI_MODEL"]) || !string.IsNullOrEmpty(config["ANTHROPIC_API_KEY"]);
 
     /// <summary>Runs around every tool call: budget, pause checks, audit trail and grounding.</summary>
     async ValueTask<object?> GuardTool(AIAgent agent, FunctionInvocationContext context, Func<FunctionInvocationContext, CancellationToken, ValueTask<object?>> next, CancellationToken ct)

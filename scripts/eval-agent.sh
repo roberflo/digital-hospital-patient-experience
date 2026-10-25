@@ -7,8 +7,9 @@ set -eu
 #        AGENT_EVAL_FILTER=citas scripts/eval-agent.sh        (one area or one case; a full pass takes about half an hour)
 #        AGENT_EVAL_PROVIDER=openai AGENT_EVAL_REASONING=none AGENT_EVAL_SPACING=0.3 scripts/eval-agent.sh gpt-6-luna
 #          (grades an OpenAI model with OPENAI_API_KEY; does not touch the NIM key the live agent uses)
+#        AGENT_EVAL_PROVIDER=claude scripts/eval-agent.sh [claude-opus-5-5]   (Claude alone, with ANTHROPIC_API_KEY)
 # Prints «Evals: N/M pasaron» and exits 1 if a case fails that evals/agent/known-failures.txt does not list, or if no case ran (MR-34).
-[ "${AGENT_EVAL_PROVIDER:-}" = openai ] || grep -q '^NVIDIA_API_KEY=.' .env || { echo "NVIDIA_API_KEY missing in .env: the evals cannot run, and a skipped eval is not a pass." >&2; exit 1; }
+[ "${AGENT_EVAL_PROVIDER:-}" = openai ] || [ "${AGENT_EVAL_PROVIDER:-}" = claude ] || grep -q '^NVIDIA_API_KEY=.' .env || { echo "NVIDIA_API_KEY missing in .env: the evals cannot run, and a skipped eval is not a pass." >&2; exit 1; }
 test_database="recepcion_evals_$(date +%s)_$$"
 docker compose exec -T db createdb -U recepcion "$test_database"
 log="$(mktemp)"

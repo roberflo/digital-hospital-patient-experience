@@ -16,8 +16,8 @@ public static class InstallationEndpoints
             // Same rule WhatsAppOnboarding.EnsureWebhook applies before registering reception.
             Uri.TryCreate(config["KAPSO_WEBHOOK_URL"], UriKind.Absolute, out var url) && url.Scheme == "https",
             !string.IsNullOrEmpty(config["KAPSO_WEBHOOK_SECRET"]),
-            // AgentRuntime needs the primary provider (OpenAI is only its fallback) and automatic sending.
-            !string.IsNullOrEmpty(config["NVIDIA_API_KEY"]),
+            // AgentRuntime needs one provider of its gateway (NIM, OpenAI or Claude) and automatic sending.
+            AgentRuntime.AiConfigured(config),
             config["SEND_ENABLED"] == "true");
     }
 }
