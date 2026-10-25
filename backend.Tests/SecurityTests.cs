@@ -91,7 +91,7 @@ public sealed class SecurityTests {
         var tenant=Guid.NewGuid();
         var token="e30."+Convert.ToBase64String(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new{tenant_id=tenant,exp=DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds()})).TrimEnd('=').Replace('+','-').Replace('/','_')+".synthetic";
         var hospital=new HospitalClient(new HttpClient(new TimingOut()),new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{[$"Hospital:Tenants:{tenant}:BaseUrl"]="https://hospital.example.invalid/",[$"Hospital:Tenants:{tenant}:AccessToken"]=token}).Build());
-        var timeout=await Call(_=>hospital.GetVerifiedPatientAsync(tenant,patient,"50370000001"));
+        var timeout=await Call(async _=>{await hospital.GetVerifiedPatientAsync(tenant,patient,"50370000001");});
         Assert.Equal(504,timeout.Status);Assert.Equal("Hospital no respondió a tiempo. Comprueba la agenda antes de reintentar.",timeout.Title);
         // Any other client's timeout (Kapso, the assistant's model) is not Hospital's and keeps the generic answer.
         var other=await Run(new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout",new TimeoutException()));

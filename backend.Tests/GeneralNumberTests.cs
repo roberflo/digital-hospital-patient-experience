@@ -651,7 +651,7 @@ public sealed class GeneralNumberTests : IAsyncLifetime
             await Inbound(waId, text: "BAJA"); // the patient answers from WhatsApp: the wa_id, without «+»
 
             Assert.All(await Rows(clinicA), r => Assert.Equal("cancelled", r.Status));
-            Assert.Empty(kapso.Where(k => k.Body.TryGetProperty("template", out _))); // no reminder goes out
+            Assert.DoesNotContain(kapso, k => k.Body.TryGetProperty("template", out _)); // no reminder goes out
         }
         finally
         {

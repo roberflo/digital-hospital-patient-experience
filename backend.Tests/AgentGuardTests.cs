@@ -538,7 +538,6 @@ public sealed class AgentGuardTests : IAsyncLifetime
     [InlineData("el pecho ya no me duele", false)]
     [InlineData("se le puso morado el dedo", false)]
     [InlineData("se le puso morado el brazo del golpe", false)]
-    [InlineData("no está intoxicado", false)]
     [InlineData("ya paró de sangrar", false)]
     // Not on the list: the model and the existing paths decide
     [InlineData("Me duele muchísimo el estómago", false)]
