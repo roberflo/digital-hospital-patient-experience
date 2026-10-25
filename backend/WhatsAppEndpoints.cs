@@ -27,21 +27,33 @@ public static class WhatsAppEndpoints
         var bearer = Identity.Bearer(ctx);
         var m = await db.Messages.SingleOrDefaultAsync(x => x.Id == id); if (m is null) return Results.NotFound();
         if (m.Sender != "patient" || m.Type is not ("image" or "document") || m.MediaId is null) throw new ArgumentException("Solo se guarda una imagen o un documento que envió el paciente.");
+        // M-6: writing to the record is never more open than reading its clinical summary from this conversation.
+        ClinicalEndpoints.RequireDoctor(u, await db.Conversations.AsNoTracking().SingleAsync(x => x.Id == m.ConversationId));
         var contact = await db.Conversations.Where(x => x.Id == m.ConversationId).Join(db.Contacts, c => c.ContactId, x => x.Id, (_, x) => x).SingleAsync();
         if (contact.PatientId is not { } patientId) throw new ArgumentException("Vincula el contacto a un paciente de Hospital antes de guardar.");
         using var lease = await svc.Lock(m.Id); await db.Entry(m).ReloadAsync();
         if (m.HospitalAttachmentId is { } saved) return Results.Ok(new RecordAttachment(saved));
         var resource = $"contact:{contact.Id:D} message:{m.Id:D}";
-        var media = await kapso.Download(m.MediaId, ctx.RequestAborted);
-        Guid attachment;
-        try { attachment = await hospital.AsUser(bearer).UploadAttachmentAsync(t.Id, patientId, media.Bytes, m.MediaName ?? $"whatsapp-{m.Id:N}", media.Type, category, b.ClinicalDate, description, ctx.RequestAborted); }
-        catch (HospitalIntegrationException ex)
+        // M-1: from here on the person hanging up stops nothing: the upload cannot be retried safely, so it finishes and every outcome is audited.
+        var outcome = "hospital_attachment.failed:hospital.attachment_unconfirmed";
+        try
         {
-            db.Audits.Add(new Audit { TenantId = t.Id, Actor = u.Subject, Action = "hospital_attachment.failed:" + ex.Code, Resource = resource }); await db.SaveChangesAsync(); throw;
+            (byte[] Bytes, string Type) media;
+            try { media = await kapso.Download(m.MediaId, CancellationToken.None); }
+            catch (ArgumentException ex) when (ex.Message == KapsoClient.TooLarge) { throw new HospitalIntegrationException("whatsapp.media_too_large", System.Net.HttpStatusCode.BadRequest); }
+            catch (Exception ex) when (ex is HttpRequestException or ArgumentException or TaskCanceledException or JsonException or KeyNotFoundException or InvalidOperationException)
+            { throw new HospitalIntegrationException("whatsapp.media_unavailable", System.Net.HttpStatusCode.BadGateway); }
+            Guid attachment;
+            try { attachment = await hospital.AsUser(bearer).UploadAttachmentAsync(t.Id, patientId, media.Bytes, m.MediaName ?? $"whatsapp-{m.Id:N}", media.Type, category, b.ClinicalDate, description, CancellationToken.None); }
+            catch (Exception ex) when (ex is not HospitalIntegrationException) { throw new HospitalIntegrationException("hospital.attachment_unconfirmed", System.Net.HttpStatusCode.GatewayTimeout); }
+            m.HospitalAttachmentId = attachment; outcome = "hospital_attachment.saved";
+            return Results.Ok(new RecordAttachment(attachment));
         }
-        m.HospitalAttachmentId = attachment;
-        db.Audits.Add(new Audit { TenantId = t.Id, Actor = u.Subject, Action = "hospital_attachment.saved", Resource = resource }); await db.SaveChangesAsync();
-        return Results.Ok(new RecordAttachment(attachment));
+        catch (HospitalIntegrationException ex) { outcome = "hospital_attachment.failed:" + ex.Code; throw; }
+        finally
+        {
+            db.Audits.Add(new Audit { TenantId = t.Id, Actor = u.Subject, Action = outcome, Resource = resource }); await db.SaveChangesAsync(CancellationToken.None);
+        }
     }
     public static async Task<IResult> SendMedia(Guid id, HttpContext ctx, CrmDb db, TenantScope t, CurrentUser u, KapsoClient kapso, ConversationService svc)
     {

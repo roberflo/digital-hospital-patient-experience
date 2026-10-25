@@ -10,8 +10,9 @@
     "test": "playwright test",
     "format": "prettier --write src tests *.ts *.json",
     "format:check": "prettier --check src tests *.ts *.json",
-    "lint": "eslint src tests server-tests next.config.ts playwright.config.ts",
-    "test:server": "node --conditions=react-server --experimental-strip-types --test server-tests/*.test.ts"
+    "lint": "eslint src tests server-tests ui-tests next.config.ts playwright.config.ts",
+    "test:server": "node --conditions=react-server --experimental-strip-types --test server-tests/*.test.ts",
+    "test:ui": "node --import ./ui-tests/register.mjs --test ui-tests/*.test.ts"
   },
   "dependencies": {
     "class-variance-authority": "0.7.1",

@@ -259,7 +259,10 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
         HttpResponseMessage response;
         try { response = await SendAsync(tenantId, HttpMethod.Post, $"v1/patients/{patientId:D}/attachments", form, ct); }
         catch (HttpRequestException) { throw new HospitalIntegrationException("hospital.unavailable", HttpStatusCode.ServiceUnavailable); }
-        catch (HospitalIntegrationException ex) when (ex.StatusCode == HttpStatusCode.NotFound) { throw new HospitalIntegrationException("hospital.patient_not_found", HttpStatusCode.NotFound); }
+        // Nit 1: «patient not found» only when Hospital says so; any other 404 stays generic.
+        catch (HospitalIntegrationException ex) when (PatientMissing.Contains(ex.Code)) { throw new HospitalIntegrationException("hospital.patient_not_found", HttpStatusCode.NotFound); }
+        catch (HospitalIntegrationException ex) when (ex.StatusCode == HttpStatusCode.NotFound) { throw new HospitalIntegrationException("hospital.http_404", HttpStatusCode.NotFound); }
+        catch (HospitalIntegrationException ex) when (ex.StatusCode == HttpStatusCode.Conflict) { throw new HospitalIntegrationException("hospital.attachment_conflict", HttpStatusCode.Conflict); }
         catch (HospitalIntegrationException ex) when (ex.Code == "hospital.timeout") { throw new HospitalIntegrationException("hospital.attachment_unconfirmed", HttpStatusCode.GatewayTimeout); }
         catch (HospitalIntegrationException ex) when (ex.Code.StartsWith("hospital.http_5", StringComparison.Ordinal)) { throw new HospitalIntegrationException("hospital.unavailable", HttpStatusCode.ServiceUnavailable); }
         using (response)
@@ -269,6 +272,9 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
             { throw new HospitalIntegrationException("hospital.invalid_response", HttpStatusCode.BadGateway); }
         }
     }
+
+    /// <summary>Hospital's codes for a patient (or encounter) its pipeline did not find.</summary>
+    static readonly HashSet<string> PatientMissing = ["patient.not_found", "clinical_record.patient.not_found", "clinical.encounter_not_found", "clinical_record.encounter.not_found"];
 
     private async Task VerifyAppointmentAsync(Guid tenantId, Guid patientId, string phone,
         Guid appointmentId, CancellationToken ct)
@@ -342,7 +348,7 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
             if (status == HttpStatusCode.Unauthorized) foreach (var entry in Tokens.Where(e => e.Key.Tenant == tenantId && e.Value.Token == token)) Tokens.TryRemove(entry);
             var commercial=path.StartsWith("v1/commercial/",StringComparison.Ordinal);
             // RXE-C5: Documents names why it refused a file (type, size); the code carries no PHI, the response's text is never read.
-            var documents=body is MultipartFormDataContent && status==HttpStatusCode.BadRequest;
+            var documents=body is MultipartFormDataContent && status is HttpStatusCode.BadRequest or HttpStatusCode.NotFound;
             // A keyed create refused for its key is named (MR-41): the caller reconciles it instead of reading a generic 409.
             if(commercial || documents || idempotencyKey is not null && status==HttpStatusCode.Conflict)
             {
@@ -350,7 +356,7 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
                 {
                     var problem=await response.Content.ReadFromJsonAsync<JsonElement>(ct);
                     if(problem.TryGetProperty("code",out var value)&&value.GetString() is {} named && (commercial || documents
-                        ? named.StartsWith(commercial ? "commercial." : "documents.",StringComparison.Ordinal) && named.Length<100 && named.All(c=>char.IsAsciiLetterOrDigit(c)||c is '.' or '_')
+                        ? (commercial ? named.StartsWith("commercial.",StringComparison.Ordinal) : named.StartsWith("documents.",StringComparison.Ordinal) || PatientMissing.Contains(named)) && named.Length<100 && named.All(c=>char.IsAsciiLetterOrDigit(c)||c is '.' or '_')
                         : named is "scheduling.idempotency_key_reused" or "patient.idempotency_key_reused"))code=named;
                 }
                 catch(JsonException) { }
@@ -494,7 +500,13 @@ public sealed class HospitalIntegrationException(string code, HttpStatusCode sta
         "hospital.http_409" => "La información cambió en Hospital. Actualiza la agenda antes de continuar.",
         "hospital.timeout" => "Hospital no respondió a tiempo. Comprueba la agenda antes de reintentar.",
         "documents.attachment_media_type_unsupported" => "Hospital no admite este tipo de archivo en el expediente.",
-        "documents.attachment_file_too_large" => "El archivo es demasiado grande para el expediente.",
+        "documents.attachment_file_too_large" or "whatsapp.media_too_large" => "El archivo es demasiado grande para el expediente.",
+        "documents.attachment_file_empty" => "El archivo llegó vacío; pide al paciente que lo envíe de nuevo.",
+        "documents.attachment_category_unknown" => "Hospital no reconoce esa categoría. Elige otra.",
+        "documents.attachment_filename_required" => "Hospital necesita un nombre de archivo para guardarlo.",
+        "documents.attachment_caller_kind_not_supported" => "Hospital sólo acepta este archivo de una persona con sesión iniciada. Recarga e inténtalo de nuevo.",
+        "hospital.attachment_conflict" => "Hospital no pudo guardar el archivo porque el expediente cambió. Actualiza y vuelve a intentar.",
+        "whatsapp.media_unavailable" => "No se pudo obtener el archivo de WhatsApp; puede haber vencido. Pide al paciente que lo envíe de nuevo.",
         "hospital.patient_not_found" => "Hospital no encontró al paciente vinculado. Revisa el vínculo del contacto.",
         "hospital.unavailable" => "Hospital no está disponible ahora. El archivo no se guardó; inténtalo más tarde.",
         "hospital.attachment_unconfirmed" => "Hospital no respondió a tiempo; el archivo pudo haberse guardado. Revisa el expediente antes de reintentar.",
