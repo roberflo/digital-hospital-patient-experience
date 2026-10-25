@@ -1,0 +1,49 @@
+{
+  "name": "recepcion_cita_dia_anterior_v5",
+  "language": "es",
+  "category": "UTILITY",
+  "parameter_format": "NAMED",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola, mañana tienes cita:\n\n*{{hospital}}*\n{{fecha}}, {{hora}}\n\n¿Nos confirmas tu asistencia?",
+      "example": {
+        "body_text_named_params": [
+          {
+            "param_name": "hospital",
+            "example": "Clínica de ejemplo"
+          },
+          {
+            "param_name": "fecha",
+            "example": "05/10/2026"
+          },
+          {
+            "param_name": "hora",
+            "example": "10:30"
+          }
+        ]
+      }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Confirmar"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Cambiar fecha"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Cancelar"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "No más recordatorios"
+        }
+      ]
+    }
+  ]
+}
