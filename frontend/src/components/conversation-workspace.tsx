@@ -3,11 +3,9 @@ import { useId, useState } from 'react';
 import useSWR, { useSWRConfig } from 'swr';
 import { toast } from 'sonner';
 import { AlertCircle, Check, Plus, FileText, RefreshCw } from 'lucide-react';
-import {
-  CustomerCommercial,
-  OpportunityCommercial,
-  HospitalCommercialLink,
-} from './commercial-workspace';
+import { CustomerCommercial } from './customer-commercial';
+import { OpportunityCommercial } from './opportunity-commercial';
+import { HospitalCommercialLink } from './commercial-shared';
 import { Alert, AlertDescription } from './ui/alert';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';

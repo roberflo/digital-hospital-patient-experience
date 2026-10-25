@@ -8,7 +8,7 @@ import { Card, CardAction, CardContent, CardFooter, CardHeader, CardTitle } from
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { api, fetcher, type Contact } from '@/lib/api';
 import { whatsAppPhone } from '@/lib/format';
-import { CustomerCommercial } from './commercial-workspace';
+import { CustomerCommercial } from './customer-commercial';
 import { PatientLink } from './hospital-connection';
 import { PersonAvatar, EmptyState, ErrorBox, Loading } from './workspace-shared';
 import { FormDialog } from './form-dialog';

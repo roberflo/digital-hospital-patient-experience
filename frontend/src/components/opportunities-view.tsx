@@ -9,7 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/
 import { Field as UiField } from './ui/field';
 import { NativeSelect, NativeSelectOption } from './ui/native-select';
 import { api, fetcher, type Contact, type Opportunity } from '@/lib/api';
-import { OpportunityCommercial } from './commercial-workspace';
+import { OpportunityCommercial } from './opportunity-commercial';
 import { ErrorBox } from './workspace-shared';
 import { stages } from './conversation-workspace';
 import { FormDialog } from './form-dialog';
