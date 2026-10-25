@@ -812,21 +812,28 @@ public sealed class GeneralNumberTests : IAsyncLifetime
         }
     }
 
-    // Criterio 23: a row skipped for its country reopens once Hospital names a phone the general number writes to.
+    // Criterio 23: a row skipped for its country (branch B, or the safety net of branch A) reopens once Hospital names a phone the general number
+    // writes to. Seeded as skipped: under branch (A) a sync no longer skips +52 by itself, so syncing it first would pass without reopening anything.
     [Fact]
     public async Task ARowSkippedForItsCountryReopensWhenThePhoneIsInTheList()
     {
         Guid appointment = Guid.NewGuid(), patient = Guid.NewGuid();
-        recipients[clinicA] = [Recipient(appointment, patient, start, "+52 55 1234 5678")];
-        await Sync(clinicA);
+        await using (var db = Db(clinicA))
+        {
+            db.AppointmentReminders.Add(new() { TenantId = clinicA, PatientId = patient, AppointmentId = appointment, StartsAt = start, DueAt = start.AddDays(-1), Window = "day_before", CreatedAt = DateTimeOffset.UtcNow,
+                Status = "skipped", Reason = AppointmentReminderService.OutsideList });
+            await db.SaveChangesAsync();
+        }
         recipients[clinicA] = [Recipient(appointment, patient, start, "+1 415 555 0100")];
 
-        await Sync(clinicA, DateTimeOffset.UtcNow.AddMinutes(16));
+        await Sync(clinicA);
 
-        Assert.All(await Rows(clinicA), r => Assert.Equal(("pending", (string?)null, Hash("14155550100")), (r.Status, r.Reason, r.RecipientHash)));
+        var day = (await Rows(clinicA)).Single(r => r.Window == "day_before");
+        Assert.Equal(("pending", (string?)null, Hash("14155550100")), (day.Status, day.Reason, day.RecipientHash));
     }
 
-    // Criterio 23: a row still skipped says why today; one skipped with the text before OQ-2 for a country outside the list now says so.
+    // Criterios 18 and 23: a row still skipped says why today. One skipped with the text before OQ-2 whose phone still has no country code now
+    // says UnusablePhone (under branch A a +52 phone is written to, so it would reopen instead).
     [Fact]
     public async Task ASkippedRowShowsTheCurrentReason()
     {
