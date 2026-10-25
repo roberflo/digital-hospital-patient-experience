@@ -181,6 +181,9 @@ public sealed class AppointmentReminder : TenantRow
     public Guid? ChannelId { get; set; }
     /// <summary>General number only: HMAC of the phone Hospital named as recipient (criterio 41). The phone itself is never stored.</summary>
     public string? RecipientHash { get; set; }
+    /// <summary>General number only (TEL-1 criterio 22): HMAC of the wa_id Kapso answered the send with, when it came back. A BAJA or CANCELAR from
+    /// that wa_id counts as from <see cref="RecipientHash"/> (Mexico 521… vs 52…). The wa_id itself is never stored.</summary>
+    public string? WaIdHash { get; set; }
     /// <summary>General number only: a BAJA arrived after this was sent and Hospital has not yet recorded the withdrawal (criterio 25b).</summary>
     public DateTimeOffset? OptOutPendingAt { get; set; }
     /// <summary>General number only: when Hospital recorded that withdrawal. A later appearance of the patient means a new authorisation (A20).</summary>
@@ -235,6 +238,7 @@ public sealed class CrmDb(DbContextOptions<CrmDb> options, TenantScope scope, ID
         b.Entity<AppointmentReminder>().HasIndex(x => new { x.TenantId, x.AppointmentId, x.StartsAt, x.Window }).IsUnique();
         b.Entity<AppointmentReminder>().HasIndex(x => new { x.TenantId, x.Status, x.DueAt });
         b.Entity<AppointmentReminder>().HasIndex(x => x.RecipientHash); // BAJA finds the general number's sends by hash, across hospitals
+        b.Entity<AppointmentReminder>().HasIndex(x => x.WaIdHash); // and by the hash of the wa_id they went to (criterio 22)
         b.Entity<GeneralOptOut>().HasKey(x => x.PhoneHash); b.Entity<GeneralReplyCap>().HasKey(x => x.PhoneHash); b.Entity<GeneralReplyCap>().HasIndex(x => x.LastReplyAt); // the 24 h purge
         b.Entity<AppointmentReminder>().HasOne<Contact>().WithMany().HasForeignKey(x => new { x.TenantId, x.ContactId }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict);
         b.Entity<AppointmentReminder>().HasOne<Channel>().WithMany().HasForeignKey(x => new { x.TenantId, x.ChannelId }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict);
