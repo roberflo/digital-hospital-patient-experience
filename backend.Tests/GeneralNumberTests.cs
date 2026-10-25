@@ -752,11 +752,83 @@ public sealed class GeneralNumberTests : IAsyncLifetime
             Assert.Equal((clinicA, $"/v1/patients/{patientA}/whatsapp-reminders/consent/withdraw"), (write.Tenant, write.Path));
             Assert.NotNull((await Row(clinicA, day.Id)).OptOutWithdrawnAt);
 
-            recipients[clinicA] = [Recipient(Guid.NewGuid(), patientA, start.AddDays(1), MexicoE164, consentSince: DateTimeOffset.UtcNow.AddDays(-1))];
+            var next = Guid.NewGuid();
+            recipients[clinicA] = [Recipient(next, patientA, start.AddDays(1), MexicoE164, consentSince: DateTimeOffset.UtcNow.AddDays(-1))];
             await Sync(clinicA, DateTimeOffset.UtcNow.AddMinutes(16));
 
             Assert.DoesNotContain(await Rows(clinicA), r => r.Status == "pending");
+            Assert.DoesNotContain(await Rows(clinicA), r => r.AppointmentId == next); // no new row at all (22c)
             Assert.Single(kapso, k => k.Body.TryGetProperty("template", out _)); // only the first reminder ever went out
+        }
+        finally { await ForgetMexico(); }
+    }
+    // Criterio 22b across hospitals (review nit 2): a BAJA from the wa_id clinic A's send came back with also stops clinic B's rows of the same
+    // recipient, which carry no WaIdHash: pending ones are cancelled and the one B sent asks B's Hospital to withdraw.
+    [Fact]
+    public async Task ABajaFromTheWaIdStopsTheSameRecipientInAnotherClinic()
+    {
+        await SentToMexico();
+        var pendingB = await Sent(clinicB, appointmentB, patientB, "pending", to: MexicoE164, window: "hour_before");
+        var sentB = await Sent(clinicB, appointmentB, patientB, to: MexicoE164);
+        try
+        {
+            await Inbound(MexicoWaId, text: "BAJA");
+
+            Assert.Equal("cancelled", (await Row(clinicB, pendingB.Id)).Status);
+            Assert.NotNull((await Row(clinicB, sentB.Id)).OptOutWithdrawnAt);
+            Assert.Contains(hospitalWrites, w => w.Tenant == clinicB && w.Path == $"/v1/patients/{patientB}/whatsapp-reminders/consent/withdraw");
+        }
+        finally { await ForgetMexico(); }
+    }
+    // Review Important 1: the safety net of criterio 23 holds across hospitals, like the BAJA. Clinic A's send came back without its wa_id, the
+    // patient asked BAJA from a wa_id nobody can match: clinic B does not write either.
+    [Fact]
+    public async Task AForeignSendWithoutItsWaIdInOneClinicStopsTheOthers()
+    {
+        waIds["5255" + MexicoDigits] = null;
+        recipients[clinicA] = [Recipient(appointmentA, patientA, start, MexicoE164)];
+        await Sync(clinicA);
+        var dayA = (await Rows(clinicA)).Single(r => r.Window == "day_before");
+        await Dispatch(clinicA, dayA.Id, dayA.DueAt);
+        try
+        {
+            await Inbound(MexicoWaId, text: "BAJA");
+            recipients[clinicB] = [Recipient(appointmentB, patientB, start, MexicoE164)];
+
+            await Sync(clinicB);
+            foreach (var row in await Rows(clinicB)) await Dispatch(clinicB, row.Id, row.DueAt);
+
+            var rowsB = await Rows(clinicB);
+            Assert.Equal(2, rowsB.Count);
+            Assert.All(rowsB, r => Assert.Equal(("skipped", AppointmentReminderService.OutsideList), (r.Status, r.Reason)));
+            Assert.Single(kapso, k => k.Body.TryGetProperty("template", out _)); // only clinic A's
+        }
+        finally { await ForgetMexico(); }
+    }
+    // Review Important 1: a BAJA from a wa_id that no send had returned yet matches nothing; when a later send comes back with that wa_id, the
+    // patient is known to have asked BAJA: the withdrawal is asked of Hospital (OptOutPendingAt, the BAJA's moment) and nothing more goes out.
+    [Fact]
+    public async Task ASendWhoseWaIdAlreadyAskedBajaWithdrawsTheAuthorisation()
+    {
+        waIds["5255" + MexicoDigits] = MexicoWaId;
+        try
+        {
+            await Inbound(MexicoWaId, text: "BAJA");
+            Assert.Empty(hospitalWrites);
+            recipients[clinicB] = [Recipient(appointmentB, patientB, start, MexicoE164)];
+            await Sync(clinicB);
+            var rows = await Rows(clinicB);
+            var day = rows.Single(r => r.Window == "day_before"); var hour = rows.Single(r => r.Window == "hour_before");
+
+            await Dispatch(clinicB, day.Id, day.DueAt); // nothing linked the wa_id to this recipient before this send
+            Assert.NotNull((await Row(clinicB, day.Id)).OptOutPendingAt);
+            await Dispatch(clinicB, hour.Id, hour.DueAt);
+            await using (var db = Db(clinicB)) await Service(clinicB, db, Kapso()).RetryOptOuts();
+
+            Assert.Equal("cancelled", (await Row(clinicB, hour.Id)).Status);
+            Assert.Single(kapso, k => k.Body.TryGetProperty("template", out _));
+            var write = Assert.Single(hospitalWrites);
+            Assert.Equal((clinicB, $"/v1/patients/{patientB}/whatsapp-reminders/consent/withdraw"), (write.Tenant, write.Path));
         }
         finally { await ForgetMexico(); }
     }
