@@ -51,12 +51,13 @@ public sealed partial class AppointmentReminderService
         return (hash, consentSince) => waIds[hash].Prepend(hash).Any(h => optOuts.TryGetValue(h, out var since) && !(consentSince > since));
     }
 
-    /// <summary>Criterio 23, safety net of branch (A): the recipients among <paramref name="hashes"/> that a send of this hospital may have reached
-    /// without its wa_id coming back. Only hashes, never a phone.</summary>
+    /// <summary>Criterio 23, safety net of branch (A): the recipients among <paramref name="hashes"/> that a send may have reached without its wa_id
+    /// coming back. Read across hospitals, like the BAJA (review Important 1): the wa_id is the phone's, so a BAJA from it could not stop this
+    /// hospital either. Only hashes, never a phone.</summary>
     async Task<HashSet<string>> Unconfirmed(IEnumerable<string?> hashes, CancellationToken ct)
     {
         var list = hashes.OfType<string>().Distinct().ToArray();
-        return list.Length == 0 ? [] : (await db.AppointmentReminders.AsNoTracking()
+        return list.Length == 0 ? [] : (await db.AppointmentReminders.IgnoreQueryFilters().AsNoTracking()
             .Where(r => r.RecipientHash != null && list.Contains(r.RecipientHash) && r.AttemptedAt != null && r.WaIdHash == null && r.ContactId == null && r.Status != "failed" && r.Status != "sending")
             .Select(r => r.RecipientHash!).Distinct().ToListAsync(ct)).ToHashSet();
     }
@@ -145,6 +146,10 @@ public sealed partial class AppointmentReminderService
             // Criterio 22: only the wa_id's HMAC, never the wa_id. One of 8 digits is unusable (criterio 30), like one that did not come back.
             try { row.WaIdHash = waId is null ? null : Rules.PhoneHash(Rules.WaId(waId), config["PHONE_HASH_KEY"]!); } catch (ArgumentException) { row.WaIdHash = null; }
             if (row.WaIdHash is null && outside) db.Activities.Add(new Activity { TenantId = scope.Id, Actor = "Recordatorios", ActorRole = "system", Kind = "general_wa_id_missing", Body = WaIdMissing });
+            // A BAJA from this wa_id that came before any send returned it (review Important 1): now it is known to be this patient's, so the
+            // withdrawal is asked of Hospital, at the BAJA's moment, by the worker's retry (criterio 25b); OptedOut stops the next sends.
+            if (row.WaIdHash is { } wa && await db.GeneralOptOuts.AsNoTracking().Where(o => o.PhoneHash == wa).Select(o => (DateTimeOffset?)o.CreatedAt).SingleOrDefaultAsync(ct) is { } baja
+                && !(recipient.ConsentSince > baja)) row.OptOutPendingAt = baja;
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or ArgumentException)
         {
