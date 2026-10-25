@@ -30,6 +30,7 @@
   "hospital": {
     "availability": true
   },
+  "taps": ["f"],
   "expect": {
     "handoff": false,
     "match": [

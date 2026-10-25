@@ -61,7 +61,17 @@ public sealed class AgentEvals(ITestOutputHelper output)
 
         string? error = null;
         using var http = new Paced();
-        try { await h.Runtime(http, h.Sender(), Hospital(h, spec.GetProperty("hospital"), today), provider).Run(h.Job, new CancellationTokenSource(TimeSpan.FromMinutes(3)).Token); }
+        try
+        {
+            await h.Runtime(http, h.Sender(), Hospital(h, spec.GetProperty("hospital"), today), provider).Run(h.Job, new CancellationTokenSource(TimeSpan.FromMinutes(3)).Token);
+            // "taps": buttons the patient then touches, by id, each answered in its own turn (EV-8: the sex is always a tap).
+            if (spec.TryGetProperty("taps", out var touched))
+                foreach (var tap in touched.EnumerateArray())
+                {
+                    await h.Say("patient", tap.GetString()!);
+                    await h.Runtime(http, h.Sender(), Hospital(h, spec.GetProperty("hospital"), today), provider).Run(h.Job, new CancellationTokenSource(TimeSpan.FromMinutes(3)).Token);
+                }
+        }
         catch (Exception ex) { error = ex.GetType().Name + ": " + ex.Message; }
 
         var handoff = (await h.Fresh()).Status == "human";
@@ -193,6 +203,7 @@ public sealed class AgentEvalCases
             Assert.Equal("patient", spec.GetProperty("history").EnumerateArray().Last().GetProperty("from").GetString());
             Assert.True(spec.GetProperty("expect").EnumerateObject().Any(), id + ": expects nothing");
             if (spec.TryGetProperty("attention", out var attention)) Chosen(attention);
+            if (spec.TryGetProperty("taps", out var taps)) Assert.True(taps.GetArrayLength() > 0 && taps.EnumerateArray().All(t => t.GetString() is { Length: > 0 }), id + ": taps are button ids");
             // Real-data shapes never belong in a tracked case.
             Assert.DoesNotMatch(@"\b\d{8}-\d\b|\b\d{4}-\d{4}\b|[\w.+-]+@[\w-]+\.[\w.]+|\b\d{9,}\b", spec.GetRawText());
             foreach (var name in new[] { "match", "noMatch" }) if (spec.GetProperty("expect").TryGetProperty(name, out var patterns)) foreach (var pattern in patterns.EnumerateArray()) _ = new Regex(Regex.Replace(pattern.GetString()!, @"\{(day|dom|open|opendom)\+\d+\}", "1"));
