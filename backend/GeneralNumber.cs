@@ -125,12 +125,13 @@ public static partial class GeneralNumber
     [GeneratedRegex(@"^(CANCELAR|CANCELAR-SI|CANCELAR-NO) ([0-9a-fA-F-]{36})$")] private static partial Regex Tap();
 
     /// <summary>Criterio 22 (a)–(c), INV-6, INV-7: the row the payload names, a day-before reminder of a general-number hospital that was sent, still
-    /// ahead, to this very phone; and Hospital still lists it (criterio 41) at that start for that patient and phone.
+    /// ahead, to this very phone (its recipient's hash, or the hash of the wa_id the send came back with: TEL-1 criterio 22a); and Hospital still
+    /// lists it (criterio 41) at that start for that patient and the row's recipient, never the sender's hash.
     /// Anything else is null and reads like free text. Sets the scope to the row's hospital.</summary>
     static async Task<AppointmentReminder?> Resolve(Guid id, string hash, CrmDb db, TenantScope scope, IConfiguration config, HospitalClient hospital, CancellationToken ct)
     {
         var row = await db.AppointmentReminders.IgnoreQueryFilters().AsNoTracking().SingleOrDefaultAsync(r => r.Id == id, ct);
-        if (row is null || row.Window != "day_before" || row.Status != "sent" || row.RecipientHash != hash || row.StartsAt <= DateTimeOffset.UtcNow) return null;
+        if (row is null || row.Window != "day_before" || row.Status != "sent" || row.RecipientHash != hash && row.WaIdHash != hash || row.StartsAt <= DateTimeOffset.UtcNow) return null;
         var tenant = await db.Tenants.AsNoTracking().SingleOrDefaultAsync(t => t.Id == row.TenantId && t.Mode == "reminders", ct);
         if (tenant is null) return null;
         scope.Id = row.TenantId;
@@ -138,7 +139,7 @@ public static partial class GeneralNumber
         try
         {
             return (await hospital.GetReminderRecipientsAsync(row.TenantId, day, day, ct)).Any(r => r.AppointmentId == row.AppointmentId && r.PatientId == row.PatientId
-                && ReminderRules.Instant(r.ScheduledStart) == row.StartsAt && AppointmentReminderService.GeneralRecipientHash(r.Phone, config["PHONE_HASH_KEY"]!) == hash) ? row : null;
+                && ReminderRules.Instant(r.ScheduledStart) == row.StartsAt && AppointmentReminderService.GeneralRecipientHash(r.Phone, config["PHONE_HASH_KEY"]!) == row.RecipientHash) ? row : null;
         }
         catch (Exception ex) when (ex is HospitalIntegrationException or HttpRequestException or ArgumentException or JsonException || ex is TaskCanceledException && !ct.IsCancellationRequested) { return null; }
     }
@@ -174,16 +175,18 @@ public static partial class GeneralNumber
     /// <summary>Criterio 25, A14: BAJA is for every hospital on the general number, whatever its mode now. The hash goes on the opt-out list; in each
     /// hospital whose rows carry it (read across hospitals by hash, written one hospital at a time), pending sends are cancelled, and the ones that
     /// may have gone out (sent, cancelled, cancelling, uncertain) and are not yet covered by a withdrawal ask Hospital to record it, once per patient: ten BAJA are
-    /// one withdrawal. A send that failed never reached the phone. Hospital down: it stays pending for the worker; the list already stops sends.</summary>
+    /// one withdrawal. A send that failed never reached the phone. Hospital down: it stays pending for the worker; the list already stops sends.
+    /// A wa_id that differs from the E.164 stops every row of the recipients whose sends came back with it (TEL-1 criterio 22b).</summary>
     static async Task OptOut(string hash, CrmDb db, TenantScope scope, IConfiguration config, KapsoClient kapso, HospitalClient hospital, CancellationToken ct)
     {
         var now = DateTimeOffset.UtcNow;
         await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO \"GeneralOptOuts\" (\"PhoneHash\", \"CreatedAt\") VALUES ({hash}, {now}) ON CONFLICT (\"PhoneHash\") DO UPDATE SET \"CreatedAt\" = EXCLUDED.\"CreatedAt\"", ct);
-        var tenants = await db.AppointmentReminders.IgnoreQueryFilters().Where(r => r.RecipientHash == hash).Select(r => r.TenantId).Distinct().ToListAsync(ct);
+        var recipients = (await db.AppointmentReminders.IgnoreQueryFilters().Where(r => r.WaIdHash == hash && r.RecipientHash != null).Select(r => r.RecipientHash!).Distinct().ToListAsync(ct)).Append(hash).Distinct().ToArray();
+        var tenants = await db.AppointmentReminders.IgnoreQueryFilters().Where(r => recipients.Contains(r.RecipientHash!)).Select(r => r.TenantId).Distinct().ToListAsync(ct);
         foreach (var tenant in tenants)
         {
             scope.Id = tenant;
-            foreach (var row in await db.AppointmentReminders.Where(r => r.RecipientHash == hash).ToListAsync(ct))
+            foreach (var row in await db.AppointmentReminders.Where(r => recipients.Contains(r.RecipientHash!)).ToListAsync(ct))
             {
                 if (row.Status == "pending") { row.Status = "cancelled"; row.Reason = "El teléfono pidió BAJA en el número general."; }
                 else if (row.Status is "sent" or "cancelled" or "cancelling" or "uncertain" && row.AttemptedAt is { } at && (row.OptOutWithdrawnAt is null || at > row.OptOutWithdrawnAt)) row.OptOutPendingAt = now; // the last BAJA (R3)
