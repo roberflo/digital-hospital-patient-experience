@@ -127,6 +127,9 @@ namespace Recepcion.Api.Migrations
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("WaIdHash")
+                        .HasColumnType("text");
+
                     b.Property<string>("Window")
                         .IsRequired()
                         .HasColumnType("text");
@@ -136,6 +139,8 @@ namespace Recepcion.Api.Migrations
                     b.HasAlternateKey("TenantId", "Id");
 
                     b.HasIndex("RecipientHash");
+
+                    b.HasIndex("WaIdHash");
 
                     b.HasIndex("TenantId", "ChannelId");
 
