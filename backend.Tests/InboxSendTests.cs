@@ -14,7 +14,7 @@ public sealed class InboxSendTests
     {
         using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
         to.Add(body.RootElement.GetProperty("to").GetString()!);
-        return AgentHarness.Json(new { messages = new[] { new { id = "out-" + Guid.NewGuid() } } });
+        return AgentHarness.KapsoSent("out-" + Guid.NewGuid(), to[^1].TrimStart('+'));
     });
     static ConversationService Service(AgentHarness h, AgentHarness.Fake sender, bool manual) =>
         new(h.Db, h.Scope, new KapsoClient(new HttpClient(sender), new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["KAPSO_API_KEY"] = "synthetic", ["KAPSO_MANUAL_SEND_ENABLED"] = manual ? "true" : null }).Build()));

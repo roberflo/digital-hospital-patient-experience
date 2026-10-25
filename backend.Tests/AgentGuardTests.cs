@@ -1122,7 +1122,7 @@ public sealed class AgentHarness(Guid? tenant = null, string phone = "5037000000
             case "interactive": var interactive = body.RootElement.GetProperty("interactive").Clone(); Interactive.Add(interactive); Sent.Add(interactive.GetProperty("body").GetProperty("text").GetString()!); break;
             default: Documents++; break;
         }
-        return Json(new { messages = new[] { new { id = "out-" + Guid.NewGuid() } } });
+        return KapsoSent("out-" + Guid.NewGuid(), body.RootElement.GetProperty("to").GetString()!.TrimStart('+'));
     });
     /// <summary>Hospital double for the linked patient: identity, one-day agenda, availability,
     /// issued prescriptions and their PDF. Any other write is recorded, never executed.</summary>
@@ -1154,6 +1154,11 @@ public sealed class AgentHarness(Guid? tenant = null, string phone = "5037000000
     public static HttpResponseMessage Reply(string text) => Json(new { choices = new[] { new { message = new { role = "assistant", content = text } } } });
     public static HttpResponseMessage ToolCall(string name, object arguments) => Json(new { choices = new[] { new { message = new { role = "assistant", content = (string?)null, tool_calls = new[] { new { id = "call-" + Guid.NewGuid().ToString("N"), type = "function", function = new { name, arguments = JsonSerializer.Serialize(arguments) } } } } } } });
     public static HttpResponseMessage Json(object value) => Raw(JsonSerializer.Serialize(value));
+    /// <summary>Kapso's answer to a send, in the shape measured on 2026-10-25 (TEL-1 criterio 21, docs/verification.md): the recipient's
+    /// <c>wa_id</c> in <c>contacts[]</c> and the message id. <paramref name="waId"/> null: no <c>contacts[]</c>, a send whose wa_id did not come back.</summary>
+    public static HttpResponseMessage KapsoSent(string id, string? waId) => Json(waId is null
+        ? new { messaging_product = "whatsapp", messages = new[] { new { id, message_status = "accepted" } } }
+        : (object)new { messaging_product = "whatsapp", contacts = new[] { new { input = "+" + waId, wa_id = waId } }, messages = new[] { new { id, message_status = "accepted" } } });
     static HttpResponseMessage Raw(string json) => new(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
     /// <summary>Another context on the same database and tenant, with the given interceptors.</summary>
     public CrmDb With(params Microsoft.EntityFrameworkCore.Diagnostics.IInterceptor[] interceptors) => new(new DbContextOptionsBuilder<CrmDb>(options).AddInterceptors(interceptors).Options, Scope, protection);

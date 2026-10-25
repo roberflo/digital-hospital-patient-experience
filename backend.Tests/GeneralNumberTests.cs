@@ -41,6 +41,7 @@ public sealed class GeneralNumberTests : IAsyncLifetime
     bool hospitalDown, hospitalThrowsOnce; HttpStatusCode cancelAnswer = HttpStatusCode.NoContent, withdrawAnswer = HttpStatusCode.OK;
     // Kapso double.
     readonly List<(string Key, string Path, JsonElement Body)> kapso = [];
+    readonly Dictionary<string, string?> waIds = []; // E.164 digits ⇒ the wa_id Kapso answers with
     int kapsoCalls;
 
     static string RandomPhone() => "5037" + Random.Shared.Next(1000000, 9999999).ToString(CultureInfo.InvariantCulture);
@@ -127,7 +128,9 @@ public sealed class GeneralNumberTests : IAsyncLifetime
                 Template("recepcion_cita_una_hora_v1", "Cita en {{hospital}} el {{fecha}} a las {{hora}}. BAJA") } });
         using var sent = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
         kapso.Add((key, path, sent.RootElement.Clone()));
-        return AgentHarness.Json(new { messages = new[] { new { id = "out-" + Guid.NewGuid() } } });
+        // The measured shape (criterio 21): the wa_id is the «to» without «+», unless the test says otherwise (null: none came back).
+        var to = sent.RootElement.GetProperty("to").GetString()!.TrimStart('+');
+        return AgentHarness.KapsoSent("out-" + Guid.NewGuid(), waIds.TryGetValue(to, out var waId) ? waId : to);
     });
     AppointmentReminderService Service(Guid tenant, CrmDb db, HttpMessageHandler kapsoDouble, IConfiguration? config = null)
     {

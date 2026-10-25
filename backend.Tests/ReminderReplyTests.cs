@@ -57,7 +57,7 @@ public sealed class ReminderReplyTests : IAsyncLifetime
                     : AgentHarness.Json(new { data = new[] { new { name = ReminderRules.DayTemplateV4, language = "es", status = "APPROVED", category = "UTILITY", parameter_format = "NAMED", components = new object[] { new { type = "BODY", text = "Cita en {{hospital}} el {{fecha}} a las {{hora}}. BAJA" }, new { type = "BUTTONS", buttons = new[] { new { type = "QUICK_REPLY", text = "Confirmar" }, new { type = "QUICK_REPLY", text = "Cambiar fecha" }, new { type = "QUICK_REPLY", text = "Cancelar" } } } } } } });
             using var sent = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
             payloads = sent.RootElement.GetProperty("template").GetProperty("components").EnumerateArray().Where(c => c.GetProperty("type").GetString() == "button").Select(c => c.GetProperty("parameters")[0].GetProperty("payload").GetString()!).ToArray();
-            return AgentHarness.Json(new { messages = new[] { new { id = "reminder-" + Guid.NewGuid() } } });
+            return AgentHarness.KapsoSent("reminder-" + Guid.NewGuid(), sent.RootElement.GetProperty("to").GetString()!.TrimStart('+'));
         });
         await h.Reminders(kapso, h.Hospital(appointments: [Booked(bookedAt, id: id)]), new() { ["REMINDERS_SEND_ENABLED"] = "true" }).Dispatch(reminder.Id, reminder.DueAt);
         Assert.Equal("sent", await Status(reminder.Id)); Assert.Equal(3, payloads.Length);

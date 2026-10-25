@@ -333,7 +333,7 @@ public sealed partial class AgentIntegrationTests:IAsyncLifetime {
         var h=new HospitalClient(new HttpClient(new Fake(req=>Task.FromResult(req.RequestUri!.AbsolutePath.StartsWith("/v1/patients/")?Json(new{patientId=contact.PatientId,phone=contact.Phone}):Json(new{rows=new[]{new{appointmentId=appointment,scheduledStart=start,status="booked"}}})))),cfg);
         var sends=0;var k=new Fake(req=>{
             if(req.Method==HttpMethod.Get)return Task.FromResult(req.RequestUri!.AbsolutePath.Contains("phone_numbers")?Json(new{data=new{business_account_id="synthetic-waba"}}):Json(new{data=new[]{new{name=tenant.ReminderHourTemplate,language="es",status="APPROVED",category="UTILITY",parameter_format="NAMED",components=new[]{new{type="BODY",text="Cita en {{hospital}} el {{fecha}} a las {{hora}}. BAJA"}}}}}));
-            sends++;return Task.FromResult(Json(new{messages=new[]{new{id="reminder-"+Guid.NewGuid()}}}));
+            sends++;return Task.FromResult(AgentHarness.KapsoSent("reminder-"+Guid.NewGuid(),JsonDocument.Parse(req.Content!.ReadAsStringAsync().Result).RootElement.GetProperty("to").GetString()!.TrimStart('+')));
         });
         var service=new AppointmentReminderService(db,scope,h,new KapsoClient(new HttpClient(k),cfg),Service(k),cfg);
         await service.Sync(now);
@@ -372,7 +372,7 @@ public sealed partial class AgentIntegrationTests:IAsyncLifetime {
                 return Json(new{data=new[]{new{name,language="es",status=scenario is "template" or "day_v4_pending"?"PENDING":"APPROVED",category="UTILITY",parameter_format="NAMED",components}}});
             }
             sends++;using var payload=JsonDocument.Parse(await req.Content!.ReadAsStringAsync());sent=payload.RootElement.Clone();Assert.Equal("template",payload.RootElement.GetProperty("type").GetString());Assert.Equal("+"+contact.Phone,payload.RootElement.GetProperty("to").GetString());Assert.DoesNotContain(contact.Name,payload.RootElement.GetRawText());
-            if(scenario=="timeout")throw new HttpRequestException("Synthetic timeout");return Json(new{messages=new[]{new{id="reminder-"+Guid.NewGuid()}}});
+            if(scenario=="timeout")throw new HttpRequestException("Synthetic timeout");return AgentHarness.KapsoSent("reminder-"+Guid.NewGuid(),contact.Phone);
         });
         var service=new AppointmentReminderService(db,scope,h,new KapsoClient(new HttpClient(k),cfg),Service(k),cfg);
         if(scenario=="phone") {await Assert.ThrowsAsync<HospitalIntegrationException>(()=>service.Dispatch(reminder.Id,now));Assert.Equal(0,sends);return;}
