@@ -1,6 +1,6 @@
 # Plan — La hora antes que el registro (S3)
 
-> **Cerrado el 2026-10-23** — implementado en `main`: `37bb7ed` — falta constancia de `eval-agent.sh`/`live-agent.sh` antes de desplegar (P-5). El 2026-10-25 NIM no respondía; el dueño decidió **pasar a OpenAI**: con `OPENAI_API_KEY`/`OPENAI_MODEL` configuradas por él, se corren ambos scripts y se pega la salida.
+> **Cerrado el 2026-10-23** — implementado en `main`: `37bb7ed` — falta constancia de `eval-agent.sh`/`live-agent.sh` antes de desplegar (P-5). El 2026-10-25 NIM no respondía; el dueño decidió **pasar a OpenAI**: con `OPENAI_API_KEY`/`OPENAI_MODEL` configuradas por él, se corren ambos scripts y se pega la salida. Diagnóstico del 2026-10-25: el 404 es del modelo, no de la clave — `nvidia/nemotron-3-super-120b-a12b` sigue en `/v1/models` pero responde «Function … Not found for account»; responden `nemotron-3-ultra-550b-a55b`, `nemotron-3.5-super-vl-120b-a12b`, `nemotron-3.5-lightning-30b-a3b` y `nemotron-3-nano-omni-30b-a3b-reasoning`. Con la pasarela (`d2bba81`), `citas-001` pasa con `gpt-6-luna` y con `claude-sonnet-5-5`; las evals completas de dos candidatos NIM deciden `AI_MODEL`.
 
 Spec: [agent-slot-first.md](agent-slot-first.md). Medido el 2026-10-04, solo lectura: no se
 ejecutó ninguna prueba.
