@@ -83,8 +83,9 @@ public sealed class KapsoClient(HttpClient http, IConfiguration config)
     }
     public async Task<bool> ReminderTemplateApproved(string number,string name,string language,string window,CancellationToken ct=default,bool general=false) => ValidReminderTemplate(await ReminderTemplate(number,name,language,ct,general),window);
     /// <summary>Sends an approved reminder. <paramref name="buttons"/> are the quick-reply payloads, in the template's button order; the caller composes them.
-    /// <paramref name="general"/>: from the platform's account (criterio 39), never a clinic's key; <paramref name="phoneOfClinic"/> fills {{telefono}}.</summary>
-    public async Task<string> SendReminder(string number,string phone,string name,string language,string hospital,string date,string time,CancellationToken ct=default,IReadOnlyList<string>? buttons=null,bool general=false,string? phoneOfClinic=null)
+    /// <paramref name="general"/>: from the platform's account (criterio 39), never a clinic's key; <paramref name="phoneOfClinic"/> fills {{telefono}}.
+    /// Returns the message id and, when it came back, <c>contacts[0].wa_id</c> (TEL-1 criterios 21–22, measured 2026-10-25).</summary>
+    public async Task<(string Id, string? WaId)> SendReminder(string number,string phone,string name,string language,string hospital,string date,string time,CancellationToken ct=default,IReadOnlyList<string>? buttons=null,bool general=false,string? phoneOfClinic=null)
     {
         if(config["REMINDERS_SEND_ENABLED"]!="true")throw new ArgumentException("Recordatorios en pausa");
         using var req=Request(HttpMethod.Post,general,$"{number}/messages");
@@ -97,9 +98,12 @@ public sealed class KapsoClient(HttpClient http, IConfiguration config)
         // A 2xx without a message id may still have been delivered: uncertain, like a 5xx, never retried.
         JsonElement sent;
         try { sent=await res.Content.ReadFromJsonAsync<JsonElement>(ct); } catch(JsonException) { throw new HttpRequestException("Kapso answered without a message id"); }
-        return sent.ValueKind==JsonValueKind.Object&&sent.TryGetProperty("messages",out var messages)&&messages.ValueKind==JsonValueKind.Array&&messages.GetArrayLength()>0
+        var messageId=sent.ValueKind==JsonValueKind.Object&&sent.TryGetProperty("messages",out var messages)&&messages.ValueKind==JsonValueKind.Array&&messages.GetArrayLength()>0
             &&messages[0].ValueKind==JsonValueKind.Object&&messages[0].TryGetProperty("id",out var id)&&id.ValueKind==JsonValueKind.String&&id.GetString() is {Length:>0} value
             ?value:throw new HttpRequestException("Kapso answered without a message id");
+        var waId=sent.TryGetProperty("contacts",out var contacts)&&contacts.ValueKind==JsonValueKind.Array&&contacts.GetArrayLength()>0&&contacts[0].ValueKind==JsonValueKind.Object
+            &&contacts[0].TryGetProperty("wa_id",out var wa)&&wa.ValueKind==JsonValueKind.String&&wa.GetString() is {Length:>0} w?w:null;
+        return (messageId,waId);
     }
     /// <summary>The general number's fixed replies (criterios 22–25): from the platform's number and key, gated like the reminders themselves.</summary>
     public async Task SendGeneral(string phone, string? body, object? interactive = null, CancellationToken ct = default)
