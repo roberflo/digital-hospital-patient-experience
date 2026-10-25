@@ -302,7 +302,6 @@ export function CustomerCrm({ chat, onChange }: { chat: Chat; onChange: () => vo
                   email: f.get('email'),
                   tags: f.get('tags'),
                   lifecycleStage: f.get('lifecycleStage'),
-                  companyId: contact.companyId ?? null,
                 });
                 await refresh();
                 setEdit(false);

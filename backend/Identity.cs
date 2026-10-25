@@ -117,7 +117,6 @@ public static class DemoSeed
                 db.Add(new Activity { TenantId = id, ContactId = c.Id, ConversationId = conversation.Id, Body = "Conversación de demostración. Vincula un paciente real del hospital antes de consultar información clínica.", Actor = "Sistema", ActorRole = "system" });
                 db.Add(new Opportunity { TenantId = id, ContactId = c.Id, Title = "Seguimiento · " + name, Stage = tag == "Control" ? "scheduled" : "new" });
             }
-            db.Add(new Company { TenantId = id, Name = "Convenio de demostración", Industry = "Salud", Email = "convenio@example.invalid" });
             await db.SaveChangesAsync();
         }
     }
@@ -138,11 +137,11 @@ public static class DemoSeed
             ("Óscar Portillo", "50372000002", "Tiroides", "Buenas tardes, me indicaron exámenes de tiroides, ¿puedo llevarlos a la consulta?", "Seguimiento de tiroides · Óscar Portillo"),
             ("Patricia Guzmán", "50372000003", "Nuevo paciente", "Quisiera una primera consulta con el endocrinólogo, ¿qué horarios tienen?", "Primera consulta · Patricia Guzmán"),
             ("Mauricio Escobar", "50372000004", "Receta", "Se me está terminando la insulina, ¿me pueden renovar la receta?", "Renovación de receta · Mauricio Escobar") };
-        var spaces = new List<(Guid, string, string, (string, string, string, string, string)[])> {
-            (SecondTenantId, "Recepción dental · demostración", "Seguro dental de demostración", dental) };
+        var spaces = new List<(Guid, string, (string, string, string, string, string)[])> {
+            (SecondTenantId, "Recepción dental · demostración", dental) };
         if (hospitalTenant is { } local && local != TenantId && local != SecondTenantId)
-            spaces.Add((local, "Recepción endocrinología · demostración", "Laboratorio clínico de demostración", endocrine));
-        foreach (var (id, channelName, companyName, people) in spaces)
+            spaces.Add((local, "Recepción endocrinología · demostración", endocrine));
+        foreach (var (id, channelName, people) in spaces)
         {
             scope.Id = id;
             var tenant = await db.Tenants.FirstOrDefaultAsync(t => t.Id == id);
@@ -157,7 +156,6 @@ public static class DemoSeed
                 db.Add(new Activity { TenantId = id, ContactId = c.Id, ConversationId = conversation.Id, Body = "Conversación de demostración. Vincula un paciente real antes de consultar información clínica.", Actor = "Sistema", ActorRole = "system" });
                 db.Add(new Opportunity { TenantId = id, ContactId = c.Id, Title = title, Stage = tag is "Limpieza" or "Diabetes" ? "scheduled" : "new" });
             }
-            db.Add(new Company { TenantId = id, Name = companyName, Industry = "Salud", Email = "convenio@example.invalid" });
             await db.SaveChangesAsync();
         }
     }

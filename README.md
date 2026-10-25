@@ -21,7 +21,7 @@ La API escucha en `127.0.0.1:5215`, el frontend en `127.0.0.1:3215`; PostgreSQL 
 ## Funciones
 
 - Un solo proveedor de identidad: el Keycloak de Hospital. Sin usuarios ni contraseñas propios; tres perfiles derivados de los roles del hospital y membresía única. Aislamiento de empresa en API, persistencia, canales, herramientas del agente y auditoría.
-- Contactos con búsqueda/paginación, empresas y convenios, oportunidades por etapas, actividades y notas persistentes.
+- Contactos con búsqueda/paginación, empresas y convenios leídos de Hospital, oportunidades por etapas, actividades y notas persistentes.
 - Actividad identifica atención del agente IA, recepción humana y doctores, con paciente, acción, entrega y acceso a la conversación. Búsqueda por paciente, teléfono, profesional o nota; filtros por tipo, acción y fechas del hospital, y paginación de 30 registros. Los eventos nuevos conservan el rol al realizar la acción; los anteriores aparecen como «Histórico sin rol». La consulta clínica registra únicamente que se consultó Hospital.
 
 - Bandeja con conversaciones, asignación, pausa/reanudación, historial, estados de entrega, archivos y audios. Transcripción si Kapso la proporciona; en su ausencia, revisión humana.

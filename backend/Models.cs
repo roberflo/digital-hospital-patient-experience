@@ -56,14 +56,12 @@ public sealed class Contact : TenantRow
     public bool IsCustomer => HospitalCustomerId is not null;
     public string Name { get; set; } = ""; public string Phone { get; set; } = "";
     public string PhoneHash { get; set; } = ""; public string Email { get; set; } = "";
-    public Guid? CompanyId { get; set; }
     public string LifecycleStage { get; set; } = "lead";
     public DateTimeOffset? ReminderConsentAt { get; set; }
     public Guid? PatientId { get; set; }
     public string Tags { get; set; } = "";
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
-public sealed class Company : TenantRow { public string Name { get; set; } = ""; public string Industry { get; set; } = ""; public string Email { get; set; } = ""; public string Phone { get; set; } = ""; }
 public sealed class Opportunity : TenantRow
 {
     public string? HospitalQuote { get; set; }
@@ -220,7 +218,7 @@ public sealed class CrmDb(DbContextOptions<CrmDb> options, TenantScope scope, ID
     public DbSet<AppointmentReminder> AppointmentReminders => Set<AppointmentReminder>();
     public DbSet<GeneralOptOut> GeneralOptOuts => Set<GeneralOptOut>(); public DbSet<GeneralReplyCap> GeneralReplyCaps => Set<GeneralReplyCap>();
     public DbSet<Tenant> Tenants => Set<Tenant>(); public DbSet<Member> Members => Set<Member>();
-    public DbSet<Contact> Contacts => Set<Contact>(); public DbSet<Company> Companies => Set<Company>();
+    public DbSet<Contact> Contacts => Set<Contact>();
     public DbSet<Opportunity> Opportunities => Set<Opportunity>(); public DbSet<Activity> Activities => Set<Activity>();
     public DbSet<ContactMemory> ContactMemories => Set<ContactMemory>();
     public DbSet<PendingAction> PendingActions => Set<PendingAction>();
@@ -244,11 +242,10 @@ public sealed class CrmDb(DbContextOptions<CrmDb> options, TenantScope scope, ID
         b.Entity<AppointmentReminder>().HasOne<Channel>().WithMany().HasForeignKey(x => new { x.TenantId, x.ChannelId }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict);
         Map<ConversationRead>(b); Map<SavedReply>(b); Map<InboxView>(b); Map<ConversationMacro>(b);
         b.Entity<InboxView>().HasIndex(x=>new{x.TenantId,x.Subject});
-        Map<Member>(b); Map<Contact>(b); Map<Company>(b); Map<Opportunity>(b); Map<Activity>(b); Map<Channel>(b);
+        Map<Member>(b); Map<Contact>(b); Map<Opportunity>(b); Map<Activity>(b); Map<Channel>(b);
         Map<Conversation>(b); Map<Message>(b); Map<Job>(b); Map<Receipt>(b); Map<Audit>(b); Map<CalendarLink>(b);
         b.Entity<ConversationRead>().HasIndex(x => new {x.TenantId, x.ConversationId, x.Subject}).IsUnique();
         b.Entity<ConversationRead>().HasOne<Conversation>().WithMany().HasForeignKey(x=>new{x.TenantId,x.ConversationId}).HasPrincipalKey(x=>new{x.TenantId,x.Id}).OnDelete(DeleteBehavior.Restrict);
-        b.Entity<Contact>().HasOne<Company>().WithMany().HasForeignKey(x=>new{x.TenantId,x.CompanyId}).HasPrincipalKey(x=>new{x.TenantId,x.Id}).OnDelete(DeleteBehavior.Restrict);
         b.Entity<Opportunity>().HasOne<Conversation>().WithMany().HasForeignKey(x=>new{x.TenantId,x.ConversationId}).HasPrincipalKey(x=>new{x.TenantId,x.Id}).OnDelete(DeleteBehavior.Restrict);
         b.Entity<Activity>().HasIndex(x => new { x.TenantId, x.CreatedAt, x.Id });
         // What the agent reads every turn: a conversation's latest messages and trail, and a contact's past actions and preferences.

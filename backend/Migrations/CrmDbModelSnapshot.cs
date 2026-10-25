@@ -254,36 +254,6 @@ namespace Recepcion.Api.Migrations
                     b.ToTable("Channels");
                 });
 
-            modelBuilder.Entity("Recepcion.Company", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("Email")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("Industry")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("Phone")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<Guid>("TenantId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("Companies");
-                });
-
             modelBuilder.Entity("Recepcion.Contact", b =>
                 {
                     b.Property<Guid>("Id")
@@ -292,9 +262,6 @@ namespace Recepcion.Api.Migrations
 
                     b.Property<DateTimeOffset?>("CommercialSyncedAt")
                         .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid?>("CompanyId")
-                        .HasColumnType("uuid");
 
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -348,8 +315,6 @@ namespace Recepcion.Api.Migrations
                         .HasColumnType("uuid");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("TenantId", "CompanyId");
 
                     b.HasIndex("TenantId", "HospitalCustomerId")
                         .IsUnique();
@@ -1026,15 +991,6 @@ namespace Recepcion.Api.Migrations
                         .IsRequired();
                 });
 
-            modelBuilder.Entity("Recepcion.Company", b =>
-                {
-                    b.HasOne("Recepcion.Tenant", null)
-                        .WithMany()
-                        .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-                });
-
             modelBuilder.Entity("Recepcion.Contact", b =>
                 {
                     b.HasOne("Recepcion.Tenant", null)
@@ -1042,12 +998,6 @@ namespace Recepcion.Api.Migrations
                         .HasForeignKey("TenantId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
-
-                    b.HasOne("Recepcion.Company", null)
-                        .WithMany()
-                        .HasForeignKey("TenantId", "CompanyId")
-                        .HasPrincipalKey("TenantId", "Id")
-                        .OnDelete(DeleteBehavior.Restrict);
                 });
 
             modelBuilder.Entity("Recepcion.ContactMemory", b =>

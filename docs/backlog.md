@@ -19,7 +19,7 @@ Fecha: 2026-10-02. Alcance: CRM agent-first para un hospital por empresa, usuari
 |---|---|---|---|
 | B01 | Stack reproducible Next.js/shadcn, .NET 10, PostgreSQL; health/readiness | builds y compose healthy | Implementado; compose/build local verificado |
 | B02 | Keycloak compartido, roles y membresía única; demo solo Development explícito | 401/403, token inválido, acceso cruzado entre dos tenants | Implementado y probado; SSO real pendiente |
-| B03 | Contactos, empresas, oportunidades, actividades y notas persistentes | CRUD API + UI, validación y aislamiento | Implementado y probado |
+| B03 | Contactos, oportunidades, actividades y notas persistentes (las empresas viven en Hospital desde 2026-10-25) | CRUD API + UI, validación y aislamiento | Implementado y probado |
 | B04 | Bandeja de conversaciones, asignación, historial, pausa/reanudación del agente | webhook → bandeja → humano y autorización | Implementado y probado |
 | B05 | Kapso: números, onboarding, firma, deduplicación, media, coexistencia | fixtures oficiales, firma inválida, eventos repetidos y ecos | Implementado y probado con fixtures; MCP real verificado, coexistencia real pendiente |
 | B06 | Agente NIM intercambiable con herramientas acotadas y trazabilidad | proveedor simulado, tool calls y handoff | Implementado; mocks y NIM real con datos sintéticos verificados |

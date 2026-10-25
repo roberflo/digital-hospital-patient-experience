@@ -122,8 +122,8 @@ p['message']['id']='wamid.reopen.'+suffix
 check(webhook(p)[0]==200,'New inbound message accepted while snoozed')
 reopened=call('/api/conversations?contactId='+c['id'],token=a)[1][0]['conversation']
 check(reopened['state']=='open' and reopened['status']=='human' and reopened['snoozedUntil'] is None,'New message reopens for human attention')
-check(call('/api/contacts/'+c['id']+'/profile','PATCH',{'name':c['name'],'email':'crm@example.invalid','tags':'Seguimiento','lifecycleStage':'active','companyId':None},a)[0]==400,'Manual profile edit cannot manufacture a customer')
-check(call('/api/contacts/'+c['id']+'/profile','PATCH',{'name':c['name'],'email':'crm@example.invalid','tags':'Seguimiento','lifecycleStage':'inactive','companyId':None},a)[0]==200,'Update CRM contact profile from inbox')
+check(call('/api/contacts/'+c['id']+'/profile','PATCH',{'name':c['name'],'email':'crm@example.invalid','tags':'Seguimiento','lifecycleStage':'active'},a)[0]==400,'Manual profile edit cannot manufacture a customer')
+check(call('/api/contacts/'+c['id']+'/profile','PATCH',{'name':c['name'],'email':'crm@example.invalid','tags':'Seguimiento','lifecycleStage':'inactive'},a)[0]==200,'Update CRM contact profile from inbox')
 check(call('/api/commercial/contacts/'+c['id']+'/sync','POST',{},doctor)[0]==403,'Doctor cannot convert CRM customer through manual sync')
 check(call('/api/commercial/contacts/'+c['id']+'/link','POST',{'customerId':str(uuid.uuid4())},doctor)[0]==403,'Doctor cannot link CRM commercial customer')
 status,followup=call('/api/opportunities','POST',{'title':'Seguimiento desde WhatsApp','contactId':c['id'],'conversationId':cid,'value':0,'stage':'new'},a)

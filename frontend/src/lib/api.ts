@@ -45,7 +45,6 @@ export type Contact = {
   email: string;
   tags: string;
   patientId?: string;
-  companyId?: string;
   lifecycleStage: string;
 };
 export type Conversation = {
@@ -117,7 +116,6 @@ export type Opportunity = {
   value: number;
   stage: string;
 };
-export type Company = { id: string; name: string; industry: string; email: string; phone: string };
 export type Me = {
   subject: string;
   name: string;
