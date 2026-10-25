@@ -666,16 +666,16 @@ public sealed class GeneralNumberTests : IAsyncLifetime
     [Fact]
     public async Task AForeignSendWithoutItsWaIdStopsTheNextOnes()
     {
-        waIds["525512345678"] = null;
+        waIds["5255" + MexicoDigits] = null;
         Guid next = Guid.NewGuid();
-        recipients[clinicA] = [Recipient(appointmentA, patientA, start, "+52 55 1234 5678")];
+        recipients[clinicA] = [Recipient(appointmentA, patientA, start, MexicoE164)];
         await Sync(clinicA);
         var rows = await Rows(clinicA);
         var day = rows.Single(r => r.Window == "day_before"); var hour = rows.Single(r => r.Window == "hour_before");
 
         await Dispatch(clinicA, day.Id, day.DueAt);
         await Dispatch(clinicA, hour.Id, hour.DueAt);
-        recipients[clinicA] = [Recipient(appointmentA, patientA, start, "+52 55 1234 5678"), Recipient(next, patientA, start.AddDays(1), "+52 55 1234 5678")];
+        recipients[clinicA] = [Recipient(appointmentA, patientA, start, MexicoE164), Recipient(next, patientA, start.AddDays(1), MexicoE164)];
         await Sync(clinicA, DateTimeOffset.UtcNow.AddMinutes(16));
 
         Assert.Equal(("sent", (string?)null), ((await Row(clinicA, day.Id)).Status, (await Row(clinicA, day.Id)).WaIdHash));

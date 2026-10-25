@@ -146,11 +146,6 @@ public sealed partial class AppointmentReminderService
             // Criterio 22: only the wa_id's HMAC, never the wa_id. One of 8 digits is unusable (criterio 30), like one that did not come back.
             try { row.WaIdHash = waId is null ? null : Rules.PhoneHash(Rules.WaId(waId), config["PHONE_HASH_KEY"]!); } catch (ArgumentException) { row.WaIdHash = null; }
             if (row.WaIdHash is null && outside) db.Activities.Add(new Activity { TenantId = scope.Id, Actor = "Recordatorios", ActorRole = "system", Kind = "general_wa_id_missing", Body = WaIdMissing });
-            // A BAJA from this wa_id that came before any send returned it (review Important 1): now it is known to be this patient's, so the
-            // withdrawal is asked of Hospital, at the BAJA's moment, by the worker's retry (criterio 25b); OptedOut stops the next sends.
-            // After the external send: never the worker's token, or stopping it would turn a delivered reminder into a doubt (like the save below).
-            if (row.WaIdHash is { } wa && await db.GeneralOptOuts.AsNoTracking().Where(o => o.PhoneHash == wa).Select(o => (DateTimeOffset?)o.CreatedAt).SingleOrDefaultAsync(CancellationToken.None) is { } baja
-                && !(recipient.ConsentSince > baja)) row.OptOutPendingAt = baja;
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or ArgumentException)
         {
@@ -159,6 +154,12 @@ public sealed partial class AppointmentReminderService
             row.Reason = refused ? "WhatsApp rechazó el envío; no se entregó." : "Entrega sin confirmar; no se repite.";
         }
         await db.SaveChangesAsync(CancellationToken.None);
+        // A BAJA from this wa_id that came before any send returned it (review Important 1): now it is known to be this patient's, so the
+        // withdrawal is asked of Hospital, at the BAJA's moment, by the worker's retry (criterio 25b); OptedOut stops the next sends.
+        // Read only once the send is saved (final review, nits 2–3): a failing read cannot turn a delivered reminder into a doubt or lose its
+        // WaIdHash, and a BAJA landing after the save finds this row through OptOut. Never the worker's token, like the save above.
+        if (row.WaIdHash is { } wa && await db.GeneralOptOuts.AsNoTracking().Where(o => o.PhoneHash == wa).Select(o => (DateTimeOffset?)o.CreatedAt).SingleOrDefaultAsync(CancellationToken.None) is { } baja
+            && !(recipient.ConsentSince > baja)) { row.OptOutPendingAt = baja; await db.SaveChangesAsync(CancellationToken.None); }
     }
 
     /// <summary>Criterio 25b: records in Hospital, once per patient, the withdrawal a BAJA asked for on the rows the general number had already
