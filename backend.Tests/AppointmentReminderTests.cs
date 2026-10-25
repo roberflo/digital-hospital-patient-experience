@@ -124,9 +124,10 @@ public sealed class AppointmentReminderTests : IAsyncLifetime
                 ? Json(new { data = new[] { new { name = "recepcion_cita_una_hora_v1", language = "es", status = "APPROVED", category = "UTILITY", parameter_format = "NAMED", components = new[] { new { type = "BODY", text = "Cita en {{hospital}} el {{fecha}} a las {{hora}}. BAJA" } } } } })
                 : Json(new { data = new { business_account_id = "synthetic-waba" } }));
             Interlocked.Increment(ref sends);
-            sentTo.Enqueue(JsonDocument.Parse(request.Content!.ReadAsStringAsync(CancellationToken.None).Result).RootElement.GetProperty("to").GetString()!);
+            var to = JsonDocument.Parse(request.Content!.ReadAsStringAsync(CancellationToken.None).Result).RootElement.GetProperty("to").GetString()!;
+            sentTo.Enqueue(to);
             if (delivery != HttpStatusCode.OK) return Task.FromResult(new HttpResponseMessage(delivery) { Content = new StringContent("{}", Encoding.UTF8, "application/json") });
-            return Task.FromResult(Json(new { messages = new[] { new { id = "reminder-" + Guid.NewGuid() } } }));
+            return Task.FromResult(AgentHarness.KapsoSent("reminder-" + Guid.NewGuid(), to.TrimStart('+')));
         });
         var services = new ServiceCollection();
         services.AddSingleton(config); services.AddSingleton(protection); services.AddScoped<TenantScope>();
