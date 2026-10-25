@@ -71,6 +71,7 @@ public sealed class AgentWorker(IServiceScopeFactory scopes, ILogger<AgentWorker
         }
         if (job is null) return;
         using var lease = turn;
+        using var span = Telemetry.Source.StartActivity("agent.turn"); span?.SetTag("job.id", job.Id); span?.SetTag("tenant.id", tid);
         job.Status = "running"; job.StartedAt = DateTimeOffset.UtcNow; var wasAgent = false;
         try { using var deadline = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken); deadline.CancelAfter(TurnDeadline); await sp.GetRequiredService<AgentRuntime>().Run(job, deadline.Token); job.Status = "done"; }
         catch (Exception ex) when (ex is not OperationCanceledException || !stoppingToken.IsCancellationRequested)
@@ -82,6 +83,7 @@ public sealed class AgentWorker(IServiceScopeFactory scopes, ILogger<AgentWorker
             d.Activities.Add(new Activity { TenantId = tid, ConversationId = c.Id, ContactId = c.ContactId, Kind = "error", Actor = "Sistema", ActorRole = "system", Body = "El agente no pudo completar la atención. Revisa historial e integraciones." });
             log.LogWarning("Agent job failed {JobId} {ErrorType} {StackTrace}", job.Id, ex.GetType().Name, ex.StackTrace);
         }
+        span?.SetTag("job.status", job.Status); if (job.Status == "failed") span?.SetStatus(System.Diagnostics.ActivityStatusCode.Error);
         await d.SaveChangesAsync(CancellationToken.None);
         if (job.Status == "failed" && wasAgent) await TellFailed(d, service, job, log);
     }

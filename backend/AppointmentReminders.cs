@@ -244,6 +244,7 @@ public sealed class AppointmentReminderWorker(IServiceScopeFactory scopes,ILogge
     /// Dispatch re-reads Hospital before sending).</summary>
     public static async Task RunTenant(IServiceScopeFactory scopes,Guid tenant,ILogger log,CancellationToken ct,TimeSpan? syncBudget=null,TimeSpan? contactBudget=null)
     {
+        using var span=Telemetry.Source.StartActivity("reminders.tenant");span?.SetTag("tenant.id",tenant);
         using var s=scopes.CreateScope();s.ServiceProvider.GetRequiredService<TenantScope>().Id=tenant;
         var scoped=s.ServiceProvider.GetRequiredService<CrmDb>();var service=s.ServiceProvider.GetRequiredService<AppointmentReminderService>();
         try { await service.RetryOptOuts(ct); }

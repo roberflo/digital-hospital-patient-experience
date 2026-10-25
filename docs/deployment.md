@@ -90,6 +90,8 @@ El agente de WhatsApp envía al proveedor la guía de atención, hasta 24 mensaj
 
 ## Operación y respaldo
 
+- Observabilidad: `OTEL_EXPORTER_OTLP_ENDPOINT` (y `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` para el puerto 4318) en `recepcion-api` y `web` envía trazas y métricas a un colector **propio**; sin ella no se exporta nada. Un turno del agente es la traza `agent.turn` y continúa dentro de Hospital. Nunca un SaaS sin fila de sub-procesador (Hospital `docs/features/21-observabilidad/opentelemetry.spec.md`).
+
 - Comprobar `/health/live`, `/health/ready` y el inicio de sesión después de cada despliegue. `/health/ready` responde 503 si falta aplicar alguna migración (p. ej., se olvidó `INITIALIZE_DATABASE=true`), así que un despliegue a medias no aparece sano.
 - Monitor externo de disponibilidad (cualquiera que avise por correo o mensaje) sobre `https://<api>/health/ready` y la página de inicio de web, cada minuto. Sin él, nadie se entera de una caída fuera de horario. Un segundo monitor sobre `https://<api>/health/attention`: responde 503 mientras, en los últimos 30 minutos, algún turno del agente falló o se abandonó, o un envío o recordatorio quedó incierto (sólo cuentas, sin hospital ni paciente). Quien recibe el aviso revisa `/api/jobs` como Administrador. Exponer sólo al monitor, como health.
 - Revisar `/api/jobs` y `/api/audit` como Administrador; `failed` o `uncertain` requieren seguimiento humano. Una entrega incierta conserva el intento y no se reenvía automáticamente: consultar WhatsApp/agenda antes de repetir.

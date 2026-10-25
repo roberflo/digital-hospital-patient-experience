@@ -1,11 +1,18 @@
 # Local integration only: docker compose -f docker-compose.yml -f docker-compose.hospital.yml up -d
 # Attaches web and recepcion-api to Hospital's `hospital` network (Hospital's own API is hospital-api-1 there).
 # Never attach Recepción to hospital_hospital-keys.
+# With Hospital's infra/compose/observability.dev.yml up, `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-lgtm:4318` traces
+# both apps into the same Grafana; unset, telemetry stays off.
+x-otel: &otel
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+  OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
 services:
   web:
     networks: [default, hospital]
+    environment: *otel
   recepcion-api:
     networks: [default, hospital]
+    environment: *otel
 networks:
   hospital:
     external: true

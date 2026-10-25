@@ -12,6 +12,7 @@ GeneralNumber.RequireSeparateCredentials(config);
 if (string.IsNullOrWhiteSpace(config["Auth:Authority"])) throw new InvalidOperationException("Keycloak Authority required");
 Hosting.RequireKeyringCertificate(config, builder.Environment);
 builder.Services.AddRecepcionServices(config, dev);
+builder.Services.AddRecepcionTelemetry(config, builder.Environment);
 builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 20 * 1024 * 1024);
 var app = builder.Build();
 Hosting.ProtectKeyring(app.Services, config);
