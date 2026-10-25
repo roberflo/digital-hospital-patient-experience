@@ -97,7 +97,7 @@ export function agentStep(enabled: boolean, installation: Read<Installation>): S
   if (!installation.data) return { id, state: 'loading' };
   // Encendido sin proveedor de modelo o sin envío automático no atiende a nadie: no es «hecho».
   const lacks = missing([
-    [installation.data.agentModel, 'NVIDIA_API_KEY'],
+    [installation.data.agentModel, 'NVIDIA_API_KEY, OPENAI_API_KEY+OPENAI_MODEL o ANTHROPIC_API_KEY'], // uno de la pasarela basta
     [installation.data.autoSend, 'SEND_ENABLED=true'],
   ]);
   if (lacks.length) return { id, state: 'blocked', missing: lacks };

@@ -102,7 +102,7 @@ public static class CrmEndpoints
         api.MapGet("/settings", async (CrmDb db, TenantScope t, CurrentUser u, HospitalClient h, IConfiguration c) =>
         {
             u.RequireAdmin(); var tenant = await db.Tenants.SingleAsync(x => x.Id == t.Id);
-            return new { tenant.Name, tenant.Guide, tenant.EmergencyPhone, tenant.EmergencyWhatsApp, tenant.TimeZone, tenant.AgentEnabled, tenant.GoogleCalendarId, googleConnected = tenant.GoogleRefreshToken != null, hospitalConfigured = h.IsConfigured(t.Id), kapsoConfigured = !string.IsNullOrEmpty(c["KAPSO_API_KEY"]), aiConfigured = AgentRuntime.AiConfigured(c), sendEnabled = c["SEND_ENABLED"] == "true", manualSendEnabled = c["SEND_ENABLED"] == "true" || c["KAPSO_MANUAL_SEND_ENABLED"] == "true", aiModel = c["AI_MODEL"] ?? "nvidia/nemotron-3-super-120b-a12b" };
+            return new { tenant.Name, tenant.Guide, tenant.EmergencyPhone, tenant.EmergencyWhatsApp, tenant.TimeZone, tenant.AgentEnabled, tenant.GoogleCalendarId, googleConnected = tenant.GoogleRefreshToken != null, hospitalConfigured = h.IsConfigured(t.Id), kapsoConfigured = !string.IsNullOrEmpty(c["KAPSO_API_KEY"]), aiConfigured = AgentRuntime.AiConfigured(c), sendEnabled = c["SEND_ENABLED"] == "true", manualSendEnabled = c["SEND_ENABLED"] == "true" || c["KAPSO_MANUAL_SEND_ENABLED"] == "true", aiModel = AgentRuntime.FirstModel(c) };
         });
         api.MapPut("/settings", async (SettingsInput b, CrmDb db, TenantScope t, CurrentUser u, HospitalClient h, CancellationToken ct) =>
         {

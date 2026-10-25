@@ -20,6 +20,7 @@ namespace Recepcion;
 public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb db, TenantScope scope, HospitalClient hospital, ConversationService conversations, KapsoClient kapso)
 {
     public const string DefaultModel = "nvidia/nemotron-3-super-120b-a12b";
+    public const string ClaudeDefaultModel = "claude-opus-5-5";
     // Tool results keep Spanish text unescaped: the model reads them and the dose guard matches against them.
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
     static readonly string[] Weekdays = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
@@ -570,7 +571,7 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
             // Official SDK on the same HttpClient. Claude Opus 5.5 rejects sampling parameters and always thinks (adaptive, default effort),
             // and thinking counts toward max_tokens: no temperature, and room past the agent's 4096 so a turn is not cut mid-reply.
             chain.Add(new Anthropic.AnthropicClient { ApiKey = claudeKey, HttpClient = http, MaxRetries = 1, Timeout = Attempt(config, http.Timeout) }
-                .AsIChatClient(config["ANTHROPIC_MODEL"] is { Length: > 0 } claudeModel ? claudeModel : "claude-opus-5-5")
+                .AsIChatClient(config["ANTHROPIC_MODEL"] is { Length: > 0 } claudeModel ? claudeModel : ClaudeDefaultModel)
                 .AsBuilder().ConfigureOptions(options => { options.Temperature = null; options.MaxOutputTokens = 16000; }).Build());
         return Gateway(chain, () => db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "agent_provider", Actor = "Sistema", ActorRole = "system", Body = "El proveedor principal de IA no respondió; se usó el de respaldo." }));
     }
@@ -578,6 +579,11 @@ public sealed class AgentRuntime(HttpClient http, IConfiguration config, CrmDb d
     /// <summary>Each provider falls back to the rest of the chain, in order.</summary>
     public static IChatClient Gateway(IReadOnlyList<IChatClient> chain, Action onFallback) => chain.Count == 0 ? throw new ArgumentException("IA no configurada")
         : chain.SkipLast(1).Reverse().Aggregate(chain[^1], (rest, provider) => new FallbackChatClient(provider, rest, onFallback));
+
+    /// <summary>The model of the gateway's first configured provider, which is the one that answers while it is up.</summary>
+    public static string FirstModel(IConfiguration config) => !string.IsNullOrEmpty(config["NVIDIA_API_KEY"]) ? config["AI_MODEL"] ?? DefaultModel
+        : !string.IsNullOrEmpty(config["OPENAI_API_KEY"]) && !string.IsNullOrEmpty(config["OPENAI_MODEL"]) ? config["OPENAI_MODEL"]!
+        : !string.IsNullOrEmpty(config["ANTHROPIC_API_KEY"]) ? config["ANTHROPIC_MODEL"] is { Length: > 0 } claude ? claude : ClaudeDefaultModel : config["AI_MODEL"] ?? DefaultModel;
 
     /// <summary>One of the gateway's providers has a key (NVIDIA_API_KEY, OPENAI_API_KEY with OPENAI_MODEL, or ANTHROPIC_API_KEY).</summary>
     public static bool AiConfigured(IConfiguration config) => !string.IsNullOrEmpty(config["NVIDIA_API_KEY"]) || !string.IsNullOrEmpty(config["OPENAI_API_KEY"]) && !string.IsNullOrEmpty(config["OPENAI_MODEL"]) || !string.IsNullOrEmpty(config["ANTHROPIC_API_KEY"]);

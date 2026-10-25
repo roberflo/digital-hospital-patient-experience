@@ -32,7 +32,7 @@ public sealed class AgentEvals(ITestOutputHelper output)
             ["OPENAI_REASONING_EFFORT"] = Environment.GetEnvironmentVariable("AGENT_EVAL_REASONING") is { Length: > 0 } reasoning ? reasoning : Environment.GetEnvironmentVariable("OPENAI_REASONING_EFFORT") };
         // AGENT_EVAL_PROVIDER=claude: the gateway is Claude alone (ANTHROPIC_API_KEY, ANTHROPIC_MODEL or AGENT_EVAL_MODEL).
         if (Environment.GetEnvironmentVariable("AGENT_EVAL_PROVIDER") == "claude")
-            provider = new() { ["ANTHROPIC_API_KEY"] = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY") is { Length: > 0 } claude ? claude : throw new InvalidOperationException("The agent evals need a model key; a skipped eval is not a pass."),
+            provider = new() { ["NVIDIA_API_KEY"] = null, ["ANTHROPIC_API_KEY"] = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY") is { Length: > 0 } claude ? claude : throw new InvalidOperationException("The agent evals need a model key; a skipped eval is not a pass."),
                 ["ANTHROPIC_MODEL"] = Environment.GetEnvironmentVariable("AGENT_EVAL_MODEL") is { Length: > 0 } claudeModel ? claudeModel : Environment.GetEnvironmentVariable("ANTHROPIC_MODEL") };
 
         var spec = AgentEvalCases.Load().Single(c => c.GetProperty("id").GetString() == id);

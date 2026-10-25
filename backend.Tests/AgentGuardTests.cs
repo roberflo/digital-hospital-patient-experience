@@ -931,6 +931,24 @@ public sealed class AgentGuardTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ATurnStartedOnNimFinishesOnClaudeWithoutRepeatingTheTool()
+    {
+        // Criterio 12: the hop is per model call. NIM asks for a tool, then fails; Claude gets the history with the tool's result and answers.
+        var nimTurn = 0; var claudeBodies = new List<string>();
+        var model = new AgentHarness.Fake(async request =>
+        {
+            if (request.RequestUri!.Host != "api.anthropic.com") return ++nimTurn == 1 ? AgentHarness.ToolCall("record_note", new { note = "Nota sintética" }) : Down();
+            claudeBodies.Add(await request.Content!.ReadAsStringAsync()); return ClaudeReply("Respuesta de Claude");
+        });
+
+        await h.Runtime(model, h.Sender(), extra: new() { ["ANTHROPIC_API_KEY"] = "synthetic-claude" }).Run(h.Job, CancellationToken.None);
+
+        Assert.Contains("Respuesta de Claude", h.Sent);
+        Assert.Contains("tool_result", Assert.Single(claudeBodies));
+        Assert.Single(await h.Db.Activities.Where(a => a.Kind == "note").ToListAsync());
+    }
+
+    [Fact]
     public async Task ClaudeAloneIsEnoughAndItsFailureStillGivesTheMenu()
     {
         // No NIM key: the gateway is just Claude. When Claude is down too, the patient gets the menu, not silence.
