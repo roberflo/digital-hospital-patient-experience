@@ -136,6 +136,8 @@ public sealed class KapsoClient(HttpClient http, IConfiguration config)
         using var req = Request(HttpMethod.Post, $"{number}/media"); req.Content = content;
         using var res = await http.SendAsync(req, ct); res.EnsureSuccessStatusCode(); return (await res.Content.ReadFromJsonAsync<JsonElement>(ct)).GetProperty("id").GetString()!;
     }
+    /// <summary>The refusal of a file over WhatsApp's 20 MB, which a caller names (RXE-C: whatsapp.media_too_large).</summary>
+    public const string TooLarge = "Archivo demasiado grande";
     public async Task<(byte[] Bytes, string Type)> Download(string mediaId, CancellationToken ct = default)
     {
         using var req = Request(HttpMethod.Get, Uri.EscapeDataString(mediaId));
@@ -145,9 +147,9 @@ public sealed class KapsoClient(HttpClient http, IConfiguration config)
         using var download = new HttpRequestMessage(HttpMethod.Get, uri);
         if (uri.Host == "api.kapso.ai") download.Headers.Add("X-API-Key", config["KAPSO_API_KEY"]);
         using var media = await http.SendAsync(download, HttpCompletionOption.ResponseHeadersRead, ct); media.EnsureSuccessStatusCode();
-        if (media.Content.Headers.ContentLength > 20 * 1024 * 1024) throw new ArgumentException("Archivo demasiado grande");
+        if (media.Content.Headers.ContentLength > 20 * 1024 * 1024) throw new ArgumentException(TooLarge);
         await using var source = await media.Content.ReadAsStreamAsync(ct); using var target = new MemoryStream(); var buffer = new byte[65536]; int read;
-        while ((read = await source.ReadAsync(buffer, ct)) > 0) { if (target.Length + read > 20 * 1024 * 1024) throw new ArgumentException("Archivo demasiado grande"); await target.WriteAsync(buffer.AsMemory(0, read), ct); }
+        while ((read = await source.ReadAsync(buffer, ct)) > 0) { if (target.Length + read > 20 * 1024 * 1024) throw new ArgumentException(TooLarge); await target.WriteAsync(buffer.AsMemory(0, read), ct); }
         var type = meta.TryGetProperty("mime_type", out var m) ? m.GetString()! : "application/octet-stream";
         return (target.ToArray(), type);
     }
