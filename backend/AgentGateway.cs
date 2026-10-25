@@ -53,11 +53,19 @@ public sealed partial class AgentRuntime
         }
         if (config["OPENAI_API_KEY"] is { Length: > 0 } key && config["OPENAI_MODEL"] is { Length: > 0 } model) chain.Add(Provider(key, config["OPENAI_BASE_URL"] ?? "https://api.openai.com/v1", model));
         if (config["ANTHROPIC_API_KEY"] is { Length: > 0 } claudeKey)
+        {
+            var claudeModel = config["ANTHROPIC_MODEL"] is { Length: > 0 } configured ? configured : ClaudeDefaultModel;
             // Official SDK on the same HttpClient. Claude Opus 5.5 rejects sampling parameters and always thinks (adaptive, default effort),
             // and thinking counts toward max_tokens: no temperature, and room past the agent's 4096 so a turn is not cut mid-reply.
+            // ANTHROPIC_EFFORT (low|medium|high|xhigh|max) goes as output_config.effort; unset, the model's default.
             chain.Add(new Anthropic.AnthropicClient { ApiKey = claudeKey, HttpClient = http, MaxRetries = 1, Timeout = Attempt(config, http.Timeout) }
-                .AsIChatClient(config["ANTHROPIC_MODEL"] is { Length: > 0 } claudeModel ? claudeModel : ClaudeDefaultModel)
-                .AsBuilder().ConfigureOptions(options => { options.Temperature = null; options.MaxOutputTokens = 16000; }).Build());
+                .AsIChatClient(claudeModel)
+                .AsBuilder().ConfigureOptions(options =>
+                {
+                    options.Temperature = null; options.MaxOutputTokens = 16000;
+                    if (config["ANTHROPIC_EFFORT"] is { Length: > 0 } effort) options.RawRepresentationFactory = _ => new Anthropic.Models.Messages.MessageCreateParams { Model = claudeModel, MaxTokens = 16000, Messages = [], OutputConfig = new() { Effort = effort } };
+                }).Build());
+        }
         return Gateway(chain, () => db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "agent_provider", Actor = "Sistema", ActorRole = "system", Body = "El proveedor principal de IA no respondió; se usó el de respaldo." }));
     }
 }

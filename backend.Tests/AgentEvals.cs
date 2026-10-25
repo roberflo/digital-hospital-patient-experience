@@ -30,10 +30,11 @@ public sealed class AgentEvals(ITestOutputHelper output)
         var model = Environment.GetEnvironmentVariable("AGENT_EVAL_MODEL") is { Length: > 0 } chosen ? chosen : Env("AI_MODEL", "OPENAI_MODEL") is { Length: > 0 } configured ? configured : AgentRuntime.DefaultModel;
         var provider = new Dictionary<string, string?> { ["NVIDIA_API_KEY"] = key, ["AI_MODEL"] = model, ["AI_BASE_URL"] = Env("AI_BASE_URL", "OPENAI_BASE_URL") is { Length: > 0 } url ? url : openAi ? "https://api.openai.com/v1" : null,
             ["OPENAI_REASONING_EFFORT"] = Environment.GetEnvironmentVariable("AGENT_EVAL_REASONING") is { Length: > 0 } reasoning ? reasoning : Environment.GetEnvironmentVariable("OPENAI_REASONING_EFFORT") };
-        // AGENT_EVAL_PROVIDER=claude: the gateway is Claude alone (ANTHROPIC_API_KEY, ANTHROPIC_MODEL or AGENT_EVAL_MODEL).
+        // AGENT_EVAL_PROVIDER=claude: the gateway is Claude alone (ANTHROPIC_API_KEY, ANTHROPIC_MODEL or AGENT_EVAL_MODEL; AGENT_EVAL_REASONING or ANTHROPIC_EFFORT is its effort).
         if (Environment.GetEnvironmentVariable("AGENT_EVAL_PROVIDER") == "claude")
             provider = new() { ["NVIDIA_API_KEY"] = null, ["ANTHROPIC_API_KEY"] = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY") is { Length: > 0 } claude ? claude : throw new InvalidOperationException("The agent evals need a model key; a skipped eval is not a pass."),
-                ["ANTHROPIC_MODEL"] = Environment.GetEnvironmentVariable("AGENT_EVAL_MODEL") is { Length: > 0 } claudeModel ? claudeModel : Environment.GetEnvironmentVariable("ANTHROPIC_MODEL") };
+                ["ANTHROPIC_MODEL"] = Environment.GetEnvironmentVariable("AGENT_EVAL_MODEL") is { Length: > 0 } claudeModel ? claudeModel : Environment.GetEnvironmentVariable("ANTHROPIC_MODEL"),
+                ["ANTHROPIC_EFFORT"] = Environment.GetEnvironmentVariable("AGENT_EVAL_REASONING") is { Length: > 0 } effort ? effort : Environment.GetEnvironmentVariable("ANTHROPIC_EFFORT") };
         if (provider.ContainsKey("ANTHROPIC_API_KEY")) model = provider["ANTHROPIC_MODEL"] is { Length: > 0 } claudeModel2 ? claudeModel2 : AgentRuntime.ClaudeDefaultModel; // the label names the model that answered
 
         var spec = AgentEvalCases.Load().Single(c => c.GetProperty("id").GetString() == id);

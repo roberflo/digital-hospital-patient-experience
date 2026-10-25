@@ -929,6 +929,27 @@ public sealed class AgentGuardTests : IAsyncLifetime
         Assert.Equal("agent", (await h.Fresh()).Status);
     }
 
+    [Theory]
+    [InlineData("high")]
+    [InlineData(null)]
+    public async Task ClaudeGetsTheConfiguredEffortInOutputConfig(string? effort)
+    {
+        // ANTHROPIC_EFFORT goes in the Messages request as output_config.effort; unset, the model's default effort (no field).
+        var bodies = new List<string>();
+        var model = new AgentHarness.Fake(async request =>
+        {
+            if (request.RequestUri!.Host != "api.anthropic.com") return Down();
+            bodies.Add(await request.Content!.ReadAsStringAsync()); return ClaudeReply("Respuesta de Claude");
+        });
+
+        await h.Runtime(model, h.Sender(), extra: new() { ["NVIDIA_API_KEY"] = "", ["ANTHROPIC_API_KEY"] = "synthetic-claude", ["ANTHROPIC_EFFORT"] = effort }).Run(h.Job, CancellationToken.None);
+
+        using var claude = JsonDocument.Parse(Assert.Single(bodies));
+        foreach (var kept in new[] { "system", "messages", "tools" }) Assert.True(claude.RootElement.TryGetProperty(kept, out _), kept); // the raw params do not replace the agent's turn
+        Assert.Equal(effort, claude.RootElement.TryGetProperty("output_config", out var output) && output.TryGetProperty("effort", out var sent) ? sent.GetString() : null);
+        Assert.Contains("Respuesta de Claude", h.Sent);
+    }
+
     [Fact]
     public async Task ATurnStartedOnNimFinishesOnClaudeWithoutRepeatingTheTool()
     {

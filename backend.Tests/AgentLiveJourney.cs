@@ -198,7 +198,7 @@ public sealed class AgentLiveJourney(ITestOutputHelper output)
         settings["NVIDIA_API_KEY"] = env[openAi ? "OPENAI_API_KEY" : "NVIDIA_API_KEY"]; settings["AI_BASE_URL"] = openAi ? "https://api.openai.com/v1" : env["AI_BASE_URL"];
         settings["AI_MODEL"] = env["AGENT_EVAL_MODEL"] is { Length: > 0 } chosen ? chosen : env[openAi ? "OPENAI_MODEL" : "AI_MODEL"] ?? AgentRuntime.DefaultModel;
         settings["OPENAI_REASONING_EFFORT"] = env["AGENT_EVAL_REASONING"] ?? env["OPENAI_REASONING_EFFORT"];
-        if (env["AGENT_EVAL_PROVIDER"] == "claude") { settings["NVIDIA_API_KEY"] = null; settings["ANTHROPIC_API_KEY"] = env["ANTHROPIC_API_KEY"]; settings["ANTHROPIC_MODEL"] = env["AGENT_EVAL_MODEL"] ?? env["ANTHROPIC_MODEL"]; }
+        if (env["AGENT_EVAL_PROVIDER"] == "claude") { settings["NVIDIA_API_KEY"] = null; settings["ANTHROPIC_API_KEY"] = env["ANTHROPIC_API_KEY"]; settings["ANTHROPIC_MODEL"] = env["AGENT_EVAL_MODEL"] ?? env["ANTHROPIC_MODEL"]; settings["ANTHROPIC_EFFORT"] = env["AGENT_EVAL_REASONING"] ?? env["ANTHROPIC_EFFORT"]; }
         return (tenant, settings, new HospitalClient(new HttpClient(), new ConfigurationBuilder().AddInMemoryCollection(settings).Build()));
     }
 

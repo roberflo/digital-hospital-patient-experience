@@ -8,6 +8,8 @@ set -eu
 #        AGENT_EVAL_PROVIDER=openai AGENT_EVAL_REASONING=none AGENT_EVAL_SPACING=0.3 scripts/eval-agent.sh gpt-6-luna
 #          (grades an OpenAI model with OPENAI_API_KEY; does not touch the NIM key the live agent uses)
 #        AGENT_EVAL_PROVIDER=claude scripts/eval-agent.sh [claude-opus-5-5]   (Claude alone, with ANTHROPIC_API_KEY)
+#        AGENT_EVAL_PROVIDER=claude AGENT_EVAL_REASONING=high scripts/eval-agent.sh claude-haiku-5-5
+#          (AGENT_EVAL_REASONING is Claude's ANTHROPIC_EFFORT: low|medium|high|xhigh|max; unset, the model's default)
 # Prints «Evals: N/M pasaron» and exits 1 if a case fails that evals/agent/known-failures.txt does not list, or if no case ran (MR-34).
 [ "${AGENT_EVAL_PROVIDER:-}" = openai ] || [ "${AGENT_EVAL_PROVIDER:-}" = claude ] || grep -q '^NVIDIA_API_KEY=.' .env || { echo "NVIDIA_API_KEY missing in .env: the evals cannot run, and a skipped eval is not a pass." >&2; exit 1; }
 test_database="recepcion_evals_$(date +%s)_$$"
