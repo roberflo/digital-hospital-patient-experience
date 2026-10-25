@@ -39,20 +39,24 @@ public sealed partial class AppointmentReminderService
     string? Hash(string? phone) => GeneralRecipientHash(phone, config["PHONE_HASH_KEY"]!);
 
     /// <summary>Criterio 19, A20: a phone on the general number's opt-out list gets nothing in this hospital, unless Hospital says this hospital
-    /// recorded the patient's authorisation after that BAJA (<c>consentSince</c>): the desk decided with the patient there, for this hospital only.</summary>
+    /// recorded the patient's authorisation after that BAJA (<c>consentSince</c>): the desk decided with the patient there, for this hospital only.
+    /// A BAJA from the wa_id a send to that phone came back with counts too (TEL-1 criterio 22c), whichever hospital sent it: the wa_id is the phone's.</summary>
     async Task<Func<string, DateTimeOffset?, bool>> OptedOut(IEnumerable<string?> hashes, CancellationToken ct)
     {
         var list = hashes.OfType<string>().Distinct().ToArray();
-        var optOuts = await db.GeneralOptOuts.AsNoTracking().Where(o => list.Contains(o.PhoneHash)).ToDictionaryAsync(o => o.PhoneHash, o => o.CreatedAt, ct);
-        return (hash, consentSince) => optOuts.TryGetValue(hash, out var since) && !(consentSince > since);
+        var waIds = (await db.AppointmentReminders.IgnoreQueryFilters().AsNoTracking().Where(r => r.WaIdHash != null && list.Contains(r.RecipientHash!))
+            .Select(r => new { Recipient = r.RecipientHash!, WaId = r.WaIdHash! }).Distinct().ToListAsync(ct)).ToLookup(x => x.Recipient, x => x.WaId);
+        var all = list.Concat(waIds.SelectMany(g => g)).Distinct().ToArray();
+        var optOuts = await db.GeneralOptOuts.AsNoTracking().Where(o => all.Contains(o.PhoneHash)).ToDictionaryAsync(o => o.PhoneHash, o => o.CreatedAt, ct);
+        return (hash, consentSince) => waIds[hash].Prepend(hash).Any(h => optOuts.TryGetValue(h, out var since) && !(consentSince > since));
     }
 
-    /// <summary>Criterio 23, safety net of branch (A): the recipients among <paramref name="hashes"/> that a send may have reached without its wa_id
-    /// coming back. Read across hospitals, like the BAJA: the wa_id belongs to the phone. Only hashes, never a phone.</summary>
+    /// <summary>Criterio 23, safety net of branch (A): the recipients among <paramref name="hashes"/> that a send of this hospital may have reached
+    /// without its wa_id coming back. Only hashes, never a phone.</summary>
     async Task<HashSet<string>> Unconfirmed(IEnumerable<string?> hashes, CancellationToken ct)
     {
         var list = hashes.OfType<string>().Distinct().ToArray();
-        return list.Length == 0 ? [] : (await db.AppointmentReminders.IgnoreQueryFilters().AsNoTracking()
+        return list.Length == 0 ? [] : (await db.AppointmentReminders.AsNoTracking()
             .Where(r => r.RecipientHash != null && list.Contains(r.RecipientHash) && r.AttemptedAt != null && r.WaIdHash == null && r.ContactId == null && r.Status != "failed" && r.Status != "sending")
             .Select(r => r.RecipientHash!).Distinct().ToListAsync(ct)).ToHashSet();
     }

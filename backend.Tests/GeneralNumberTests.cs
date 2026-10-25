@@ -689,6 +689,93 @@ public sealed class GeneralNumberTests : IAsyncLifetime
         Assert.Single(kapso); // only the first one went out
     }
 
+    // ---------------- TEL-1 criterio 22: a BAJA or CANCELAR from the wa_id of the send (Mexico: E.164 +52 55…, wa_id 521 55…) ----------------
+    // Mexico's shape (E.164 52 55 + 8 digits, wa_id 521 55 + the same 8), with random digits: the opt-out list and the BAJA are global (A17).
+    readonly string MexicoDigits = Random.Shared.Next(10000000, 99999999).ToString(CultureInfo.InvariantCulture);
+    string MexicoE164 => "+52 55 " + MexicoDigits;
+    string MexicoWaId => "52155" + MexicoDigits;
+    /// <summary>A day-before reminder sent by the general number to Mexico, Kapso answering with the wa_id that differs from the E.164.</summary>
+    async Task<AppointmentReminder> SentToMexico()
+    {
+        waIds["5255" + MexicoDigits] = MexicoWaId;
+        recipients[clinicA] = [Recipient(appointmentA, patientA, start, MexicoE164)];
+        await Sync(clinicA);
+        var day = (await Rows(clinicA)).Single(r => r.Window == "day_before");
+        await Dispatch(clinicA, day.Id, day.DueAt);
+        return await Row(clinicA, day.Id);
+    }
+    async Task ForgetMexico() { await using var db = own.NewDb(new TenantScope()); db.GeneralOptOuts.RemoveRange(db.GeneralOptOuts.Where(o => o.PhoneHash == Hash(MexicoWaId))); await db.SaveChangesAsync(); } // the list is global
+
+    // Criterio 22 (a): CANCELAR from the wa_id resolves the row, and Hospital's re-read is compared with the row's RecipientHash, never with
+    // the sender's hash (anti-criterio): compared with the sender's, this very case would not resolve.
+    [Fact]
+    public async Task ACancelFromTheWaIdOfTheSendCancelsInHospital()
+    {
+        var day = await SentToMexico();
+
+        await Inbound(MexicoWaId, $"CANCELAR {day.Id}");
+        var ask = kapso[^1].Body;
+        Assert.Equal("interactive", ask.GetProperty("type").GetString());
+        Assert.Equal([($"CANCELAR-SI {day.Id}", "Sí, cancelar"), ($"CANCELAR-NO {day.Id}", "No")], AgentHarness.Options(ask.GetProperty("interactive")));
+        await Inbound(MexicoWaId, $"CANCELAR-SI {day.Id}");
+
+        var write = Assert.Single(hospitalWrites);
+        Assert.Equal((clinicA, $"/v1/agenda/{appointmentA}/cancel"), (write.Tenant, write.Path));
+        Assert.Equal("cancelled", (await Row(clinicA, day.Id)).Status);
+    }
+    // Criterio 22 (a), guard: Hospital now names another phone for that appointment ⇒ the wa_id of the old send resolves nothing.
+    [Fact]
+    public async Task ACancelFromTheWaIdIsCheckedAgainstTheRowsRecipient()
+    {
+        var day = await SentToMexico();
+        recipients[clinicA] = [Recipient(appointmentA, patientA, start, "+52 55 9999 0000")];
+
+        await Inbound(MexicoWaId, $"CANCELAR {day.Id}");
+
+        Assert.Equal(FreeText, kapso[^1].Body.GetProperty("text").GetProperty("body").GetString());
+        Assert.Empty(hospitalWrites);
+        Assert.Equal("sent", (await Row(clinicA, day.Id)).Status);
+    }
+    // Criterio 22 (b) and (c), INV-8: BAJA from the wa_id cancels what is pending, asks Hospital to withdraw the authorisation and goes on the
+    // list; while Hospital still lists the patient with an authorisation from before the BAJA, nothing new is created or sent.
+    [Fact]
+    public async Task ABajaFromTheWaIdOfTheSendStopsTheRecipient()
+    {
+        var day = await SentToMexico();
+        var hour = (await Rows(clinicA)).Single(r => r.Window == "hour_before");
+        try
+        {
+            await Inbound(MexicoWaId, text: "BAJA");
+
+            Assert.Equal("cancelled", (await Row(clinicA, hour.Id)).Status);
+            var write = Assert.Single(hospitalWrites);
+            Assert.Equal((clinicA, $"/v1/patients/{patientA}/whatsapp-reminders/consent/withdraw"), (write.Tenant, write.Path));
+            Assert.NotNull((await Row(clinicA, day.Id)).OptOutWithdrawnAt);
+
+            recipients[clinicA] = [Recipient(Guid.NewGuid(), patientA, start.AddDays(1), MexicoE164, consentSince: DateTimeOffset.UtcNow.AddDays(-1))];
+            await Sync(clinicA, DateTimeOffset.UtcNow.AddMinutes(16));
+
+            Assert.DoesNotContain(await Rows(clinicA), r => r.Status == "pending");
+            Assert.Single(kapso, k => k.Body.TryGetProperty("template", out _)); // only the first reminder ever went out
+        }
+        finally { await ForgetMexico(); }
+    }
+    // Criterio 22, regression: without the wa_id's hash (a row sent before it was stored), a BAJA from a different wa_id does not match, as before.
+    [Fact]
+    public async Task ABajaFromADifferentWaIdWithoutItsHashDoesNotStop()
+    {
+        await Sent(clinicA, appointmentA, patientA, to: MexicoE164);
+        var pending = await Sent(clinicA, appointmentA, patientA, "pending", to: MexicoE164, window: "hour_before");
+        try
+        {
+            await Inbound(MexicoWaId, text: "BAJA");
+
+            Assert.Equal("pending", (await Row(clinicA, pending.Id)).Status);
+            Assert.Empty(hospitalWrites);
+        }
+        finally { await ForgetMexico(); }
+    }
+
     // Criterio 23 (guard): inside the closed list the wa_id is the E.164, so a send without contacts[] stops nothing.
     [Fact]
     public async Task AListedSendWithoutItsWaIdStopsNothing()
