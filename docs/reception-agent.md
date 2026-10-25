@@ -356,6 +356,8 @@ Límites:
 
 ## Valor para el hospital · 2026-10-25
 
+**Hecho** `3e134af` (`AgentMetrics.cs`, `AgentMetricsTests`, `agent-metrics.tsx`, `tests/activity.spec.ts`).
+
 Hasta hoy la medición (criterios 66–67) contaba sólo lo que hizo el agente, y se escondía si el agente no atendió a nadie: un hospital que sólo usa recordatorios no veía nada. La persona administradora necesita ver, en una sola pantalla, lo que Recepción le resolvió: citas confirmadas, cambios pedidos a tiempo y qué tan rápido se responde.
 
 | # | Criterio | Cómo se prueba |

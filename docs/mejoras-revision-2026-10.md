@@ -165,10 +165,10 @@ Commits de Recepción salvo «Hospital». Fecha de todos: 2026-10-17.
 | MR-38 | Hecho: `client-jwt` por hospital con JWKS servida por Recepción; rotar revoca la clave vieja de inmediato (sin gracia, decisión del dueño 2026-10-17); despliegue en 3 pasos | Recepción `HospitalConnectionTests`; Hospital `RecepcionRealmScriptTests`, `ServiceAccountReconcilerTests` |
 | MR-39 | Hecho | `2deb945`, `834079f` |
 | MR-40 | Hecho; nits de revisión en `mr/rec-d` | `4aabc9d`, `5a3c5d0`, `1e16e28` |
-| MR-41 | Hecho. Recepción envía `Idempotency-Key` en `POST v1/agenda` y `POST v1/patients`. Lo que protege: la **creación de cita del personal** que vence por tiempo libera su recibo, y repetirla con la misma clave (el navegador la reusa para el mismo cuerpo) devuelve la cita original en Hospital, sin duplicado; cancelar y reprogramar no llevan clave y siguen gastando el recibo. En el agente (`agent:`/`agent-register:` + id de la propuesta) es defensa en profundidad: la propuesta se consume antes de escribir, así que no hay reenvío, y un resultado incierto sigue yendo a conciliación. Un 409 `*.idempotency_key_reused` se concilia, nunca se reintenta | Hospital `4daedd9d`, `71187473`, `c1655713`; Recepción rama `mr/rec-41`, `HospitalIdempotencyTests` |
+| MR-41 | Hecho. Recepción envía `Idempotency-Key` en `POST v1/agenda` y `POST v1/patients`. Lo que protege: la **creación de cita del personal** que vence por tiempo libera su recibo, y repetirla con la misma clave (el navegador la reusa para el mismo cuerpo) devuelve la cita original en Hospital, sin duplicado; cancelar y reprogramar no llevan clave y siguen gastando el recibo. En el agente (`agent:`/`agent-register:` + id de la propuesta) es defensa en profundidad: la propuesta se consume antes de escribir, así que no hay reenvío, y un resultado incierto sigue yendo a conciliación. Un 409 `*.idempotency_key_reused` se concilia, nunca se reintenta | Hospital `4daedd9d`, `71187473`, `c1655713`; Recepción en main, `HospitalIdempotencyTests` |
 | MR-42 | Hecho; la regla la refina MR-43 | `4aabc9d`, `91a4f25`, `5a3c5d0`; Hospital `c971eab7`, `fe0fd635` |
-| MR-43 | Hecho en Recepción; depende de Hospital (`mr/hosp-43`) — desplegar Hospital antes | Recepción rama `mr/rec-43` |
-| MR-44 | Hecho en Recepción; depende de Hospital (`mr/hosp-43`) — desplegar Hospital antes (sin `attendance` la lectura falla y el perfil no muestra la línea) | Recepción rama `mr/rec-43`, `AttendanceTests` |
+| MR-43 | Hecho en Recepción; depende de Hospital (`mr/hosp-43`) — desplegar Hospital antes | Recepción en main |
+| MR-44 | Hecho en Recepción; depende de Hospital (`mr/hosp-43`) — desplegar Hospital antes (sin `attendance` la lectura falla y el perfil no muestra la línea) | Recepción en main, `AttendanceTests` |
 | MR-45 | Hecho (2026-10-25), sin cambio de backend | `tests/inbox-doctor.spec.ts` |
 | MR-46…MR-61 | Hecho (2026-10-25). Sustituyen: MR-53 retira el aviso «solo revisa las 100 conversaciones» de MR-18 (la prueba de MR-18 ahora comprueba `q=`); MR-54 hace que recargar reabra el chat (`clinical.spec.ts` MR-44 y `session.spec.ts` lo esperan); MR-48 deshabilita «Enviar» en las conversaciones demo con la ventana cerrada (`session.spec.ts` las sirve como enviables: su tema es la sesión). Sin búsqueda en el cuerpo de los mensajes (F-3) | .NET `InboxListTests` (+13), `AgentPersonChoiceTests`; `tests/inbox-ux.spec.ts` (+24); `server-tests/inbox-filters.test.ts` (`sameFilters`) |
 
@@ -191,7 +191,7 @@ Commits de Recepción salvo «Hospital». Fecha de todos: 2026-10-17.
 
 ## No se hace
 
-- Partir `workspace.tsx` y `AgentRuntime.cs` o deduplicar (D1, D2, D5): no corrige ningún defecto y chocaría con todos los lotes.
+- ~~Partir `workspace.tsx` y `AgentRuntime.cs` o deduplicar (D1, D2, D5)~~ — **hecho 2026-10-25** al cerrar los lotes: `768522c` (AgentRuntime por responsabilidad), `e5bd26e` (workspace), `47e39e0`, `5c08e4c`.
 - i18n completo (la app es solo español), OpenTelemetry (MR-9/10 bastan), axe como dependencia.
 - «Cargar mensajes anteriores»: necesita cursor en la API; MR-26 avisa del tope.
 - Validación global de configuración (D7), compatibilidad de versiones (I14), caché de plantillas (I4).

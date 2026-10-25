@@ -126,8 +126,8 @@ sugerencias para recepción (no existe y no se crea) · cualquier cambio en el r
   fuente posible para un dato de registro (lo que el paciente escribió o tocó), y el código
   puede comprobarla directamente.
 - A-2: el sexo registral siempre se pregunta con botones en la vía del modelo. «Mujer» u
-  «hombre» en el chat no dicen de quién es el sexo. Cuesta un toque. **Pendiente de confirmar
-  por el propietario; EV-8 no se implementa hasta entonces.**
+  «hombre» en el chat no dicen de quién es el sexo. Cuesta un toque. **Decidida por el propietario
+  el 2026-10-23; EV-8 implementado en `a795e5b`.**
 - A-3: la fuente es la conversación en curso (12 h, 24 mensajes).
 - A-4: al confirmar el registro, el contacto del CRM sigue tomando el nombre confirmado
   (criterio 51; `AgentRuntime.cs:596`), aunque recepción hubiera tecleado otro. Quien escribe

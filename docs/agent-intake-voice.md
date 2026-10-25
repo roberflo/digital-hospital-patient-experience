@@ -141,5 +141,5 @@ no solo la primera · cualquier cambio en Hospital.
 - Terceros: tras un «registra a mi mamá» bloqueado, los datos de ella en el mensaje siguiente se
   aceptan (`forOther` solo mira el último mensaje); solo la tarjeta lo frena. Preexistente; lo
   resuelve `agent-evidence.md`.
-- Un formulario abandonado no se borra: los 30 minutos son un filtro de consulta. Preexistente.
+- ~~Un formulario abandonado no se borra~~ — resuelto: el formulario vive en `PendingActions` con vencimiento (MR-40) y `backend/Retention.cs` borra los vencidos.
 - Sin correr: evals, `AgentLiveJourney.cs`, y el efecto del cambio de prompt sobre el modelo.

@@ -174,7 +174,7 @@ Lo que el operador hace al desplegar la versión con MR-1…MR-44 ([mejoras-revi
 **Al desplegar**
 
 6. **Migraciones `JobsStatusIndex` (MR-39) y `PendingActions` (MR-40).** Se aplican al arrancar una réplica con `INITIALIZE_DATABASE=true`; después volver a `false`. `PendingActions` borra una sola vez las filas de estado de `Activity` (`intake`, `visit_kind`, `proposal:%`); `proposal_used:%` y el historial se quedan. Una propuesta sin confirmar o un registro a medias en ese momento se pierden: el paciente vuelve a pedir la cita.
-   **Si se olvida `INITIALIZE_DATABASE=true`** la API arranca y `/health/ready` responde 200 (sólo comprueba la conexión), pero cada turno del agente termina `failed` con `42P01` (no existe la relación `PendingActions`) y, con la ventana de WhatsApp abierta, el paciente recibe el aviso de turno fallido (MR-3). Por eso el paso 7 mira la tabla de migraciones, no la salud.
+   **Si se olvida `INITIALIZE_DATABASE=true`** la API arranca pero `/health/ready` responde 503 (comprueba conexión **y** migraciones pendientes, `Program.cs`); si se ignora, cada turno del agente termina `failed` con `42P01` (no existe la relación `PendingActions`) y, con la ventana de WhatsApp abierta, el paciente recibe el aviso de turno fallido (MR-3). Por eso el paso 7 mira la tabla de migraciones, no la salud.
 
 **Después**
 

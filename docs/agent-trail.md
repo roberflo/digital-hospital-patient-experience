@@ -1,5 +1,7 @@
 # Rastro del agente en la conversación
 
+**Estado (2026-10-25):** S1 sin construir — el panel del chat no pide el feed por `conversationId` (sólo `activity-workspace.tsx` lo usa). Criterios 3 y 5 cubiertos en parte por MR-47 (motivo del traspaso) y MR-49 (`agentBlock`). OQ-1/2/3/5 abiertas · dueño.
+
 Petición (2026-10-04): llevar a Recepción la «pestaña Agente» de `trycompai/crm`. Medido contra
 `origin/main` (`6ff1cfd`), el agente de Recepción conversa con el paciente por WhatsApp, no con
 recepción, así que no hay sesión en vivo ni puente que copiar. Esta spec es la diferencia que sí

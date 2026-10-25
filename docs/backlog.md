@@ -21,8 +21,8 @@ Fecha: 2026-10-02. Alcance: CRM agent-first para un hospital por empresa, usuari
 | B02 | Keycloak compartido, roles y membresía única; demo solo Development explícito | 401/403, token inválido, acceso cruzado entre dos tenants | Implementado y probado; SSO real pendiente |
 | B03 | Contactos, oportunidades, actividades y notas persistentes (las empresas viven en Hospital desde 2026-10-25) | CRUD API + UI, validación y aislamiento | Implementado y probado |
 | B04 | Bandeja de conversaciones, asignación, historial, pausa/reanudación del agente | webhook → bandeja → humano y autorización | Implementado y probado |
-| B05 | Kapso: números, onboarding, firma, deduplicación, media, coexistencia | fixtures oficiales, firma inválida, eventos repetidos y ecos | Implementado y probado con fixtures; MCP real verificado, coexistencia real pendiente |
-| B06 | Agente NIM intercambiable con herramientas acotadas y trazabilidad | proveedor simulado, tool calls y handoff | Implementado; mocks y NIM real con datos sintéticos verificados |
+| B05 | Kapso: números, onboarding, firma, deduplicación, media, coexistencia | fixtures oficiales, firma inválida, eventos repetidos y ecos | Implementado y probado con fixtures; MCP real verificado; coexistencia cubierta por pruebas (`d098e19`), real pendiente |
+| B06 | Agente intercambiable (pasarela NIM → OpenAI → Claude, `AgentGateway.cs`) con herramientas acotadas y trazabilidad | proveedor simulado, tool calls y handoff | Implementado; mocks y NIM real con datos sintéticos verificados |
 | B07 | Integración API Hospital para identidad, agenda y recetas | contratos reales, errores y falta de vínculo | Implementado; adaptador y bridge probados, smoke Hospital real pendiente |
 | B08 | Google OAuth y sincronización de agenda por hospital | estado OAuth, tokens protegidos, upsert/cancel idempotente | Implementado y probado con proveedor simulado; OAuth real pendiente |
 | B09 | Guía por empresa y administración de canales/usuarios | restricciones admin y separación por tenant | Implementado y probado |
@@ -35,7 +35,7 @@ Fecha: 2026-10-02. Alcance: CRM agent-first para un hospital por empresa, usuari
 |---|---|---|
 | B12 | Dashboard separado; bandeja compacta y adaptada al alto disponible | Implementado; verificado escritorio/móvil |
 | B13 | Estados, prioridad, etiquetas, responsable, lecturas y respuestas guardadas | Implementado; API, worker y UI probados |
-| B14 | Ficha CRM, empresa, ciclo del cliente, seguimientos e historial desde el chat | Implementado; aislamiento y persistencia verificados |
+| B14 | Ficha CRM, empresa (leída de Hospital desde `cc9ab0e`, 2026-10-25), ciclo del cliente, seguimientos e historial desde el chat | Implementado; aislamiento y persistencia verificados |
 | B15 | Diagnóstico real de Kapso y vinculación del webhook | Diagnóstico implementado; único número accesible sandbox no operativo, falta acceso al número real y URL pública |
 
 | B16 | Vistas personales, macros auditadas, búsqueda de mensajes y filtro de archivos | Implementado y probado; ver chatwoot-review.md |
@@ -78,7 +78,7 @@ Estas tareas requieren datos/cuentas del entorno objetivo y no se marcan como co
 Revisión de QA, UX y arquitectura sobre `d4dce0c`; lo corregido está en la rama `qa/recepcion-listo-cliente`. Queda abierto:
 
 - R06 (antes del primer paciente): respaldo nocturno programado fuera del host y una restauración ensayada en el Easypanel real; monitores externos sobre `/health/ready` y `/health/attention` ([despliegue](deployment.md)).
-- R07 (antes de `SEND_ENABLED`): contrato y acuerdo de tratamiento de datos de salud con NVIDIA (y OpenAI si se configura el respaldo), o endpoint dedicado.
+- R07 (antes de `SEND_ENABLED`): contrato y acuerdo de tratamiento de datos de salud con NVIDIA (y OpenAI o Anthropic si la pasarela tiene `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`), o endpoint dedicado.
 - A01: mensajes perdidos durante una caída de la API más larga que los reintentos de Kapso no se recuperan; un job por canal que pida a Kapso los mensajes desde `LastWebhookAt`.
 - A02: la última receta firmada se busca con una petición por receta (`HospitalClient`); el bridge de Hospital debería devolver `signedAt` en la lista.
 - A03 (a escala): el worker lista todos los hospitales cada 1,5 s; listar sólo los que tienen trabajo o tareas vencidas. Estado en memoria (renovación de sesión, deduplicación del número general, retención) impide más de una réplica.

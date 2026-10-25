@@ -105,10 +105,11 @@ Sin `TEST_DATABASE` el fixture lanza (`AgentIntegrationTests.cs:15`): fallan en 
   fijado por `AbandonedTurnAlreadyWithAPersonKeepsItsSummary`. El criterio 1 e INV-2 se leen así
   hasta que se conteste. Sin prueba: la rama `closed`, donde el `Summary` sí se reemplaza.
 
-## Estado (2026-10-04)
+## Estado (2026-10-25)
 
-Entrega A (criterios 1–6) implementada, verificada y revisada. Entrega B (criterios 7–10, el
-endpoint de salud) **no construida**: no tiene lector hoy (ver plan §7). Anotado por la revisión:
+**Cerrado.** Entrega A (criterios 1–6) implementada, verificada y revisada. Entrega B (criterios
+7–10, el endpoint de salud) **descartada por el dueño el 2026-10-24**: la cubre `/health/attention`
+(`892dd1f`, `f19f8a9`). OQ-1 y OQ-6 siguen abiertas como política. Anotado por la revisión:
 el barrido ahora espera el candado de la conversación, así que puede detener el bucle hasta 30 s
 si otra sesión lo sostiene durante un envío (misma exposición que ya tenía `WakeDue`); dos
 reinicios seguidos a mitad de turno en la misma conversación dejan dos notas.
