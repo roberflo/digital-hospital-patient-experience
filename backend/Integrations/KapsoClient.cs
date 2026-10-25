@@ -50,13 +50,21 @@ public sealed class KapsoClient(HttpClient http, IConfiguration config)
         var payload = await res.Content.ReadFromJsonAsync<JsonElement>(ct);
         return payload.GetProperty("data").EnumerateArray().FirstOrDefault(t => t.GetProperty("name").GetString() == name && t.GetProperty("language").GetString() == language);
     }
-    static readonly string[] DayButtons=["Confirmar","Cambiar fecha","Cancelar"];
     /// <summary>The general number's windows (S3): its own templates, with the clinic's phone; the day before has one «Cancelar cita» (A13, A-P1).</summary>
     public const string GeneralDayWindow="general_day_before", GeneralHourWindow="general_hour_before";
     public const string GeneralDayTemplate="recepcion_cita_general_dia_anterior_v1", GeneralHourTemplate="recepcion_cita_general_una_hora_v1";
-    /// <summary>The shape a reminder template must have for its window: the hour before is one BODY; the day before is a BODY,
-    /// an optional FOOTER and exactly the three quick replies, in that order. The BAJA instruction is in the BODY or the FOOTER.
-    /// The general number's windows also name {{telefono}}, may carry a FOOTER, and its day before has exactly one «Cancelar cita».
+    /// <summary>The opt-out quick reply (S5): it does what a written BAJA does on that number (INV-11).</summary>
+    public const string StopButton="No más recordatorios";
+    /// <summary>The quick replies each window may carry, in order: the earlier template's and the S5 one's, which ends in <see cref="StopButton"/>.</summary>
+    static string[][] WindowButtons(string window)=>window switch{
+        "day_before"=>[["Confirmar","Cambiar fecha","Cancelar"],["Confirmar","Cambiar fecha","Cancelar",StopButton]],
+        "hour_before"=>[[],["Necesito reprogramar","Cancelar cita",StopButton]],
+        GeneralDayWindow=>[["Cancelar cita"],["Cancelar cita",StopButton]],
+        GeneralHourWindow=>[[],[StopButton]],
+        _=>[]};
+    /// <summary>The shape a reminder template must have for its window: a BODY, an optional FOOTER (never in the clinic's hour before) and,
+    /// when the window has them, exactly one of its quick-reply lists, in that order. Every template offers a way out (INV-10): the
+    /// «No más recordatorios» button, or BAJA in the BODY or the FOOTER. The general number's windows also name {{telefono}}.
     /// Anything else (a header, a URL or phone button, another parameter) is refused.</summary>
     public static bool ValidReminderTemplate(JsonElement template, string window)
     {
@@ -66,20 +74,18 @@ public sealed class KapsoClient(HttpClient http, IConfiguration config)
             || !template.TryGetProperty("components",out var components) || components.ValueKind != JsonValueKind.Array) return false;
         var types=components.EnumerateArray().Select(c=>c.GetProperty("type").GetString()).ToArray();
         var general=window is GeneralDayWindow or GeneralHourWindow;
-        var shapeOk=window switch{
-            "hour_before"=>types.SequenceEqual(["BODY"]),
-            GeneralHourWindow=>types.SequenceEqual(["BODY"])||types.SequenceEqual(["BODY","FOOTER"]),
-            "day_before" or GeneralDayWindow=>types.SequenceEqual(["BODY","BUTTONS"])||types.SequenceEqual(["BODY","FOOTER","BUTTONS"]),
-            _=>false};
-        if(!shapeOk)return false;
+        var hasFooter=types.Length>1&&types[1]=="FOOTER";
+        var hasButtons=types.Length>1&&types[^1]=="BUTTONS";
+        if(!types.SequenceEqual(new[]{"BODY"}.Concat(hasFooter?["FOOTER"]:[]).Concat(hasButtons?["BUTTONS"]:[]))||hasFooter&&window=="hour_before")return false;
+        string?[] labels=[];
+        if(hasButtons&&!(components[types.Length-1].TryGetProperty("buttons",out var list)&&list.ValueKind==JsonValueKind.Array
+            &&(labels=list.EnumerateArray().Select(b=>b.GetProperty("type").GetString()=="QUICK_REPLY"?b.GetProperty("text").GetString():null).ToArray()).Length>0))return false;
+        if(!WindowButtons(window).Any(allowed=>labels.SequenceEqual(allowed)))return false;
         var text=components[0].GetProperty("text").GetString()??"";
         var parameters=System.Text.RegularExpressions.Regex.Matches(text,@"\{\{([a-z_]+)\}\}").Select(m=>m.Groups[1].Value).Order().ToArray();
-        var footer=types.Length>1&&types[1]=="FOOTER"?components[1].GetProperty("text").GetString()??"":"";
-        if(!parameters.SequenceEqual(general?new[]{"fecha","hora","hospital","telefono"}:new[]{"fecha","hora","hospital"})||!(text+"\n"+footer).Contains("BAJA",StringComparison.Ordinal))return false;
-        if(window is "hour_before" or GeneralHourWindow)return true;
-        var buttons=components[types.Length-1];
-        return buttons.TryGetProperty("buttons",out var list)&&list.ValueKind==JsonValueKind.Array
-            &&list.EnumerateArray().Select(b=>b.GetProperty("type").GetString()=="QUICK_REPLY"?b.GetProperty("text").GetString():null).SequenceEqual(general?["Cancelar cita"]:DayButtons);
+        var footer=hasFooter?components[1].GetProperty("text").GetString()??"":"";
+        return parameters.SequenceEqual(general?new[]{"fecha","hora","hospital","telefono"}:new[]{"fecha","hora","hospital"})
+            &&(labels.Contains(StopButton)||(text+"\n"+footer).Contains("BAJA",StringComparison.Ordinal));
     }
     public async Task<bool> ReminderTemplateApproved(string number,string name,string language,string window,CancellationToken ct=default,bool general=false) => ValidReminderTemplate(await ReminderTemplate(number,name,language,ct,general),window);
     /// <summary>Sends an approved reminder. <paramref name="buttons"/> are the quick-reply payloads, in the template's button order; the caller composes them.

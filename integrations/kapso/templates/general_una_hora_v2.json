@@ -1,0 +1,41 @@
+{
+  "name": "recepcion_cita_general_una_hora_v2",
+  "language": "es",
+  "category": "UTILITY",
+  "parameter_format": "NAMED",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola, su cita es en una hora:\n\n*{{hospital}}*\n{{fecha}}, {{hora}}\n\nSi necesita hablar con su clínica, llame al {{telefono}}. Le esperamos.",
+      "example": {
+        "body_text_named_params": [
+          {
+            "param_name": "hospital",
+            "example": "Clínica de ejemplo"
+          },
+          {
+            "param_name": "fecha",
+            "example": "05/10/2026"
+          },
+          {
+            "param_name": "hora",
+            "example": "10:30"
+          },
+          {
+            "param_name": "telefono",
+            "example": "+503 2200 0000"
+          }
+        ]
+      }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "No más recordatorios"
+        }
+      ]
+    }
+  ]
+}
