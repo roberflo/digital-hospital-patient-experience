@@ -191,7 +191,7 @@ public sealed partial class AppointmentReminderService(CrmDb db,TenantScope scop
         await db.SaveChangesAsync(ct); // Durable attempt before external I/O, never automatically replay.
         try
         {
-            message.ExternalId=await kapso.SendReminder(channel.PhoneNumberId,contact.Phone,template,tenant.ReminderLanguage,tenant.Name,date,time,ct,row.Window=="day_before"?ReminderRules.Payloads(row.Id):null);
+            message.ExternalId=(await kapso.SendReminder(channel.PhoneNumberId,contact.Phone,template,tenant.ReminderLanguage,tenant.Name,date,time,ct,row.Window=="day_before"?ReminderRules.Payloads(row.Id):null)).Id;
             message.Status="sent";row.Status="sent";
         }
         catch(Exception ex) when(ex is HttpRequestException or TaskCanceledException or ArgumentException)

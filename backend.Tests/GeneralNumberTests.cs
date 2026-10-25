@@ -624,10 +624,11 @@ public sealed class GeneralNumberTests : IAsyncLifetime
         Assert.DoesNotContain(kapso, k => k.Body.GetProperty("to").GetString()!.TrimStart('+') is "12" or "70000000" or "50370000000");
     }
 
-    // Criterio 23 (OQ-4, branch B while Kapso's wa_id is unmeasured): only +503 and +1, where the wa_id is the E.164, are written to.
-    // Elsewhere (Mexico: E.164 +52 55…, wa_id 521 55…) a BAJA from the wa_id would not match the recipient (INV-8).
+    // TEL-1 criterio 21, branch (A), measured 2026-10-25: Kapso answers each send with contacts[].wa_id, so the general number writes to any
+    // country (criterios 21, 31); outside the closed list a BAJA matches by the wa_id's hash (criterio 22). Changed by that decision: under
+    // branch (B) Mexico was skipped with OutsideList.
     [Fact]
-    public async Task OnlyCountriesWhoseWaIdIsTheirE164AreWrittenTo()
+    public async Task BranchAWritesToAnyCountryWithItsCode()
     {
         Guid us = Guid.NewGuid(), mexico = Guid.NewGuid();
         recipients[clinicA] = [Recipient(appointmentA, patientA, start, "+" + phone), Recipient(us, Guid.NewGuid(), start, "+1 415 555 0100"), Recipient(mexico, Guid.NewGuid(), start, "+52 55 1234 5678")];
@@ -638,8 +639,69 @@ public sealed class GeneralNumberTests : IAsyncLifetime
         Assert.Equal("País fuera de la lista del número general (+503, +502, +504, +1).", AppointmentReminderService.OutsideList); // criterio 31
         Assert.All(rows.Where(r => r.AppointmentId == appointmentA), r => Assert.Equal(("pending", Hash(phone)), (r.Status, r.RecipientHash)));
         Assert.All(rows.Where(r => r.AppointmentId == us), r => Assert.Equal(("pending", Hash("14155550100")), (r.Status, r.RecipientHash)));
-        Assert.All(rows.Where(r => r.AppointmentId == mexico), r => Assert.Equal(("skipped", AppointmentReminderService.OutsideList, (string?)null), (r.Status, r.Reason, r.RecipientHash)));
+        Assert.All(rows.Where(r => r.AppointmentId == mexico), r => Assert.Equal(("pending", (string?)null, Hash("525512345678")), (r.Status, r.Reason, r.RecipientHash)));
         Assert.Equal(6, rows.Count);
+    }
+
+    // Criterio 22: the row keeps the HMAC of the wa_id the send came back with (Mexico: E.164 +52 55…, wa_id 521 55…), never the wa_id itself.
+    [Fact]
+    public async Task ADispatchStoresOnlyTheHashOfTheWaIdKapsoAnswers()
+    {
+        waIds["525512345678"] = "5215512345678";
+        recipients[clinicA] = [Recipient(appointmentA, patientA, start, "+52 55 1234 5678")];
+        await Sync(clinicA);
+        var day = (await Rows(clinicA)).Single(r => r.Window == "day_before");
+
+        await Dispatch(clinicA, day.Id, day.DueAt);
+
+        var row = await Row(clinicA, day.Id);
+        Assert.Equal(("sent", Hash("525512345678"), Hash("5215512345678")), (row.Status, row.RecipientHash, row.WaIdHash));
+        Assert.Equal("+525512345678", Assert.Single(kapso).Body.GetProperty("to").GetString()); // criterio 28: «to» is the E.164, not the wa_id
+        var stored = JsonSerializer.Serialize(row);
+        foreach (var clear in new[] { "5215512345678", "525512345678" }) Assert.DoesNotContain(clear, stored);
+    }
+
+    // Criterio 23, the safety net of branch (A): a send outside +503/+502/+504/+1 that comes back without its wa_id stays «sent» with a
+    // readable Activity, and the next reminders to that recipient are skipped: a BAJA from an unknown wa_id could not stop them (INV-8).
+    [Fact]
+    public async Task AForeignSendWithoutItsWaIdStopsTheNextOnes()
+    {
+        waIds["525512345678"] = null;
+        Guid next = Guid.NewGuid();
+        recipients[clinicA] = [Recipient(appointmentA, patientA, start, "+52 55 1234 5678")];
+        await Sync(clinicA);
+        var rows = await Rows(clinicA);
+        var day = rows.Single(r => r.Window == "day_before"); var hour = rows.Single(r => r.Window == "hour_before");
+
+        await Dispatch(clinicA, day.Id, day.DueAt);
+        await Dispatch(clinicA, hour.Id, hour.DueAt);
+        recipients[clinicA] = [Recipient(appointmentA, patientA, start, "+52 55 1234 5678"), Recipient(next, patientA, start.AddDays(1), "+52 55 1234 5678")];
+        await Sync(clinicA, DateTimeOffset.UtcNow.AddMinutes(16));
+
+        Assert.Equal(("sent", (string?)null), ((await Row(clinicA, day.Id)).Status, (await Row(clinicA, day.Id)).WaIdHash));
+        await using (var db = own.NewDb(new TenantScope()))
+            Assert.Equal("No se pudo confirmar el número de WhatsApp; los siguientes recordatorios a este paciente se detienen.",
+                (await db.Activities.IgnoreQueryFilters().SingleAsync(a => a.TenantId == clinicA && a.Kind == "general_wa_id_missing")).Body);
+        Assert.Equal(("skipped", AppointmentReminderService.OutsideList), ((await Row(clinicA, hour.Id)).Status, (await Row(clinicA, hour.Id)).Reason));
+        var later = (await Rows(clinicA)).Where(r => r.AppointmentId == next).ToList();
+        Assert.Equal(2, later.Count);
+        Assert.All(later, r => Assert.Equal(("skipped", AppointmentReminderService.OutsideList), (r.Status, r.Reason)));
+        Assert.Single(kapso); // only the first one went out
+    }
+
+    // Criterio 23 (guard): inside the closed list the wa_id is the E.164, so a send without contacts[] stops nothing.
+    [Fact]
+    public async Task AListedSendWithoutItsWaIdStopsNothing()
+    {
+        waIds["14155550100"] = null;
+        recipients[clinicA] = [Recipient(appointmentA, patientA, start, "+1 415 555 0100")];
+        await Sync(clinicA);
+        var rows = await Rows(clinicA);
+
+        foreach (var row in rows) await Dispatch(clinicA, row.Id, row.DueAt);
+
+        Assert.All(await Rows(clinicA), r => Assert.Equal("sent", r.Status));
+        Assert.Equal(2, kapso.Count);
     }
 
     // Criterio 31: the closed list is +503, +502, +504 and +1; Guatemala and Honduras are written to, and a BAJA from their wa_id stops them.
@@ -688,12 +750,12 @@ public sealed class GeneralNumberTests : IAsyncLifetime
                 Status = "skipped", Reason = "Teléfono inválido o fuera de El Salvador (+503); el número general aún no lo admite." });
             await db.SaveChangesAsync();
         }
-        recipients[clinicA] = [Recipient(mexico, patient, start, "+52 55 1234 5678")];
+        recipients[clinicA] = [Recipient(mexico, patient, start, "7000-0000")]; // criterio 21 (A): +52 is written to now; a phone without its code is not
 
         await Sync(clinicA);
 
         var day = (await Rows(clinicA)).Single(r => r.AppointmentId == mexico && r.Window == "day_before");
-        Assert.Equal(("skipped", AppointmentReminderService.OutsideList, (string?)null), (day.Status, day.Reason, day.RecipientHash));
+        Assert.Equal(("skipped", AppointmentReminderService.UnusablePhone, (string?)null), (day.Status, day.Reason, day.RecipientHash));
     }
 
     // Criterio 18: a row skipped with the text used before OQ-2 reopens too, once Hospital's phone carries its country code.

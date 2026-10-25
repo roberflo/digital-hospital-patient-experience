@@ -11,22 +11,29 @@ public sealed partial class AppointmentReminderService
     /// <summary>The note on a row whose withdrawal Hospital refused for good (4xx): no more retries; the owner's doubts list shows it.</summary>
     public const string WithdrawalRefused = "Hospital rechazó registrar el retiro de la autorización tras BAJA; revíselo con la clínica.";
     public const string UnusablePhone = "Teléfono inválido o sin código de país; el número general no puede escribirle.";
-    /// <summary>Why a valid number of another country is not written to (criterio 23); it reopens like the others.</summary>
+    /// <summary>Why a valid number of another country is not written to (criterio 23): in branch (A), only after a send to it came back without
+    /// its wa_id. It reopens like the others.</summary>
     public const string OutsideList = "País fuera de la lista del número general (+503, +502, +504, +1).";
+    /// <summary>Criterio 23, the safety net of branch (A): a send outside the closed list whose wa_id did not come back.</summary>
+    public const string WaIdMissing = "No se pudo confirmar el número de WhatsApp; los siguientes recordatorios a este paciente se detienen.";
     /// <summary>The text rows were skipped with while only +503 was written to; they reopen like the current one (criterio 18).</summary>
     const string PreviousUnusablePhone = "Teléfono inválido o fuera de El Salvador (+503); el número general aún no lo admite.";
 
-    /// <summary>Why the general number does not write to <paramref name="phone"/>, or null when it does. Criterios 23 and 31 (OQ-4, branch B):
-    /// only +503, +502, +504 and +1, the countries whose WhatsApp wa_id is taken to be their E.164, so a BAJA from the wa_id matches the recipient (INV-8). Without «+»,
-    /// only 11 digits starting with 503, as a Hospital deployed before E.164 sends them; the country of anything else is not guessed.
-    /// ponytail: a closed list until Kapso's reply is measured (criterio 21); branch A (criterio 22) stores the wa_id's hash and opens it.</summary>
-    public static string? Refusal(string? phone)
+    /// <summary>The closed list of criterios 23 and 31: null for +503, +502, +504 and +1, the countries whose WhatsApp wa_id is taken to be their
+    /// E.164; <see cref="OutsideList"/> for another country written with «+»; <see cref="UnusablePhone"/> otherwise. Without «+», only 11 digits
+    /// starting with 503, as a Hospital deployed before E.164 sends them; the country of anything else is not guessed.</summary>
+    static string? Closed(string? phone)
     {
         string digits;
         try { digits = Rules.Phone(phone ?? ""); } catch (ArgumentException) { return UnusablePhone; }
         var listed = digits.StartsWith("503", StringComparison.Ordinal) || phone!.TrimStart().StartsWith('+') && (digits.StartsWith("502", StringComparison.Ordinal) || digits.StartsWith("504", StringComparison.Ordinal) || digits.StartsWith('1'));
         return listed && digits.Length == 11 ? null : listed || !phone!.TrimStart().StartsWith('+') ? UnusablePhone : OutsideList;
     }
+    /// <summary>Why the general number does not write to <paramref name="phone"/>, or null when it does. Branch (A) of criterio 21 (measured
+    /// 2026-10-25: Kapso returns <c>contacts[].wa_id</c>): any country with its «+», because each send stores the hash of its wa_id and a BAJA
+    /// or CANCELAR from it matches (criterio 22, INV-8). An E.164 of 8 digits in all stays unusable (criterio 30): its wa_id could never match.
+    /// Outside the closed list, a send without its wa_id stops the next ones (<see cref="Unconfirmed"/>).</summary>
+    public static string? Refusal(string? phone) => Closed(phone) is OutsideList ? Rules.Phone(phone!).Length == 8 ? UnusablePhone : null : Closed(phone);
     /// <summary>The HMAC of a recipient the general number may write to (<see cref="Refusal"/> is null), or null.</summary>
     public static string? GeneralRecipientHash(string? phone, string key) => Refusal(phone) is null ? Rules.PhoneHash(phone!, key) : null;
     string? Hash(string? phone) => GeneralRecipientHash(phone, config["PHONE_HASH_KEY"]!);
@@ -40,6 +47,16 @@ public sealed partial class AppointmentReminderService
         return (hash, consentSince) => optOuts.TryGetValue(hash, out var since) && !(consentSince > since);
     }
 
+    /// <summary>Criterio 23, safety net of branch (A): the recipients among <paramref name="hashes"/> that a send may have reached without its wa_id
+    /// coming back. Read across hospitals, like the BAJA: the wa_id belongs to the phone. Only hashes, never a phone.</summary>
+    async Task<HashSet<string>> Unconfirmed(IEnumerable<string?> hashes, CancellationToken ct)
+    {
+        var list = hashes.OfType<string>().Distinct().ToArray();
+        return list.Length == 0 ? [] : (await db.AppointmentReminders.IgnoreQueryFilters().AsNoTracking()
+            .Where(r => r.RecipientHash != null && list.Contains(r.RecipientHash) && r.AttemptedAt != null && r.WaIdHash == null && r.ContactId == null && r.Status != "failed" && r.Status != "sending")
+            .Select(r => r.RecipientHash!).Distinct().ToListAsync(ct)).ToHashSet();
+    }
+
     async Task SyncGeneral(Tenant tenant, DateTimeOffset now, CancellationToken ct)
     {
         // ponytail: a general-number clinic is read every 15 minutes, not every minute: each read is one audited Hospital read of a set of patients.
@@ -48,8 +65,12 @@ public sealed partial class AppointmentReminderService
         var day = HospitalClient.ClinicalDay(now, tenant.TimeZone);
         var current = await hospital.GetReminderRecipientsAsync(scope.Id, day, day.AddDays(2), ct);
         // One unusable phone never stops the others: its rows say why (criterio 19).
-        var recipients = current.Select(r => (Id: r.AppointmentId, Start: ReminderRules.Instant(r.ScheduledStart), r.PatientId, Hash: Hash(r.Phone), Refusal: Refusal(r.Phone), r.ConsentSince)).ToList();
+        var stopped = await Unconfirmed(current.Where(r => Closed(r.Phone) is OutsideList).Select(r => Hash(r.Phone)), ct);
+        var recipients = current.Select(r => Hash(r.Phone) is { } hash && stopped.Contains(hash)
+            ? (Id: r.AppointmentId, Start: ReminderRules.Instant(r.ScheduledStart), r.PatientId, Hash: (string?)null, Refusal: (string?)OutsideList, r.ConsentSince)
+            : (Id: r.AppointmentId, Start: ReminderRules.Instant(r.ScheduledStart), r.PatientId, Hash: Hash(r.Phone), Refusal: Refusal(r.Phone), r.ConsentSince)).ToList();
         var pending = await db.AppointmentReminders.Where(r => r.Status == "pending" || r.Status == "sending").ToListAsync(ct);
+        foreach (var row in pending.Where(r => r.Status == "pending" && r.RecipientHash is { } h && stopped.Contains(h))) { row.Status = "skipped"; row.Reason = OutsideList; }
         foreach (var row in pending.Where(r => r.Status == "sending" && r.AttemptedAt < now.AddMinutes(-10))) { row.Status = "uncertain"; row.Reason = "Envío interrumpido; no se repite."; }
         var optedOut = await OptedOut(recipients.Select(r => r.Hash).Concat(pending.Select(r => r.RecipientHash)), ct);
         foreach (var row in pending.Where(r => r.Status == "pending"))
@@ -105,6 +126,8 @@ public sealed partial class AppointmentReminderService
             r.AppointmentId == row.AppointmentId && ReminderRules.Instant(r.ScheduledStart) == row.StartsAt && r.PatientId == row.PatientId && Hash(r.Phone) == row.RecipientHash);
         if (recipient is null) { await Stop("Cita cancelada o reprogramada, teléfono cambiado o autorización retirada en Hospital."); return; }
         if (optedOut(row.RecipientHash, recipient.ConsentSince)) { await Stop("El teléfono pidió BAJA en el número general."); return; }
+        var outside = Closed(recipient.Phone) is OutsideList;
+        if (outside && (await Unconfirmed([row.RecipientHash], ct)).Count > 0) { row.Status = "skipped"; row.Reason = OutsideList; await db.SaveChangesAsync(ct); return; }
         var dayBefore = row.Window == "day_before";
         var template = dayBefore ? KapsoClient.GeneralDayTemplate : KapsoClient.GeneralHourTemplate;
         if (!await kapso.ReminderTemplateApproved(number, template, tenant.ReminderLanguage, dayBefore ? KapsoClient.GeneralDayWindow : KapsoClient.GeneralHourWindow, ct, general: true)) { await Wait("Plantilla pendiente de aprobación o incompatible."); return; }
@@ -113,8 +136,11 @@ public sealed partial class AppointmentReminderService
         var (date, time) = ReminderRules.Local(row.StartsAt, tenant.TimeZone);
         try
         {
-            await kapso.SendReminder(number, recipient.Phone, template, tenant.ReminderLanguage, name, date, time, ct, dayBefore ? [$"CANCELAR {row.Id}"] : null, general: true, phoneOfClinic: clinicPhone);
+            var (_, waId) = await kapso.SendReminder(number, recipient.Phone, template, tenant.ReminderLanguage, name, date, time, ct, dayBefore ? [$"CANCELAR {row.Id}"] : null, general: true, phoneOfClinic: clinicPhone);
             row.Status = "sent";
+            // Criterio 22: only the wa_id's HMAC, never the wa_id. One of 8 digits is unusable (criterio 30), like one that did not come back.
+            try { row.WaIdHash = waId is null ? null : Rules.PhoneHash(Rules.WaId(waId), config["PHONE_HASH_KEY"]!); } catch (ArgumentException) { row.WaIdHash = null; }
+            if (row.WaIdHash is null && outside) db.Activities.Add(new Activity { TenantId = scope.Id, Actor = "Recordatorios", ActorRole = "system", Kind = "general_wa_id_missing", Body = WaIdMissing });
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or ArgumentException)
         {
