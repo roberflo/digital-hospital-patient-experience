@@ -114,7 +114,8 @@ public sealed class WhatsAppOnboarding(CrmDb db, TenantScope scope, CurrentUser 
         return true;
     }
     public static bool TrustedSetupUrl(string? value) => Uri.TryCreate(value, UriKind.Absolute, out var url) && url.Scheme == "https" && (url.Host == "setup.kapso.ai" || url.Host == "app.kapso.ai") && string.IsNullOrEmpty(url.UserInfo) && url.IsDefaultPort;
-    public static bool IsCustomerNumber(JsonElement number, string customer) => Text(number, "customer_id") == customer && Text(number, "status") == "CONNECTED" && !string.Equals(Text(number, "kind"), "sandbox", StringComparison.OrdinalIgnoreCase) && Text(number, "phone_number_id") is { Length: > 0 and <= 50 } id && id.All(char.IsAsciiDigit);
+    // Kapso's phone number has no `kind`. Its only documented sandbox trait, a null meta_app_id, is optional and absent from the list example, so it is no filter.
+    public static bool IsCustomerNumber(JsonElement number, string customer) => Text(number, "customer_id") == customer && Text(number, "status") == "CONNECTED" && Text(number, "phone_number_id") is { Length: > 0 and <= 50 } id && id.All(char.IsAsciiDigit);
     static JsonElement Data(JsonElement value) => value.TryGetProperty("data", out var data) ? data : value;
     static string? Text(JsonElement value, string key) => value.ValueKind == JsonValueKind.Object && value.TryGetProperty(key, out var field) && field.ValueKind == JsonValueKind.String ? field.GetString() : null;
     static bool Bool(JsonElement value, string key) => value.TryGetProperty(key, out var field) && field.ValueKind == JsonValueKind.True;

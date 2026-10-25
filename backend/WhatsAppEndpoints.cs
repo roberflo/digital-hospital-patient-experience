@@ -187,7 +187,9 @@ public static class WhatsAppEndpoints
         if(!history){var shown=outbound?content:WhatsAppContent.Shown(content);conv.LastMessage=shown.Length>160?shown[..160]:shown;conv.UpdatedAt = DateTimeOffset.UtcNow;} conv.Revision++;
         if (outbound && origin is "business_app" or "other_app" or "meta_business_agent" || passive || evt == "whatsapp.thread.standby")
         {
-            conv.Status = "human"; db.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "handoff", Actor = "WhatsApp", ActorRole = "external", Body = "Atención externa detectada. Agente automático en pausa." });
+            // Only the echo that actually takes over from the agent is a handoff; later ones in a human conversation are just replies.
+            if (conv.Status == "agent") db.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "handoff", Actor = "WhatsApp", ActorRole = "external", Body = "Atención externa detectada. Agente automático en pausa." });
+            conv.Status = "human";
         }
         if (!outbound && !history && !passive && evt == "whatsapp.message.received")
         {

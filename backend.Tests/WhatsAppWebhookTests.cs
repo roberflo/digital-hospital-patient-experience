@@ -54,7 +54,7 @@ public sealed class WhatsAppWebhookTests : IAsyncLifetime
     string[] Warnings() => Logs.Entries.Where(x => x.Level == LogLevel.Warning && x.Text.Contains(channel.ToString())).Select(x => x.Text).ToArray();
     CrmDb Db() => new(options, new TenantScope { Id = tenant }, new EphemeralDataProtectionProvider());
 
-    async Task<int> Post(string json, string? signature = null, string delivery = "delivery-1")
+    async Task<int> Post(string json, string? signature = null, string delivery = "delivery-1", string evt = "whatsapp.message.received")
     {
         var body = Encoding.UTF8.GetBytes(json);
         using var services = Host.Value.App.Services.CreateScope();
@@ -62,7 +62,7 @@ public sealed class WhatsAppWebhookTests : IAsyncLifetime
         ctx.Request.Method = "POST"; ctx.Request.Path = "/webhooks/kapso"; ctx.Request.ContentType = "application/json";
         ctx.Request.Body = new MemoryStream(body); ctx.Request.ContentLength = body.Length; ctx.Response.Body = new MemoryStream();
         ctx.Request.Headers["X-Webhook-Signature"] = signature ?? Convert.ToHexString(HMACSHA256.HashData(Encoding.UTF8.GetBytes(Secret), body));
-        ctx.Request.Headers["X-Webhook-Event"] = "whatsapp.message.received"; ctx.Request.Headers["X-Idempotency-Key"] = delivery;
+        ctx.Request.Headers["X-Webhook-Event"] = evt; ctx.Request.Headers["X-Idempotency-Key"] = delivery;
         await Host.Value.Receive(ctx);
         return ctx.Response.StatusCode;
     }
@@ -161,5 +161,61 @@ public sealed class WhatsAppWebhookTests : IAsyncLifetime
         Assert.Equal(2, await db.Contacts.CountAsync()); Assert.Equal(3, await db.Receipts.CountAsync());
         var warning = Assert.Single(Warnings()); Assert.Contains(tenant.ToString(), warning);
         Assert.DoesNotContain("999abc999", warning); Assert.DoesNotContain("Hola", warning); Assert.DoesNotContain("wamid", warning);
+    }
+
+    // Coexistence: the clinic keeps answering from the WhatsApp Business app on its phone, and Kapso echoes those messages (v2, origin business_app).
+    string Echo(string id, string phone = "50370000001") =>
+        "{\"phone_number_id\":\"" + number + "\",\"message\":{\"id\":\"" + id + "\",\"to\":\"" + phone + "\",\"type\":\"text\",\"text\":{\"body\":\"Le atiende recepción\"},\"kapso\":{\"direction\":\"outbound\",\"origin\":\"business_app\",\"status\":\"sent\"}},\"conversation\":{\"id\":\"conv-" + phone + "\",\"phone_number\":\"" + phone + "\",\"contact_name\":\"Paciente sintético\"}}";
+    async Task EnableAgent() { await using var db = Db(); (await db.Tenants.SingleAsync(x => x.Id == tenant)).AgentEnabled = true; await db.SaveChangesAsync(); }
+    async Task<(string Status, int Handoffs, int Unread, int Jobs)> State()
+    {
+        await using var db = Db();
+        var conv = await db.Conversations.Select(x => new { x.Id, x.Status }).SingleAsync();
+        return (conv.Status, await db.Activities.CountAsync(a => a.ConversationId == conv.Id && a.Kind == "handoff"),
+            await db.Messages.CountAsync(x => x.Sender == "patient" && !x.IsHistory), await db.Jobs.CountAsync()); // the inbox's unread predicate
+    }
+    [Fact] public async Task ABusinessAppEchoIsAHumanReplyThatPausesTheAgent()
+    {
+        await EnableAgent();
+        Assert.Equal(200, await Post(Inbound("wamid.in")));
+        Assert.Equal(("agent", 0, 1, 1), await State());
+        Assert.Equal(200, await Post(Echo("wamid.echo"), delivery: "delivery-echo", evt: "whatsapp.message.sent"));
+        Assert.Equal(("human", 1, 1, 1), await State()); // paused, one handoff, not unread, no agent job
+        await using var db = Db();
+        var echo = await db.Messages.Where(x => x.ExternalId == "wamid.echo").Select(x => new { x.Sender, x.IsHistory }).SingleAsync();
+        Assert.Equal(("human", false), (echo.Sender, echo.IsHistory));
+    }
+    [Fact] public async Task ADuplicateEchoAddsNothing()
+    {
+        await EnableAgent();
+        Assert.Equal(200, await Post(Inbound("wamid.in")));
+        var echo = Echo("wamid.echo");
+        Assert.Equal(200, await Post(echo, delivery: "delivery-echo", evt: "whatsapp.message.sent"));
+        Assert.Equal(200, await Post(echo, delivery: "delivery-echo", evt: "whatsapp.message.sent")); // same delivery: the receipt skips it
+        Assert.Equal(200, await Post(echo, delivery: "delivery-echo-2", evt: "whatsapp.message.sent")); // new delivery (its own receipt): the ExternalId skips it
+        var rows = await Rows();
+        Assert.Equal((2, 1, 1, ("human", 1, 1, 1)), (rows.Messages, rows.Jobs, rows.Contacts, await State()));
+    }
+    [Fact] public async Task EveryEchoAfterTheFirstDoesNotRecordAnotherHandoff()
+    {
+        await EnableAgent();
+        Assert.Equal(200, await Post(Inbound("wamid.in")));
+        Assert.Equal(200, await Post(Echo("wamid.echo-1"), delivery: "delivery-echo-1", evt: "whatsapp.message.sent"));
+        Assert.Equal(200, await Post(Echo("wamid.echo-2"), delivery: "delivery-echo-2", evt: "whatsapp.message.sent"));
+        Assert.Equal(("human", 1, 1, 1), await State());
+    }
+    [Fact] public async Task AHistorySyncMessageIsHistoryOnly()
+    {
+        await EnableAgent();
+        var history = "{\"phone_number_id\":\"" + number + "\",\"message\":{\"id\":\"wamid.old\",\"from\":\"50370000001\",\"timestamp\":\"1700000000\",\"type\":\"text\",\"text\":{\"body\":\"ACTIVAR RECORDATORIOS\"},\"kapso\":{\"direction\":\"inbound\",\"origin\":\"history_sync\"}},\"conversation\":{\"id\":\"conv-50370000001\",\"phone_number\":\"50370000001\",\"contact_name\":\"Paciente sintético\"}}";
+        Assert.Equal(200, await Post(history));
+        await using var db = Db();
+        var message = await db.Messages.Select(x => new { x.ExternalId, x.Sender, x.IsHistory }).SingleAsync();
+        Assert.Equal(("wamid.old", "patient", true), (message.ExternalId, message.Sender, message.IsHistory));
+        Assert.Equal(0, await db.Jobs.CountAsync());
+        Assert.Null(await db.Conversations.Select(x => x.LastInboundAt).SingleAsync()); // no 24h window from an old message
+        Assert.Equal(0, await db.Messages.CountAsync(x => x.Sender == "patient" && !x.IsHistory)); // not unread
+        Assert.Null(await db.Contacts.Select(x => x.ReminderConsentAt).SingleAsync());
+        Assert.Equal(0, await db.Activities.CountAsync(a => a.Kind == "reminder_consent"));
     }
 }

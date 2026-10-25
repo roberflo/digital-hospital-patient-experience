@@ -34,6 +34,16 @@ test('business admin gets hosted connection link and imports verified number wit
     return route.fulfill({ json: { connected: 1, added: 1, webhooksReady: 1, warnings: [] } });
   });
   await page.goto('/whatsapp');
+  // Meta's coexistence conditions are read before going to Kapso, not discovered after.
+  const coexistence = page.getByRole('note').filter({ hasText: 'Si eliges coexistencia' });
+  for (const condition of [
+    'WhatsApp Business 2.24.17 o posterior',
+    'no se puede cambiar después',
+    'listas de difusión',
+    'mensajes temporales y de visualización única',
+    'al menos cada 14 días',
+  ])
+    await expect(coexistence).toContainText(condition);
   await page.getByRole('button', { name: 'Agregar mi número', exact: true }).click();
   const hosted = page.getByRole('link', { name: 'Continuar conexión en Kapso' });
   await expect(hosted).toHaveAttribute('href', 'https://app.kapso.ai/whatsapp/setup/synthetic');

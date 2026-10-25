@@ -1,8 +1,15 @@
 'use client';
 import Link from 'next/link';
 import useSWR from 'swr';
-import { ArrowLeft, Info, MessageCircle, ShieldCheck, TriangleAlert } from 'lucide-react';
-import { Alert, AlertDescription } from '@/components/ui/alert';
+import {
+  ArrowLeft,
+  Info,
+  MessageCircle,
+  ShieldCheck,
+  Smartphone,
+  TriangleAlert,
+} from 'lucide-react';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from '@/components/ui/empty';
@@ -113,6 +120,25 @@ export default function WhatsAppConnect() {
                   </p>
                 </li>
               </ol>
+              <Alert role="note">
+                <Smartphone />
+                <AlertTitle>Si eliges coexistencia, Meta pide:</AlertTitle>
+                <AlertDescription>
+                  <ul className="list-disc pl-4">
+                    <li>WhatsApp Business 2.24.17 o posterior en tu teléfono.</li>
+                    <li>
+                      Decidir si compartes el historial de chats; no se puede cambiar después.
+                    </li>
+                    <li>
+                      Se desactivan las listas de difusión y los mensajes temporales y de
+                      visualización única.
+                    </li>
+                    <li>
+                      Abrir la app en el teléfono al menos cada 14 días, o la conexión se corta.
+                    </li>
+                  </ul>
+                </AlertDescription>
+              </Alert>
               <Alert role="note">
                 <Info />
                 <AlertDescription>
