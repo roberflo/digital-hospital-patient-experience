@@ -61,3 +61,16 @@ Se agregó la consulta por paciente en Hospital (guard/auditoría, filtro tenant
 ## Ajuste del contrato de recetas (2026-10-03)
 
 La lectura/PDF recibe únicamente el identificador de receta en la ruta. Hospital resuelve su propietario y valida el teléfono; Recepción verifica también que el propietario devuelto coincide con su contacto antes de pedir el PDF, incluso cuando dos pacientes comparten teléfono. Regresión ejecutada en rojo: `Unexpected Hospital route: /v1/reception/patients/.../prescriptions/.../pdf` (2 fallos); después de actualizar rutas y prevalidar propietario, backend 56/56. El puente de recetas permanece deshabilitado localmente y no se declara validada una entrega clínica real.
+
+## TEL-1 criterio 21 — Kapso devuelve `contacts[].wa_id` (2026-10-25)
+
+Medición autorizada por el dueño (sandbox de Kapso, número de prueba del dueño, sin pacientes). Remitente: el número de `KAPSO_PHONE_NUMBER_ID` (cuenta «Dte Solution»), credenciales leídas por `--env-file` sin imprimirse. Un único envío de la plantilla aprobada `recepcion_cita_una_hora_v1` con valores sintéticos («PRUEBA TÉCNICA TEL-1 c21»), igual que `KapsoClient.SendReminder`. Respuesta literal, con cifras largas enmascaradas:
+
+```
+{"messaging_product":"whatsapp","contacts":[{"input":"+503…90","wa_id":"503…90"}],"messages":[{"id":"wamid.…","message_status":"accepted"}]}
+HTTP 200
+```
+
+Intentos previos en la misma medición: `hello_world` ⇒ 400 `(#131058) Hello World templates can only be sent from the Public Test Numbers`; texto libre ⇒ 422 `Cannot send non-template messages outside the 24-hour window.`
+
+Consecuencia (spec Hospital `telefono-con-codigo-de-pais.spec.md`, criterios 21–22): el envío devuelve el `wa_id`, así que se construye el criterio 22 (guardar el hash del `wa_id` devuelto y casar BAJA/CANCELAR también por él).
