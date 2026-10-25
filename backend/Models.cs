@@ -167,6 +167,8 @@ public sealed class Message : TenantRow
     public string Sender { get; set; } = "patient"; public string Body { get; set; } = "";
     public string Type { get; set; } = "text"; public string? MediaId { get; set; }
     public string? MediaName { get; set; }
+    /// <summary>RXE-C4: the attachment Hospital returned when a clinician filed this file in the record; a second save answers it.</summary>
+    public Guid? HospitalAttachmentId { get; set; }
     public string Status { get; set; } = "received";
     public string? RequestKey { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;

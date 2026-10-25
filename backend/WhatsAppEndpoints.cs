@@ -15,6 +15,34 @@ public static class WhatsAppEndpoints
         using (var teamLease = await svc.Lock(t.Id)) using (var l = await svc.Lock(id)) { await db.Entry(conv).ReloadAsync(); TeamEndpoints.RequireEditable(conv,u); if (!await db.Messages.AnyAsync(x => x.RequestKey == key)) await svc.RequireSendable(conv, manual: true); InboxWorkflow.SetState(conv,"open"); conv.Status = "human"; conv.AssignedTo = u.Subject; conv.Revision++; await db.SaveChangesAsync(); }
         var msg = await svc.Send(id, body, "human", key, actingSubject: u.Subject, actor: u); CrmEndpoints.Audit(db, t, u, "message.sent", msg.Id); await db.SaveChangesAsync(); return Results.Ok(msg);
     }
+    /// <summary>RXE-C: a clinician files a file the patient sent into Hospital's record. The bytes go Kapso → this server → Hospital in memory,
+    /// with the person's token (Hospital decides); Recepción keeps only the returned id, and a second save answers it (RXE-C4).</summary>
+    public static async Task<IResult> SaveToRecord(Guid id, RecordAttachmentInput b, HttpContext ctx, CrmDb db, TenantScope t, CurrentUser u, KapsoClient kapso, HospitalClient hospital, ConversationService svc)
+    {
+        // RXE-C2 / P1 of 05-adjuntos: only the clinical profile, until the owner opens it to reception.
+        if (u.Role != "doctor") throw new AccessDeniedException();
+        var category = string.IsNullOrWhiteSpace(b.CategoryCode) ? "prior-study" : b.CategoryCode.Trim();
+        if (category.Length > 40 || !category.All(c => char.IsAsciiLetterLower(c) || c == '-')) throw new ArgumentException("Categoría inválida.");
+        var description = b.Description?.Trim(); if (description?.Length > 500) throw new ArgumentException("La descripción admite 500 caracteres.");
+        var bearer = Identity.Bearer(ctx);
+        var m = await db.Messages.SingleOrDefaultAsync(x => x.Id == id); if (m is null) return Results.NotFound();
+        if (m.Sender != "patient" || m.Type is not ("image" or "document") || m.MediaId is null) throw new ArgumentException("Solo se guarda una imagen o un documento que envió el paciente.");
+        var contact = await db.Conversations.Where(x => x.Id == m.ConversationId).Join(db.Contacts, c => c.ContactId, x => x.Id, (_, x) => x).SingleAsync();
+        if (contact.PatientId is not { } patientId) throw new ArgumentException("Vincula el contacto a un paciente de Hospital antes de guardar.");
+        using var lease = await svc.Lock(m.Id); await db.Entry(m).ReloadAsync();
+        if (m.HospitalAttachmentId is { } saved) return Results.Ok(new RecordAttachment(saved));
+        var resource = $"contact:{contact.Id:D} message:{m.Id:D}";
+        var media = await kapso.Download(m.MediaId, ctx.RequestAborted);
+        Guid attachment;
+        try { attachment = await hospital.AsUser(bearer).UploadAttachmentAsync(t.Id, patientId, media.Bytes, m.MediaName ?? $"whatsapp-{m.Id:N}", media.Type, category, b.ClinicalDate, description, ctx.RequestAborted); }
+        catch (HospitalIntegrationException ex)
+        {
+            db.Audits.Add(new Audit { TenantId = t.Id, Actor = u.Subject, Action = "hospital_attachment.failed:" + ex.Code, Resource = resource }); await db.SaveChangesAsync(); throw;
+        }
+        m.HospitalAttachmentId = attachment;
+        db.Audits.Add(new Audit { TenantId = t.Id, Actor = u.Subject, Action = "hospital_attachment.saved", Resource = resource }); await db.SaveChangesAsync();
+        return Results.Ok(new RecordAttachment(attachment));
+    }
     public static async Task<IResult> SendMedia(Guid id, HttpContext ctx, CrmDb db, TenantScope t, CurrentUser u, KapsoClient kapso, ConversationService svc)
     {
         // A send without its key is refused before the upload and before the agent is paused or the conversation reassigned (INV-5).
@@ -100,6 +128,7 @@ public static class WhatsAppEndpoints
         {
             var m = await db.Messages.SingleOrDefaultAsync(x => x.Id == id); if (m?.MediaId is null) return Results.NotFound(); var media = await kapso.Download(m.MediaId); return Results.File(media.Bytes, media.Type, fileDownloadName: m.MediaName ?? "archivo", enableRangeProcessing: true);
         });
+        api.MapPost("/messages/{id:guid}/hospital-attachment", SaveToRecord);
         api.MapPatch("/conversations/{id:guid}", SetAttention);
         // The four below, and only they, are what the platform owner operates here; POST /channels takes a caller-supplied number and stays closed to it.
         api.MapGet("/channels", async (CrmDb db) => await db.Channels.ToListAsync()).WithMetadata(new PlatformOperable());
@@ -246,6 +275,8 @@ public static class WhatsAppEndpoints
     internal static string? Get(JsonElement e, string key) => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(key, out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
 }
 public record SendInput(string Body);
+public record RecordAttachmentInput(string? CategoryCode, DateTimeOffset? ClinicalDate, string? Description);
+public record RecordAttachment(Guid AttachmentId);
 /// <summary>One inbox row. <c>SendBlock</c>: why a person cannot send now; <c>AgentBlock</c>: why the agent could not; <c>Handoff</c>: the agent passed it to the team and nobody has answered yet.</summary>
 public record InboxRow(Conversation Conversation, Contact? Contact, Channel? Channel, int UnreadCount, SendBlock? SendBlock, SendBlock? AgentBlock, InboxHandoff? Handoff);
 public record InboxHandoff(string Reason, DateTimeOffset At);

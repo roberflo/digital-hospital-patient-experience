@@ -92,6 +92,8 @@ export type Message = {
   type: string;
   mediaId?: string;
   mediaName?: string;
+  /** RXE-C4: filed in the patient's Hospital record. */
+  hospitalAttachmentId?: string;
   status: string;
   createdAt: string;
   receivedAt: string;
