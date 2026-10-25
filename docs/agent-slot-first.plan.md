@@ -1,6 +1,6 @@
 # Plan — La hora antes que el registro (S3)
 
-> **Cerrado el 2026-10-23** — implementado en `main`: `37bb7ed` — falta constancia de `eval-agent.sh`/`live-agent.sh` antes de desplegar (P-5).
+> **Cerrado el 2026-10-23** — implementado en `main`: `37bb7ed` — falta constancia de `eval-agent.sh`/`live-agent.sh` antes de desplegar (P-5). El 2026-10-25 NIM no respondía; el dueño decidió **pasar a OpenAI**: con `OPENAI_API_KEY`/`OPENAI_MODEL` configuradas por él, se corren ambos scripts y se pega la salida.
 
 Spec: [agent-slot-first.md](agent-slot-first.md). Medido el 2026-10-04, solo lectura: no se
 ejecutó ninguna prueba.
