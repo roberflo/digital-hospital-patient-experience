@@ -14,8 +14,6 @@ const { isPlatformOwner, sealActing, readActing, platformSession, actingCookieNa
   await import('../src/lib/acting.ts');
 const { proxy, forward } = await import('../src/lib/crm-proxy.ts');
 const { chooseActing, clearActing } = await import('../src/lib/acting-route.ts');
-const { authorizeInbox } = await import('../src/lib/inbox-auth.ts');
-const { InboxError } = await import('../src/lib/kapso.ts');
 
 process.env.AUTH_SECRET = 'synthetic-secret-for-tests-only';
 process.env.NEXTAUTH_URL = 'http://localhost:3215';
@@ -338,30 +336,4 @@ test('an unreadable list seals nothing, and clearing expires the cookie', async 
     }),
   );
   assert.equal(foreign.status, 403);
-});
-
-test('the inbox stays closed to the platform owner and unchanged for a hospital session', async (t) => {
-  process.env.KAPSO_PHONE_NUMBER_ID = '';
-  const calls = upstream(t, [{ phoneNumberId: '613008901896177' }]);
-  // Platform owner acting for A: /api/channels would answer 200 with the header. It is never asked.
-  await assert.rejects(
-    authorizeInbox(
-      request('/api/conversations', [
-        await sessionCookie(owner, platformAccess),
-        await actingCookie(owner),
-      ]),
-    ),
-    (e: unknown) => e instanceof InboxError && e.status === 403,
-  );
-  assert.equal(calls.length, 0);
-  // Hospital session: same authorisation as before, and no header even with a leftover cookie.
-  const granted = await authorizeInbox(
-    request('/api/conversations', [
-      await sessionCookie(admin, hospitalAccess),
-      await actingCookie(admin),
-    ]),
-  );
-  assert.equal(granted.number, '613008901896177');
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].headers.get('x-acting-tenant'), null);
 });

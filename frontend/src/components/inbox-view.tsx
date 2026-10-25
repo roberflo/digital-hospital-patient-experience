@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import useSWR, { useSWRConfig } from 'swr';
 import { UserRound, ShieldCheck, MessageCircle, RefreshCw, ListFilter } from 'lucide-react';
 import { toast } from 'sonner';
@@ -62,6 +62,8 @@ export function InboxView({
   const [linkedNumber, setLinkedNumber] = useState('');
   const [linkedConversation, setLinkedConversation] = useState('');
   const [channelId, setChannelId] = useState('');
+  // MR-45: a doctor with their own number starts on it, unless a link or team view says otherwise.
+  const ownNumberPending = useRef(!initialAssignment);
   function clearLinkedConversation() {
     setLinkedPhone('');
     setLinkedNumber('');
@@ -72,6 +74,8 @@ export function InboxView({
   }
   useEffect(() => {
     const params = new URLSearchParams(location.search);
+    if (['conversationId', 'phone', 'channelId'].some((k) => params.get(k)))
+      ownNumberPending.current = false;
     if (params.get('conversationId')) {
       setLinkedConversation(params.get('conversationId')!);
       setSelected(params.get('conversationId')!);
@@ -94,6 +98,14 @@ export function InboxView({
   const [moreFilters, setMoreFilters] = useState(false);
   const [page, setPage] = useState(1);
   const { data: channels } = useSWR<Channel[]>('/channels', fetcher);
+  useEffect(() => {
+    if (!channels || !ownNumberPending.current) return;
+    ownNumberPending.current = false;
+    const own = channels.find((c) => c.doctorId && c.doctorId === me.subject);
+    if (!own) return;
+    setChannelId(own.id);
+    setMoreFilters(true); // the filter shows where it is cleared: «Todos los canales»
+  }, [channels, me.subject]);
   useEffect(() => setPage(1), [state, assignment, channelId, priority, label, filter]);
   useEffect(
     () => setChecked({}),
