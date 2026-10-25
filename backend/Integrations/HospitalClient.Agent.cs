@@ -66,11 +66,8 @@ public sealed partial class HospitalClient
         using var response = await SendAsync(tenantId, HttpMethod.Post, $"v1/patients/{patientId:D}/whatsapp-reminders/consent/withdraw", new { origin = "whatsapp-baja", optedOutAt }, ct);
     }
     /// <summary>Criterios 22 y 27: the patient's own cancellation from the general number. No read of the record first: criterio 41 was just re-read.</summary>
-    public async Task CancelReminderAppointmentAsync(Guid tenantId, Guid appointmentId, CancellationToken ct = default)
-    {
-        var cancellation = AppointmentCancellation.From("patient-requested");
-        using var response = await SendAsync(tenantId, HttpMethod.Post, $"v1/agenda/{appointmentId:D}/cancel", new { reason = cancellation.Reason, cancelledByPatient = cancellation.CancelledByPatient }, ct);
-    }
+    public Task CancelReminderAppointmentAsync(Guid tenantId, Guid appointmentId, CancellationToken ct = default) =>
+        PostCancelAsync(tenantId, appointmentId, AppointmentCancellation.From("patient-requested"), ct);
     /// <summary>These two reads fail in silence for the patient, so a failure that stays would be seen by nobody: it is logged. A 404 is an
     /// answer (nothing published, or a Hospital without the route), not a failure. Only the error's type or code: never a body, a URL or a token.</summary>
     void Degraded(string read, Guid tenantId, Exception ex)

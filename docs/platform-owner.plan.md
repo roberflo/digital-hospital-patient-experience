@@ -102,7 +102,7 @@ La negativa por marca va antes de la consulta a `Tenants`, así el barrido no to
 - Bandeja: `GET /api/conversations`, `GET|POST /api/conversations/{id}/messages`, `POST .../media`, `GET /api/messages/{id}/media`, `PATCH /api/conversations/{id}`, `PATCH .../workflow`, `POST .../read`, `POST /api/conversations/assign`, `POST .../macros/{macroId}`, `/api/saved-replies`, `/api/inbox-views`, `/api/macros`.
 - Contactos y pacientes: `/api/contacts/**`, `POST /api/contacts/{id}/patient`, `POST /api/hospital/contacts/{id}/patients/search` (AC 12).
 - Clínicas y agenda: `/api/hospital/conversations/{id}/clinical/**`, `/api/hospital/agenda`, `/availability`, `/appointments`, `/api/hospital/contacts/{id}/appointments|prescriptions`.
-- Resto: `/api/me`, `/api/overview`, `/api/members/**`, `/api/audit`, `/api/activities`, `/api/activity-feed`, `/api/opportunities`, `/api/companies`, `/api/commercial/**`, `/api/appointment-reminders/**`, `/api/google/**`.
+- Resto: `/api/me`, `/api/overview`, `/api/members/**`, `/api/audit`, `/api/activities`, `/api/activity-feed`, `/api/opportunities`, `/api/commercial/**`, `/api/appointment-reminders/**`, `/api/google/**`.
 
 `/webhooks/kapso`, `/oauth/google/callback` y `/health/*` quedan fuera de `/api` y no cambian.
 

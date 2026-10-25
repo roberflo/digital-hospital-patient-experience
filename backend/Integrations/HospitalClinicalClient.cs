@@ -89,8 +89,7 @@ public sealed class HospitalClinicalClient(HttpClient http, IConfiguration confi
     {
         try
         {
-            var segment = bearer.Split('.')[1].Replace('-', '+').Replace('_', '/');
-            using var document = JsonDocument.Parse(Convert.FromBase64String(segment.PadRight((segment.Length + 3) / 4 * 4, '=')));
+            using var document = JsonDocument.Parse(System.Buffers.Text.Base64Url.DecodeFromChars(bearer.Split('.')[1]));
             var payload = document.RootElement;
             if (!Guid.TryParse(subject, out var actor) || actor == Guid.Empty || payload.GetProperty("sub").GetString() != subject
                 || !payload.GetProperty("realm_access").GetProperty("roles").EnumerateArray()

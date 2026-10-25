@@ -1,6 +1,4 @@
-using System.ClientModel;
 using System.Text.RegularExpressions;
-using Microsoft.Extensions.AI;
 namespace Recepcion;
 
 /// <summary>Rules that decide without asking the model (docs/reception-agent.md). The prompt asks
@@ -223,20 +221,4 @@ public static partial class AgentGuard
     // Four shapes: the sign or «USD» in front; the currency word behind; the sign behind («40$», unless it opens the next figure); a percentage.
     // «mil» and «millones» ride along so that Figure can refuse them.
     [GeneratedRegex(@"(?i)(?:\$|\bUSD)\s?\d[\d.,]*(?:\s*(?:mil|mill[oó]n(?:es)?)\b)?|\b\d[\d.,]*\s*(?:(?:mil|mill[oó]n(?:es)?)\s+(?:de\s+)?)?(?:d[oó]lar(?:es)?|dollars?|usd)\b|\b\d+(?:[.,]\d+)*\s?\$(?!\s?\d)|\b\d[\d.,]*\s?(?:%|(?:por\s?ciento|pct)\b)")] private static partial Regex Money();
-}
-
-/// <summary>Repeats one failed model call on the next provider. Only the model request is
-/// repeated: tools run between calls, in this process, and are never replayed.</summary>
-public sealed class FallbackChatClient(IChatClient primary, IChatClient fallback, Action onFallback) : DelegatingChatClient(primary)
-{
-    public override async Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
-    {
-        var sent = messages.ToList();
-        try { return await base.GetResponseAsync(sent, options, cancellationToken); }
-        catch (Exception ex) when (!cancellationToken.IsCancellationRequested && ex is HttpRequestException or TaskCanceledException or AggregateException { InnerException: HttpRequestException or TaskCanceledException } or ClientResultException { Status: 0 or 408 or 429 or >= 500 })
-        {
-            onFallback(); return await fallback.GetResponseAsync(sent, options, cancellationToken);
-        }
-    }
-    protected override void Dispose(bool disposing) { if (disposing) fallback.Dispose(); base.Dispose(disposing); }
 }

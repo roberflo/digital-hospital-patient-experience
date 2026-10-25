@@ -336,7 +336,7 @@ Ninguna es clínica y ninguna exige migración.
 ## P-5 — constancia de `eval-agent.sh` y `live-agent.sh` (2026-10-24)
 
 Corridas sobre `main` `5605d02` con el modelo configurado en `.env` y Hospital local. **No hay
-constancia válida todavía:** el proveedor de IA no responde (`check-nim.py` ⇒ HTTP 404), así que
+constancia válida todavía:** el proveedor de IA no responde (`check-nim.py` ⇒ HTTP 404; ese script se retiró el 2026-10-25), así que
 109 de 135 evals son «medición inválida» en dos corridas seguidas, y las vivas que pasan por el
 modelo fallan con «Disculpa, en este momento no puedo leer…». Las que no usan el modelo
 (`NewClientRegistersAndBooksFromTheMenuWithoutTheModel`, `TappedSlotBooksInHospitalWithoutTheModel`,

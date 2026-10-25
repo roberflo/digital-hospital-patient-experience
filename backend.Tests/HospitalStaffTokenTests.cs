@@ -156,7 +156,7 @@ public sealed class HospitalStaffTokenTests : IAsyncLifetime
     [Theory]
     [InlineData("GET /api/hospital/agenda")][InlineData("GET /api/hospital/availability")][InlineData("GET /api/hospital/contacts/{id:guid}/appointments")]
     [InlineData("POST /api/hospital/appointments")][InlineData("POST /api/hospital/contacts/{id:guid}/patients/search")]
-    [InlineData("GET /api/commercial/companies")][InlineData("GET /api/commercial/services")][InlineData("GET /api/companies")]
+    [InlineData("GET /api/commercial/companies")][InlineData("GET /api/commercial/services")]
     [InlineData("GET /api/commercial/contacts/{id:guid}")][InlineData("POST /api/commercial/contacts/{id:guid}/sync")]
     [InlineData("POST /api/commercial/contacts/{id:guid}/link")][InlineData("POST /api/commercial/opportunities/{id:guid}/quote")]
     [InlineData("POST /api/commercial/opportunities/{id:guid}/purchase")][InlineData("POST /api/contacts/{id:guid}/patient")]

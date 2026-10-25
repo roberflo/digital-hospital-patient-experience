@@ -58,10 +58,6 @@ public static class CrmEndpoints
             var row = await db.Contacts.SingleOrDefaultAsync(x => x.Id == id); if (row is null) return Results.NotFound();
             await commercial.AsUser(Identity.Bearer(ctx)).LinkPatient(row,b.PatientId,u); Audit(db, t, u, "patient.linked", id); await db.SaveChangesAsync(); return Results.Ok(row);
         });
-        // Legacy clients receive an explicit instruction; master records live only in Hospital.
-        api.MapGet("/companies",async(HttpContext ctx,HospitalClient h,TenantScope t)=>(await h.AsUser(Identity.Bearer(ctx)).Companies(t.Id,null,1)).Items);
-        api.MapPost("/companies",()=>Results.Conflict(new{title="Administra empresas y convenios desde Hospital."}));
-        api.MapPut("/companies/{id:guid}",()=>Results.Conflict(new{title="Administra empresas y convenios desde Hospital."}));
         api.MapGet("/opportunities", async (CrmDb db) => await db.Opportunities.OrderByDescending(x => x.UpdatedAt).Take(500).ToListAsync());
         api.MapPost("/opportunities", async (OpportunityInput b, CrmDb db, TenantScope t, CurrentUser u) =>
         {
@@ -164,7 +160,6 @@ public static class CrmEndpoints
     static void ValidateStage(string stage) { if (stage is not ("new" or "contacted" or "scheduled" or "won" or "lost")) throw new ArgumentException("Etapa inválida"); }
 }
 public record ContactInput(string Name, string Phone, string? Email, string? Tags);
-public record CompanyInput(string Name, string? Industry, string? Email, string? Phone);
 public record OpportunityInput(string Title, Guid ContactId, decimal Value, string Stage, Guid? ConversationId=null);
 public record StageInput(string Stage);
 public record ActivityInput(string Body, Guid? ContactId, Guid? ConversationId);

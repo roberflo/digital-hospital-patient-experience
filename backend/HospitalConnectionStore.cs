@@ -47,7 +47,7 @@ public sealed class HospitalConnectionStore(CrmDb db, IConfiguration config)
     public static Dictionary<string,string> Jwk(ECDsa key)
     {
         var q = key.ExportParameters(false).Q;
-        string B64(byte[] v) => Convert.ToBase64String(v).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        static string B64(byte[] v) => System.Buffers.Text.Base64Url.EncodeToString(v);
         var (x, y) = (B64(q.X!), B64(q.Y!));
         var kid = B64(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes($"{{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"{x}\",\"y\":\"{y}\"}}")));
         return new() { ["kty"] = "EC", ["crv"] = "P-256", ["x"] = x, ["y"] = y, ["kid"] = kid, ["use"] = "sig", ["alg"] = "ES256" };

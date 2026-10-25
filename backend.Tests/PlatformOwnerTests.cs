@@ -129,7 +129,7 @@ public sealed class PlatformOwnerTests : IAsyncLifetime
     [InlineData("POST /api/contacts/{id:guid}/patient")]
     [InlineData("GET /api/hospital/conversations/{id:guid}/clinical/{section}")][InlineData("GET /api/hospital/conversations/{id:guid}/clinical/{section}/{documentId:guid}")]
     [InlineData("GET /api/hospital/agenda")][InlineData("GET /api/hospital/availability")][InlineData("POST /api/hospital/appointments")]
-    [InlineData("GET /api/hospital/contacts/{id:guid}/appointments")][InlineData("GET /api/hospital/contacts/{id:guid}/prescriptions")]
+    [InlineData("GET /api/hospital/contacts/{id:guid}/appointments")]
     // AC 12: the connection is operable, the patient search is not.
     [InlineData("POST /api/hospital/contacts/{id:guid}/patients/search")]
     // AC 14: the agent is switched on in settings; the owner reaches neither settings nor the agent.

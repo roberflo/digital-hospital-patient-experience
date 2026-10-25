@@ -5,20 +5,12 @@ namespace Recepcion;
 
 public static class HospitalEndpoints
 {
-    static IResult LegacyClinical(CurrentUser u)
-    {
-        if (u.Role != "doctor") throw new AccessDeniedException();
-        return Results.Json(new { title = "Consulta expediente y recetas desde una conversación asignada." }, statusCode: 410);
-    }
     public static void MapHospital(this WebApplication app)
     {
         var api = app.MapGroup("/api/hospital").RequireAuthorization();
         api.MapGet("/contacts/{id:guid}/appointments", ContactAppointments);
         api.MapGet("/agenda", Agenda);
         api.MapGet("/availability", Availability);
-        // Staff reads moved to the conversation-scoped doctor's identity. Bot delivery stays private.
-        api.MapGet("/contacts/{id:guid}/prescriptions", (CurrentUser u) => LegacyClinical(u));
-        api.MapGet("/contacts/{id:guid}/prescriptions/{prescriptionId:guid}", (CurrentUser u) => LegacyClinical(u));
         api.MapGet("/contacts/{id:guid}/visit-kind", VisitKind);
         api.MapGet("/contacts/{id:guid}/attendance", ContactAttendance);
         api.MapPost("/appointments", ChangeAppointment);

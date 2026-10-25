@@ -163,6 +163,11 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
         // The default is the agent's case: the patient asked over WhatsApp. Staff state theirs.
         var cancellation = AppointmentCancellation.From(reason);
         await VerifyAppointmentAsync(tenantId, patientId, senderPhone, appointmentId, ct);
+        await PostCancelAsync(tenantId, appointmentId, cancellation, ct);
+    }
+
+    private async Task PostCancelAsync(Guid tenantId, Guid appointmentId, AppointmentCancellation cancellation, CancellationToken ct)
+    {
         using var response = await SendAsync(tenantId, HttpMethod.Post,
             $"v1/agenda/{appointmentId:D}/cancel", new { reason = cancellation.Reason, cancelledByPatient = cancellation.CancelledByPatient }, ct);
     }
@@ -388,7 +393,7 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
     /// <summary>RFC 7523 client authentication: ES256, iss = sub = the client, a one-minute life and a fresh jti.</summary>
     internal static string ClientAssertion(ECDsa key, string clientId, string audience)
     {
-        static string B64(byte[] value) => Convert.ToBase64String(value).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        static string B64(byte[] value) => System.Buffers.Text.Base64Url.EncodeToString(value);
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var signed = B64(JsonSerializer.SerializeToUtf8Bytes(new { alg = "ES256", typ = "JWT", kid = HospitalConnectionStore.Jwk(key)["kid"] }))
             + "." + B64(JsonSerializer.SerializeToUtf8Bytes(new { iss = clientId, sub = clientId, aud = audience, jti = Guid.NewGuid().ToString("N"), iat = now, exp = now + 60 }));
@@ -404,9 +409,7 @@ public sealed partial class HospitalClient(HttpClient http, IConfiguration confi
         {
             var segments = token.Split('.');
             if (segments.Length != 3) throw new FormatException();
-            var payload = segments[1].Replace('-', '+').Replace('_', '/');
-            payload = payload.PadRight((payload.Length + 3) / 4 * 4, '=');
-            using var document = JsonDocument.Parse(Convert.FromBase64String(payload));
+            using var document = JsonDocument.Parse(System.Buffers.Text.Base64Url.DecodeFromChars(segments[1]));
             var root = document.RootElement;
             if (!Guid.TryParse(root.GetProperty("tenant_id").GetString(), out var claimTenant) || claimTenant != tenantId
                 || root.GetProperty("exp").GetInt64() <= DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 10)

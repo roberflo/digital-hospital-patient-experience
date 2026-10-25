@@ -67,7 +67,6 @@ check(status==200,'Create followup')
 check(call('/api/opportunities/'+o['id'],'PATCH',{'stage':'scheduled'},a)[0]==200,'Move opportunity stage')
 check(call('/api/opportunities/'+o['id'],'PATCH',{'stage':'bogus'},a)[0]==400,'Invalid stage rejected')
 check(call('/api/activities','POST',{'body':'Nota sintética para prueba','contactId':c['id']},a)[0]==200,'Create timeline note')
-check(call('/api/hospital/contacts/'+c['id']+'/prescriptions',token=agent)[0]==403,'Internal clinical content restricted to doctor')
 
 wid='wamid.test.'+suffix
 p={'phone_number_id':'demo','message':{'id':wid,'timestamp':str(int(time.time())),'from':phone,'type':'text','text':{'body':'Consulta sintética de integración'},'kapso':{'direction':'inbound','status':'received','origin':'cloud_api','content':'Consulta sintética de integración'}},'conversation':{'id':'conv-'+suffix,'phone_number':phone,'contact_name':'Paciente Sintético '+suffix}}
@@ -125,7 +124,6 @@ reopened=call('/api/conversations?contactId='+c['id'],token=a)[1][0]['conversati
 check(reopened['state']=='open' and reopened['status']=='human' and reopened['snoozedUntil'] is None,'New message reopens for human attention')
 check(call('/api/contacts/'+c['id']+'/profile','PATCH',{'name':c['name'],'email':'crm@example.invalid','tags':'Seguimiento','lifecycleStage':'active','companyId':None},a)[0]==400,'Manual profile edit cannot manufacture a customer')
 check(call('/api/contacts/'+c['id']+'/profile','PATCH',{'name':c['name'],'email':'crm@example.invalid','tags':'Seguimiento','lifecycleStage':'inactive','companyId':None},a)[0]==200,'Update CRM contact profile from inbox')
-check(call('/api/companies','POST',{'name':'Forbidden local master'},a)[0]==409,'Company master is managed only by Hospital')
 check(call('/api/commercial/contacts/'+c['id']+'/sync','POST',{},doctor)[0]==403,'Doctor cannot convert CRM customer through manual sync')
 check(call('/api/commercial/contacts/'+c['id']+'/link','POST',{'customerId':str(uuid.uuid4())},doctor)[0]==403,'Doctor cannot link CRM commercial customer')
 status,followup=call('/api/opportunities','POST',{'title':'Seguimiento desde WhatsApp','contactId':c['id'],'conversationId':cid,'value':0,'stage':'new'},a)
