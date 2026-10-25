@@ -260,7 +260,7 @@ public sealed class HospitalStaffTokenTests : IAsyncLifetime
         await Assert.ThrowsAsync<HospitalIntegrationException>(() => Call(App(hospital), "POST /api/commercial/opportunities/{id:guid}/purchase", "", new PurchaseConfirmation("v1", true, "receipt"), "agent", id: opportunity!.Id));
 
         await using var db = h.NewDb(h.Scope);
-        Assert.Null((await db.Opportunities.SingleAsync(o => o.Id == opportunity.Id)).HospitalPurchaseRequest);
+        Assert.Null((await db.Opportunities.SingleAsync(o => o.Id == opportunity!.Id)).HospitalPurchaseRequest);
     }
 
     // Criterio 26: the contact form sends the stored phone back as it was (digits, no «+»). Saved unchanged, a wa_id of another country or an

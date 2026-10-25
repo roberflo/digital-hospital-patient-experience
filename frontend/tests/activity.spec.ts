@@ -153,3 +153,47 @@ test('activity conversation link opens its CRM thread and can return to the full
   await expect.poll(() => page.locator('.conversation-card').count()).toBeGreaterThan(1);
   expect(new URL(page.url()).searchParams.has('conversationId')).toBe(false);
 });
+
+// docs/reception-agent.md, criterio 82: what Recepción resolved, also when the agent attended no one.
+test('the value card shows what reminders resolved and the period can be chosen', async ({
+  page,
+}) => {
+  const asked: string[] = [];
+  await page.route('**/api/crm/activity-feed?*', (route) =>
+    route.fulfill({
+      json: { items: [], total: 0, page: 1, pageSize: 30, careCounts: {} },
+    }),
+  );
+  await page.route('**/api/crm/agent-metrics?*', (route) => {
+    asked.push(new URL(route.request().url()).searchParams.get('days')!);
+    return route.fulfill({
+      json: {
+        days: Number(asked.at(-1)),
+        attended: 0,
+        withoutPerson: 0,
+        handedOver: 0,
+        appointments: 0,
+        registrations: 0,
+        prescriptions: 0,
+        personOffers: 0,
+        withheld: 0,
+        providerFailures: 0,
+        waitingNotices: 0,
+        remindersSent: 5,
+        remindersConfirmed: 3,
+        changeRequests: 1,
+        firstReplyMinutes: 75,
+      },
+    });
+  });
+  await login(page);
+  const card = page.getByRole('region', { name: /Lo que Recepción resolvió/ });
+  await expect(card).toBeVisible();
+  await expect(card.getByText('citas confirmadas desde el recordatorio')).toBeVisible();
+  await expect(card.getByText('3 de 5')).toBeVisible();
+  await expect(card.getByText('pidieron cambiar su cita a tiempo')).toBeVisible();
+  await expect(card.getByText('1 h 15 min')).toBeVisible();
+  await card.getByLabel('Periodo').selectOption('30');
+  await expect.poll(() => asked.at(-1)).toBe('30');
+  await expect(page.getByRole('region', { name: /últimos 30 días/ })).toBeVisible();
+});

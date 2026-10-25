@@ -354,6 +354,18 @@ Límites:
 - `urgencia-119` (señal pasada y resuelta que pide cita) es variable con `gpt-6-luna`: la guarda nunca deriva, pero el modelo a veces enseña la lista de horarios o llama a `handoff` en vez de proponer.
 - Si el agente habló en medio («me duele» / «¿qué te duele?» / «el pecho»), la guarda no une los mensajes y la decisión queda en el modelo.
 
+## Valor para el hospital · 2026-10-25
+
+Hasta hoy la medición (criterios 66–67) contaba sólo lo que hizo el agente, y se escondía si el agente no atendió a nadie: un hospital que sólo usa recordatorios no veía nada. La persona administradora necesita ver, en una sola pantalla, lo que Recepción le resolvió: citas confirmadas, cambios pedidos a tiempo y qué tan rápido se responde.
+
+| # | Criterio | Cómo se prueba |
+|---|---|---|
+| 80 | `GET /api/agent-metrics` cuenta además, del periodo: recordatorios enviados (`AppointmentReminders` con `AttemptedAt` en el periodo y estado `sent` o `confirmed`), confirmados desde el recordatorio (de ésos, `confirmed`) y pedidos de cambio (`reminder_change_request` del rastro). Sólo este hospital. | `AgentMetricsTests.CountsWhatRemindersResolvedInThePeriodForThisHospital`. |
+| 81 | `firstReplyMinutes`: mediana, sobre las conversaciones con un mensaje del paciente en el periodo, de los minutos entre el primero de ellos y el primer mensaje posterior del agente o de una persona (`agent`/`human`). Plantillas, avisos del sistema e historial importado (`IsHistory`) no cuentan. Sin ninguna conversación respondida es `null`. | `AgentMetricsTests.FirstReplyIsTheMedianMinutesToTheFirstAgentOrPersonMessage`. |
+| 82 | La tarjeta de Actividad se muestra si hubo cualquier cifra en el periodo (no sólo atención del agente), con las de recordatorios y la mediana de respuesta, y deja elegir 7, 30 o 90 días. | `tests/activity.spec.ts`: con el agente en cero y recordatorios confirmados, la tarjeta aparece; elegir 30 días pide `days=30`. |
+
+Anti-criterios: convertir cifras en dinero o en horas ahorradas sin los datos del dueño (asumida: sólo conteos hasta que el dueño dé minutos por conversación y valor por cita); leer cuerpos de mensajes o actividades para medir.
+
 ## Límites conocidos
 
 - Ninguna guarda cubre una dirección o un teléfono inventados: las guardas ven dosis, horas, enlaces y dinero, no números de teléfono ni calles. Que el agente diga sólo lo que devuelve `hospital_contact` o la guía depende del prompt y de la eval `info-120`.

@@ -154,7 +154,10 @@ test('an installation the operator has not configured is blocked, by setting nam
   // The agent switched on without a model provider or automatic sending is not done.
   const agent = agentStep(true, { data: { ...ready, agentModel: false, autoSend: false } });
   assert.equal(agent.state, 'blocked');
-  assert.deepEqual(agent.missing, ['NVIDIA_API_KEY, OPENAI_API_KEY+OPENAI_MODEL o ANTHROPIC_API_KEY', 'SEND_ENABLED=true']);
+  assert.deepEqual(agent.missing, [
+    'NVIDIA_API_KEY, OPENAI_API_KEY+OPENAI_MODEL o ANTHROPIC_API_KEY',
+    'SEND_ENABLED=true',
+  ]);
   assert.equal(agentStep(false, installation).state, 'pending');
   assert.equal(agentStep(true, installation).state, 'done');
   assert.equal(agentStep(true, {}).state, 'loading');
