@@ -265,6 +265,10 @@ function chat(name: string, conversation: Record<string, unknown> = {}) {
     unreadCount: 0,
     contact,
     channel,
+    // As GET /api/conversations sends them (InboxRow): present, null when nothing applies.
+    sendBlock: null,
+    agentBlock: null,
+    handoff: null,
     conversation: {
       id: crypto.randomUUID(),
       contactId: contact.id,
@@ -277,6 +281,7 @@ function chat(name: string, conversation: Record<string, unknown> = {}) {
       summary: '',
       lastMessage: 'Hola',
       updatedAt: '2026-10-17T15:00:00Z',
+      lastInboundAt: '2026-10-17T15:00:00Z',
       ...conversation,
     },
   };
@@ -431,18 +436,12 @@ test('MR-18 the attention mode travels as status=; an empty filtered list offers
     'true',
   );
   await expect(page.getByText('Todo al día', { exact: true })).toBeVisible();
-  await page.unroute('**/api/crm/conversations?*');
-  await serveInbox(
-    page,
-    Array.from({ length: 100 }, (_, i) => chat('Paciente ' + i)),
-  );
-  // The full page has to be on screen before searching it, not the previous empty poll.
-  await page.getByRole('button', { name: 'Actualizar conversaciones' }).click();
-  await expect(page.getByRole('heading', { name: 'Conversaciones 100' })).toBeVisible();
+  // MR-53 supersedes the «solo revisa las 100» notice: the search itself runs on the server.
   await page.getByLabel('Buscar', { exact: true }).fill('Paciente 7');
-  await expect(
-    page.getByText('La búsqueda por nombre solo revisa las 100 conversaciones de esta página.'),
-  ).toBeVisible();
+  await expect
+    .poll(() => urls.some((u) => new URL(u).searchParams.get('q') === 'Paciente 7'))
+    .toBe(true);
+  await expect(page.getByText(/solo revisa las 100 conversaciones/)).toHaveCount(0);
 });
 
 test('MR-19 bulk assignment has no default target, asks before removing the owner and keeps the selection on 409', async ({

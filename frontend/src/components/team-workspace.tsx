@@ -218,7 +218,8 @@ export function TeamWorkspace({
           <Item variant="muted">
             <ItemContent>
               <ItemTitle>
-                <strong>{data?.unassigned ?? '—'}</strong> conversaciones activas sin responsable
+                <strong>{data?.unassigned ?? '—'}</strong> conversaciones sin resolver y sin
+                responsable (incluye las del agente)
               </ItemTitle>
             </ItemContent>
             <ItemActions>

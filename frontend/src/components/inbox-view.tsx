@@ -1,7 +1,14 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import useSWR, { useSWRConfig } from 'swr';
-import { UserRound, ShieldCheck, MessageCircle, RefreshCw, ListFilter } from 'lucide-react';
+import {
+  UserRound,
+  ShieldCheck,
+  MessageCircle,
+  RefreshCw,
+  ListFilter,
+  Forward,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from './ui/badge';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible';
@@ -17,7 +24,6 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from './ui/empty';
-import { Input } from './ui/input';
 import { Item, ItemContent, ItemDescription, ItemMedia, ItemTitle } from './ui/item';
 import { Label } from './ui/label';
 import { NativeSelect, NativeSelectOption } from './ui/native-select';
@@ -33,6 +39,7 @@ import {
   dayLabel,
   PersonAvatar,
   StatusBadge,
+  attention,
   EmptyState,
   ErrorBox,
   Loading,
@@ -111,8 +118,16 @@ export function InboxView({
     () => setChecked({}),
     [state, assignment, channelId, priority, label, filter, page, search],
   );
+  // MR-53: the search runs on the server, once the person pauses typing.
+  const [q, setQ] = useState('');
+  useEffect(() => {
+    const wait = setTimeout(() => setQ(search.trim()), 300);
+    return () => clearTimeout(wait);
+  }, [search]);
+  useEffect(() => setPage(1), [q]);
   const filters = { state, assignment, channelId, priority, label, mode: filter };
   const query = inboxQuery(filters, page);
+  if (q) query.set('q', q);
   if (linkedConversation) query.set('conversationId', linkedConversation);
   if (linkedPhone) query.set('phone', linkedPhone);
   if (linkedNumber) query.set('phoneNumberId', linkedNumber);
@@ -122,10 +137,24 @@ export function InboxView({
     mutate,
   } = useSWR<Chat[]>('/conversations?' + query, fetcher, { refreshInterval: 5000 });
   const [selected, setSelected] = useState<string | null>(null);
-  const filtered = chats?.filter(
-    (c) =>
-      c.contact.name.toLowerCase().includes(search.toLowerCase()) ||
-      c.contact.phone.includes(search),
+  const filtered = chats;
+  const { data: labelOptions } = useSWR<string[]>('/conversations/labels', fetcher);
+  // MR-54: the open conversation is in the address; a reload opens it again (read above, as a link).
+  function select(id: string | null) {
+    setSelected(id);
+    const url = new URL(location.href);
+    if (id) url.searchParams.set('conversationId', id);
+    else url.searchParams.delete('conversationId');
+    history.replaceState(null, '', url.pathname + url.search);
+  }
+  // MR-50: a conversation that leaves the filtered list (its state changed) stays open, read on its own.
+  const inList = chats?.find((c) => c.conversation.id === selected);
+  const { data: selectedRows } = useSWR<Chat[]>(
+    selected && chats && !inList
+      ? '/conversations?' + new URLSearchParams({ assignment: 'all', conversationId: selected })
+      : null,
+    fetcher,
+    { refreshInterval: 5000 },
   );
   function clearFilters() {
     setState(defaultInboxFilters.state);
@@ -136,9 +165,16 @@ export function InboxView({
     setFilter(defaultInboxFilters.mode);
     onSearch('');
   }
+  // While that read is on its way the chat keeps what it last showed, instead of closing and reopening.
+  const shown = useRef<Chat | undefined>(undefined);
   const active =
-    chats?.find((c) => c.conversation.id === selected) ??
+    inList ??
+    selectedRows?.find((c) => c.conversation.id === selected) ??
+    (shown.current?.conversation.id === selected ? shown.current : undefined) ??
     (linkedPhone && chats?.length === 1 ? chats[0] : undefined);
+  useEffect(() => {
+    shown.current = active;
+  });
   async function assignSelection() {
     setAssigning(true);
     try {
@@ -177,7 +213,7 @@ export function InboxView({
       <Card className="inbox-layout min-h-0 flex-1 flex-row gap-0 overflow-hidden py-0">
         <section
           className={cn(
-            'w-full shrink-0 flex-col overflow-y-auto lg:flex lg:w-72 lg:overflow-hidden lg:border-r 2xl:w-80',
+            'w-full shrink-0 flex-col overflow-y-auto lg:flex lg:w-80 lg:overflow-hidden lg:border-r 2xl:w-96',
             active ? 'hidden' : 'flex',
           )}
         >
@@ -213,7 +249,9 @@ export function InboxView({
                 setLabel(f.label);
                 setFilter(f.mode);
                 setPage(1);
-                setSelected(null);
+                select(null);
+                // MR-57: filters a view applies are shown, not hidden behind «Más filtros».
+                if (f.channelId || f.priority || f.label) setMoreFilters(true);
               }}
             />
             <div className="grid grid-cols-2 gap-2 *:w-full *:min-w-0">
@@ -249,35 +287,38 @@ export function InboxView({
               onOpenChange={setMoreFilters}
               className="flex flex-col gap-2"
             >
-              <div className="flex items-center gap-2">
-                <ButtonGroup className="min-w-0 flex-1 *:flex-1">
-                  {[
-                    ['all', 'Todas'],
-                    ['human', 'Personas'],
-                    ['agent', 'Agente'],
-                  ].map(([id, name]) => (
-                    <Button
-                      variant={filter === id ? 'secondary' : 'outline'}
-                      size="sm"
-                      aria-pressed={filter === id}
-                      key={id}
-                      onClick={() => setFilter(id)}
-                    >
-                      {name}
-                    </Button>
-                  ))}
-                </ButtonGroup>
-                <CollapsibleTrigger asChild>
+              {/* MR-55: who attends has its own row; nothing covers «Agente». */}
+              <ButtonGroup className="w-full *:flex-1" aria-label="Quién atiende">
+                {[
+                  ['all', 'Todas'],
+                  ['human', 'Personas'],
+                  ['agent', 'Agente'],
+                ].map(([id, name]) => (
                   <Button
-                    variant={moreFilters ? 'secondary' : 'outline'}
+                    variant={filter === id ? 'secondary' : 'outline'}
                     size="sm"
-                    aria-label="Más filtros"
+                    aria-pressed={filter === id}
+                    key={id}
+                    onClick={() => setFilter(id)}
                   >
-                    <ListFilter />
-                    {!!hiddenFilters && <Badge variant="secondary">{hiddenFilters}</Badge>}
+                    {name}
                   </Button>
-                </CollapsibleTrigger>
-              </div>
+                ))}
+              </ButtonGroup>
+              <CollapsibleTrigger asChild>
+                <Button
+                  variant={moreFilters ? 'secondary' : 'ghost'}
+                  size="sm"
+                  className="self-start"
+                  aria-label={
+                    hiddenFilters ? `Más filtros, ${hiddenFilters} aplicados` : 'Más filtros'
+                  }
+                >
+                  <ListFilter />
+                  Más filtros
+                  {!!hiddenFilters && <Badge variant="secondary">{hiddenFilters}</Badge>}
+                </Button>
+              </CollapsibleTrigger>
               <CollapsibleContent className="grid grid-cols-2 gap-2 *:w-full *:min-w-0">
                 <NativeSelect
                   aria-label="Filtrar por canal"
@@ -303,21 +344,25 @@ export function InboxView({
                     </NativeSelectOption>
                   ))}
                 </NativeSelect>
-                <Input
+                <NativeSelect
                   className="col-span-2"
                   aria-label="Filtrar por etiqueta"
-                  placeholder="Etiqueta de conversación"
                   value={label}
                   onChange={(e) => setLabel(e.target.value)}
-                  maxLength={40}
-                />
+                >
+                  <NativeSelectOption value="">Todas las etiquetas</NativeSelectOption>
+                  {/* A saved view can name a label no conversation carries any more: it stays choosable. */}
+                  {[...new Set([...(labelOptions ?? []), ...(label ? [label] : [])])].map((l) => (
+                    <NativeSelectOption key={l} value={l}>
+                      {l}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
               </CollapsibleContent>
             </Collapsible>
             {(linkedPhone || linkedConversation) && (
               <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground">
-                {linkedConversation
-                  ? 'Conversación desde Actividad'
-                  : 'Conversación desde WhatsApp'}{' '}
+                {linkedConversation ? 'Solo esta conversación' : 'Conversación desde WhatsApp'}{' '}
                 <Button variant="link" size="sm" onClick={clearLinkedConversation}>
                   Ver todas
                 </Button>
@@ -412,7 +457,7 @@ export function InboxView({
                 Las conversaciones entrantes aparecerán aquí.
               </EmptyState>
             ) : (
-              filtered.map(({ conversation: c, contact, channel, unreadCount }) => (
+              filtered.map(({ conversation: c, contact, channel, unreadCount, handoff }) => (
                 <div
                   key={c.id}
                   className={cn(
@@ -442,7 +487,7 @@ export function InboxView({
                   >
                     <button
                       aria-current={active?.conversation.id === c.id ? 'true' : undefined}
-                      onClick={() => setSelected(c.id)}
+                      onClick={() => select(c.id)}
                     >
                       <ItemMedia>
                         <PersonAvatar name={contact.name} />
@@ -458,13 +503,6 @@ export function InboxView({
                                 {unreadCount}
                               </Badge>
                             )}
-                            {c.priority !== 'normal' && (
-                              <Badge
-                                variant={c.priority === 'urgent' ? 'destructive' : 'secondary'}
-                              >
-                                {priorities.find(([v]) => v === c.priority)?.[1]}
-                              </Badge>
-                            )}
                           </strong>
                           <time
                             // When the patient last wrote: who has waited longest, not when someone last touched it.
@@ -476,14 +514,34 @@ export function InboxView({
                               : dayLabel(c.lastInboundAt ?? c.updatedAt, me.tenant.timeZone)}
                           </time>
                         </ItemTitle>
-                        <ItemDescription className="line-clamp-1">
-                          {c.lastMessage || c.summary || 'Nueva conversación de WhatsApp'}
-                        </ItemDescription>
+                        {handoff ? (
+                          // MR-47: why the agent passed it on, until a person answers.
+                          <ItemDescription className="line-clamp-2" title={handoff.reason}>
+                            Motivo: {handoff.reason}
+                          </ItemDescription>
+                        ) : (
+                          <ItemDescription className="line-clamp-1">
+                            {c.lastMessage || c.summary || 'Nueva conversación de WhatsApp'}
+                          </ItemDescription>
+                        )}
                         <div className="flex flex-wrap items-center gap-1.5">
+                          {/* MR-55: priority leads the badges, so the name keeps the title row. */}
+                          {c.priority !== 'normal' && (
+                            <Badge variant={c.priority === 'urgent' ? 'destructive' : 'secondary'}>
+                              {priorities.find(([v]) => v === c.priority)?.[1]}
+                            </Badge>
+                          )}
                           <Badge variant="outline">
                             {conversationStates.find(([v]) => v === c.state)?.[1]}
                           </Badge>
-                          <StatusBadge value={c.status} />
+                          {handoff && (
+                            <Badge variant="warning">
+                              <Forward />
+                              Transferida
+                            </Badge>
+                          )}
+                          <StatusBadge value={attention(c.status, me.tenant.agentEnabled)} />
+                          <CardLabels labels={c.labels} />
                         </div>
                         <div className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
                           <UserRound className="size-3 shrink-0" />
@@ -501,11 +559,6 @@ export function InboxView({
               ))
             )}
           </div>
-          {!!search.trim() && chats?.length === 100 && (
-            <p className="border-t px-3 pt-2 text-xs text-muted-foreground" role="status">
-              La búsqueda por nombre solo revisa las 100 conversaciones de esta página.
-            </p>
-          )}
           <div className="flex items-center justify-between gap-2 border-t p-3">
             <Button
               variant="outline"
@@ -532,7 +585,7 @@ export function InboxView({
             chat={active}
             me={me}
             onClose={() => {
-              setSelected(null);
+              select(null);
               clearLinkedConversation();
             }}
             refresh={() => mutate()}
@@ -562,6 +615,33 @@ export function InboxView({
           </section>
         )}
       </Card>
+    </>
+  );
+}
+/** MR-52: a card names up to two labels; the rest are counted. */
+function CardLabels({ labels }: { labels: string }) {
+  const all = labels
+    .split(',')
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (!all.length) return null;
+  return (
+    <>
+      {all.slice(0, 2).map((l) => (
+        <Badge key={l} variant="outline" className="max-w-24 font-normal text-muted-foreground">
+          <span className="truncate">{l}</span>
+        </Badge>
+      ))}
+      {all.length > 2 && (
+        <Badge
+          variant="outline"
+          className="font-normal text-muted-foreground"
+          title={all.slice(2).join(', ')}
+          aria-label={`${all.length - 2} etiquetas más: ${all.slice(2).join(', ')}`}
+        >
+          +{all.length - 2}
+        </Badge>
+      )}
     </>
   );
 }

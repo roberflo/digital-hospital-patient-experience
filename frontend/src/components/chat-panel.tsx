@@ -1,6 +1,7 @@
 'use client';
 import {
   useEffect,
+  useId,
   useState,
   useRef,
   useSyncExternalStore,
@@ -23,9 +24,11 @@ import {
   FileText,
   ArrowLeft,
   ExternalLink,
+  Forward,
+  MessageSquareOff,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { Alert, AlertDescription } from './ui/alert';
+import { Alert, AlertDescription, AlertTitle } from './ui/alert';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { InputGroup, InputGroupAddon, InputGroupInput } from './ui/input-group';
@@ -51,6 +54,7 @@ import {
   notSent,
   PersonAvatar,
   StatusBadge,
+  attention,
   ErrorBox,
   ActivityTimeline,
 } from './workspace-shared';
@@ -99,6 +103,22 @@ export function ChatPanel({
   // One key per chosen file: retrying after a lost answer never sends it twice.
   const [file, setFile] = useState<{ file: File; key: string } | null>(null);
   const agentOff = !me.tenant.agentEnabled && c.status !== 'closed';
+  // MR-48/49: what the server would refuse, said before anyone types or confirms.
+  const blocked = chat.sendBlock;
+  const agentBlocked = c.status !== 'agent' && !agentOff ? chat.agentBlock : null;
+  const blockId = useId();
+  const draft = useRef<HTMLTextAreaElement>(null);
+  /** MR-59: a saved reply goes where the cursor is; what was written stays. */
+  function insert(text: string) {
+    const el = draft.current;
+    const start = el?.selectionStart ?? body.length;
+    const end = el?.selectionEnd ?? body.length;
+    setBody(body.slice(0, start) + text + body.slice(end));
+    requestAnimationFrame(() => {
+      el?.focus();
+      el?.setSelectionRange(start + text.length, start + text.length);
+    });
+  }
   // Wide screens keep the patient context as a third column; narrower ones open it on demand.
   const wide = useMediaQuery('(min-width: 1280px)');
   const [findMessages, setFindMessages] = useState(false);
@@ -194,6 +214,20 @@ export function ChatPanel({
         {chat.contact.tags && <Badge variant="secondary">{chat.contact.tags}</Badge>}
       </div>
       <Separator />
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center justify-between gap-2">
+          <h4 className="text-sm font-medium">Expediente del hospital</h4>
+          <Link2 className="size-4 text-muted-foreground" />
+        </div>
+        <p className="text-sm text-muted-foreground">
+          {chat.contact.patientId
+            ? 'Paciente vinculado. El teléfono se verifica en cada consulta.'
+            : 'Vincula el expediente para consultar agenda y recetas.'}
+        </p>
+        <Button variant="outline" size="sm" className="w-full" onClick={() => setPatient(true)}>
+          {chat.contact.patientId ? 'Ver paciente vinculado' : 'Vincular paciente'}
+        </Button>
+      </div>
       <WorkflowControls
         chat={chat}
         onChange={() => {
@@ -210,20 +244,6 @@ export function ChatPanel({
           refreshActivities();
         }}
       />
-      <div className="flex flex-col gap-2">
-        <div className="flex items-center justify-between gap-2">
-          <h4 className="text-sm font-medium">Expediente del hospital</h4>
-          <Link2 className="size-4 text-muted-foreground" />
-        </div>
-        <p className="text-sm text-muted-foreground">
-          {chat.contact.patientId
-            ? 'Paciente vinculado. El teléfono se verifica en cada consulta.'
-            : 'Vincula el expediente para consultar agenda y recetas.'}
-        </p>
-        <Button variant="outline" size="sm" className="w-full" onClick={() => setPatient(true)}>
-          {chat.contact.patientId ? 'Ver paciente vinculado' : 'Vincular paciente'}
-        </Button>
-      </div>
       <div className="flex flex-col gap-2">
         <div className="flex items-center justify-between gap-2">
           <h4 className="text-sm font-medium">Historial del cliente</h4>
@@ -246,7 +266,7 @@ export function ChatPanel({
   );
   return (
     <>
-      <section className="flex min-w-0 flex-1 flex-col overflow-hidden">
+      <section data-chat-open className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <div className="flex items-center gap-3 border-b p-3">
           <Button
             variant="ghost"
@@ -258,16 +278,17 @@ export function ChatPanel({
             <ArrowLeft />
           </Button>
           <PersonAvatar name={chat.contact.name} />
-          <div className="flex min-w-0 flex-col">
+          <div className="flex min-w-0 flex-col gap-0.5">
             <h2 className="truncate text-sm font-semibold">{chat.contact.name}</h2>
-            <small className="truncate text-xs text-muted-foreground">
-              {whatsAppPhone(chat.contact.phone)}
-            </small>
+            {/* MR-56: who attends stays visible on a phone too. */}
+            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+              <small className="text-xs whitespace-nowrap text-muted-foreground">
+                {whatsAppPhone(chat.contact.phone)}
+              </small>
+              <StatusBadge value={attention(c.status, me.tenant.agentEnabled)} />
+            </div>
           </div>
           <div className="ml-auto flex shrink-0 items-center gap-1">
-            <span className="hidden sm:inline-flex">
-              <StatusBadge value={c.status} />
-            </span>
             <Button
               variant={findMessages ? 'secondary' : 'ghost'}
               size="icon-sm"
@@ -286,14 +307,17 @@ export function ChatPanel({
             >
               <Paperclip />
             </Button>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Ver información del paciente"
-              onClick={() => setDetails(!details)}
-            >
-              <UserRound />
-            </Button>
+            {/* MR-58: from 1280 px the patient context is the third column, always in view. */}
+            {!wide && (
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Ver información del paciente"
+                onClick={() => setDetails(!details)}
+              >
+                <UserRound />
+              </Button>
+            )}
           </div>
         </div>
         {/* A phone scrolls the assignment, actions and thread as one; the reply box stays below. */}
@@ -302,6 +326,13 @@ export function ChatPanel({
           onScroll={follow}
         >
           <div className="flex shrink-0 flex-col gap-3 border-b p-3">
+            {chat.handoff && (
+              <Alert>
+                <Forward />
+                <AlertTitle>Transferida por el agente</AlertTitle>
+                <AlertDescription>{chat.handoff.reason}</AlertDescription>
+              </Alert>
+            )}
             <AssignmentControl
               conversation={c}
               me={me}
@@ -314,20 +345,22 @@ export function ChatPanel({
               <Sparkles />
               <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
                 <span>
-                  {agentOff
-                    ? me.role === 'admin'
-                      ? 'El agente está apagado para todo el hospital. Actívalo en Configuración.'
-                      : 'El agente está apagado para todo el hospital. Pide al administrador que lo active.'
-                    : c.status === 'agent'
-                      ? 'El agente está atendiendo esta conversación.'
-                      : c.status === 'closed'
-                        ? 'La conversación está cerrada.'
-                        : 'Tu equipo está a cargo. El agente está en pausa.'}
+                  {agentBlocked
+                    ? `El agente no podría responder: ${agentBlocked.reason}`
+                    : agentOff
+                      ? me.role === 'admin'
+                        ? 'El agente está apagado para todo el hospital. Actívalo en Configuración.'
+                        : 'El agente está apagado para todo el hospital. Pide al administrador que lo active.'
+                      : c.status === 'agent'
+                        ? 'El agente está atendiendo esta conversación.'
+                        : c.status === 'closed'
+                          ? 'La conversación está cerrada.'
+                          : 'Tu equipo está a cargo. El agente está en pausa.'}
                 </span>
                 <ConfirmAction
                   ask={c.status !== 'agent'}
                   title="¿Activar el agente en esta conversación?"
-                  description="El agente responderá al paciente por WhatsApp. Tu equipo puede retomarla en cualquier momento."
+                  description="La conversación quedará sin responsable y el agente responderá los próximos mensajes del paciente por WhatsApp. Tu equipo puede retomarla en cualquier momento."
                   action="Activar agente"
                   onConfirm={() =>
                     action(
@@ -341,7 +374,8 @@ export function ChatPanel({
                     size="sm"
                     disabled={
                       (!managesTeam(me) && !!c.assignedTo && c.assignedTo !== me.subject) ||
-                      (agentOff && c.status !== 'agent')
+                      (agentOff && c.status !== 'agent') ||
+                      !!agentBlocked
                     }
                   >
                     {c.status === 'agent' ? 'Tomar conversación' : 'Activar agente'}
@@ -477,6 +511,17 @@ export function ChatPanel({
           </div>
         </div>
         <form className="flex flex-col gap-2 border-t p-3" onSubmit={send}>
+          {blocked && (
+            <Alert id={blockId} role="status">
+              <MessageSquareOff />
+              <AlertTitle>
+                {blocked.code === 'window'
+                  ? 'Solo se pueden enviar plantillas aprobadas'
+                  : 'No se pueden enviar mensajes'}
+              </AlertTitle>
+              <AlertDescription>{blocked.reason}</AlertDescription>
+            </Alert>
+          )}
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="flex items-center gap-1 text-xs text-muted-foreground">
               <UserRound className="size-3" /> Respuesta del equipo
@@ -485,7 +530,7 @@ export function ChatPanel({
               <FileText /> Nota interna
             </Button>
           </div>
-          <SavedReplies me={me} onInsert={(text) => setBody(text)} />
+          <SavedReplies me={me} onInsert={insert} />
           {file && (
             <div className="flex flex-wrap items-center gap-2 rounded-md border p-2 text-sm">
               <Paperclip className="size-4 shrink-0 text-muted-foreground" />
@@ -505,7 +550,8 @@ export function ChatPanel({
                 type="button"
                 size="sm"
                 className="max-w-full"
-                disabled={busy || !canReply}
+                disabled={busy || !canReply || !!blocked}
+                aria-describedby={blocked ? blockId : undefined}
                 onClick={sendFile}
               >
                 {busy ? <Spinner /> : <Send />}
@@ -514,6 +560,7 @@ export function ChatPanel({
             </div>
           )}
           <Textarea
+            ref={draft}
             aria-label="Mensaje al paciente"
             rows={2}
             placeholder="Escribe un mensaje para el paciente…"
@@ -527,16 +574,16 @@ export function ChatPanel({
               asChild
               variant="ghost"
               size="icon-sm"
-              className={cn((busy || !canReply) && 'pointer-events-none opacity-50')}
+              className={cn((busy || !canReply || !!blocked) && 'pointer-events-none opacity-50')}
             >
-              <label title="Adjuntar archivo" aria-disabled={busy || !canReply}>
+              <label title="Adjuntar archivo" aria-disabled={busy || !canReply || !!blocked}>
                 <Paperclip />
                 <span className="sr-only">Adjuntar archivo</span>
                 <input
                   type="file"
                   accept=".pdf,.jpg,.jpeg,.png,.ogg,.mp3,.mp4"
                   className="sr-only"
-                  disabled={busy || !canReply}
+                  disabled={busy || !canReply || !!blocked}
                   onChange={(e) => {
                     const chosen = e.target.files?.[0];
                     setFile(chosen ? { file: chosen, key: crypto.randomUUID() } : null);
@@ -546,11 +593,18 @@ export function ChatPanel({
               </label>
             </Button>
             <small className="min-w-0 flex-1 text-xs text-muted-foreground">
-              {canReply
-                ? 'Al responder, tomarás la conversación.'
-                : 'Solicita la transferencia al responsable para responder.'}
+              {!canReply
+                ? 'Solicita la transferencia al responsable para responder.'
+                : blocked
+                  ? 'Enviar no está disponible por ahora.'
+                  : 'Al responder, tomarás la conversación.'}
             </small>
-            <Button type="submit" size="sm" disabled={busy || !body.trim() || !canReply}>
+            <Button
+              type="submit"
+              size="sm"
+              disabled={busy || !body.trim() || !canReply || !!blocked}
+              aria-describedby={blocked ? blockId : undefined}
+            >
               {busy ? <Spinner /> : <Send />}Enviar
             </Button>
           </div>

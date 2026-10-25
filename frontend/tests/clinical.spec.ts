@@ -32,6 +32,10 @@ async function inbox(page: Page, owner?: string) {
           },
           channel: { id, name: 'Canal sintético', phoneNumberId: 'demo' },
           unreadCount: 0,
+          // As GET /api/conversations sends them (InboxRow): present, null when nothing applies.
+          sendBlock: null,
+          agentBlock: null,
+          handoff: null,
         },
       ],
     }),
@@ -209,10 +213,8 @@ test('MR-44 the profile says the no-shows Hospital counts, and nothing when the 
 
   attendance = { status: 200, json: { noShows: 2, consecutiveNoShows: 1 } };
   await page.reload();
-  await page
-    .locator('.conversation-card')
-    .filter({ hasText: 'Paciente clínico sintético' })
-    .click();
+  // MR-54: the conversation in the address opens again by itself.
+  await expect(page.locator('[data-chat-open] h2')).toHaveText('Paciente clínico sintético');
   if (!(await page.getByRole('heading', { name: 'Citas en Hospital' }).isVisible()))
     await page.getByRole('button', { name: 'Ver información del paciente' }).click();
   await expect(page.getByText('No asistió 2 veces · 1 seguida', { exact: true })).toBeVisible();

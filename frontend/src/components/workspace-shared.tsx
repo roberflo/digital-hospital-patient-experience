@@ -48,6 +48,7 @@ export function viewOf(href: string) {
 }
 export const labels: Record<string, string> = {
   agent: 'Agente IA',
+  unattended: 'Sin atender',
   human: 'Atención humana',
   closed: 'Cerrada',
   patient: 'Paciente',
@@ -95,15 +96,20 @@ export function PersonAvatar({ name, large = false }: { name: string; large?: bo
     </Avatar>
   );
 }
+/** Who attends, as the team should read it: with the hospital's agent off, an «agent» conversation has nobody (MR-46). */
+export const attention = (status: string, agentEnabled: boolean) =>
+  status === 'agent' && !agentEnabled ? 'unattended' : status;
 export function StatusBadge({ value }: { value: string }) {
   return (
     <Badge
       variant={
         value === 'failed'
           ? 'destructive'
-          : value === 'human' || value === 'agent'
-            ? 'secondary'
-            : 'outline'
+          : value === 'unattended'
+            ? 'warning'
+            : value === 'human' || value === 'agent'
+              ? 'secondary'
+              : 'outline'
       }
     >
       {value === 'agent' && <Sparkles />}

@@ -119,7 +119,13 @@ export function AppSidebar({
                     <Icon />
                     <span>{label}</span>
                   </SidebarMenuButton>
-                  {id === 'inbox' && !!waiting && <SidebarMenuBadge>{waiting}</SidebarMenuBadge>}
+                  {id === 'inbox' && !!waiting && (
+                    // MR-61: the figure says what it counts.
+                    <SidebarMenuBadge title={`${waiting} esperando a tu equipo`}>
+                      {waiting}
+                      <span className="sr-only"> esperando a tu equipo</span>
+                    </SidebarMenuBadge>
+                  )}
                   {id === 'agent' && <SidebarMenuBadge>IA</SidebarMenuBadge>}
                 </SidebarMenuItem>
               ))}

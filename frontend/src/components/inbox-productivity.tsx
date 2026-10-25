@@ -22,6 +22,7 @@ import { Item, ItemActions, ItemContent, ItemGroup, ItemTitle } from './ui/item'
 import { NativeSelect, NativeSelectOption } from './ui/native-select';
 import { Textarea } from './ui/textarea';
 import { conversationStates, priorities } from './conversation-workspace';
+import { fromView, sameFilters } from '@/lib/inbox-filters';
 import { ConfirmAction } from './confirm-action';
 
 export type InboxFilters = {
@@ -43,7 +44,9 @@ export function SavedInboxViews({
   const { data, mutate, error } = useSWR<SavedView[]>('/inbox-views', fetcher);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [selected, setSelected] = useState('');
+  // MR-57: the selector names a view only while the filters still are that view.
+  const selected =
+    data?.find((v) => sameFilters(fromView(JSON.parse(v.filters)), filters))?.id ?? '';
   const id = useId();
   return (
     <>
@@ -56,8 +59,7 @@ export function SavedInboxViews({
             value={selected}
             onChange={(e) => {
               const row = data?.find((x) => x.id === e.target.value);
-              setSelected(e.target.value);
-              if (row) onApply(JSON.parse(row.filters));
+              if (row) onApply(fromView(JSON.parse(row.filters)));
             }}
           >
             <NativeSelectOption value="">Mis vistas guardadas</NativeSelectOption>
@@ -140,7 +142,6 @@ export function SavedInboxViews({
                         setBusy(true);
                         try {
                           await api('/inbox-views/' + v.id, 'DELETE');
-                          if (selected === v.id) setSelected('');
                           await mutate();
                         } catch (err) {
                           toast.error((err as Error).message);

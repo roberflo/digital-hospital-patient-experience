@@ -71,8 +71,16 @@ export type Channel = {
   coexistence: boolean;
   enabled: boolean;
 };
+/** Why a send cannot go out now, as the server would refuse it (MR-48). */
+export type SendBlock = { code: 'channel' | 'window' | 'paused'; reason: string };
 export type Chat = {
   unreadCount: number;
+  /** A person cannot send: same rule as the send endpoint. */
+  sendBlock: SendBlock | null;
+  /** The agent could not send (a closed window does not count: the patient's next message reopens it). */
+  agentBlock: SendBlock | null;
+  /** The agent passed it to the team and nobody has answered since (MR-47). */
+  handoff: { reason: string; at: string } | null;
   conversation: Conversation;
   contact: Contact;
   channel: Channel;

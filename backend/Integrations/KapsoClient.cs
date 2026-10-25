@@ -126,8 +126,9 @@ public sealed class KapsoClient(HttpClient http, IConfiguration config)
     public bool CanSend(bool manual) => config["SEND_ENABLED"] == "true" || (manual && config["KAPSO_MANUAL_SEND_ENABLED"] == "true");
     public void RequireSending(bool manual)
     {
-        if (!CanSend(manual)) throw new ArgumentException(manual ? "El envío manual está en pausa. Solicita a administración habilitarlo." : "El envío automático está desactivado.");
+        if (!CanSend(manual)) throw new ArgumentException(PausedReason(manual));
     }
+    public static string PausedReason(bool manual) => manual ? "El envío manual está en pausa. Solicita a administración habilitarlo." : "El envío automático está desactivado.";
     public async Task<string> Upload(string number, Stream stream, string name, string contentType, CancellationToken ct = default)
     {
         using var content = new MultipartFormDataContent(); content.Add(new StringContent("whatsapp"), "messaging_product");

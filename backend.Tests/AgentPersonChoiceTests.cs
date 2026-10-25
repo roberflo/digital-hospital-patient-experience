@@ -44,6 +44,7 @@ public sealed class AgentPersonChoiceTests : IAsyncLifetime
         Assert.Equal("human", conversation.Status);
         Assert.Equal("Pregunta por un cambio de dosis", (await Trail()).Last(a => a.Kind == "handoff").Body); // why the agent offered it
         Assert.StartsWith("Le pasé tu consulta al equipo del hospital", h.Sent[^1]);
+        Assert.Equal("normal", conversation.Priority); // MR-47: only an urgent handoff raises it
     }
 
     [Fact]
@@ -93,6 +94,7 @@ public sealed class AgentPersonChoiceTests : IAsyncLifetime
 
         Assert.Equal("human", (await h.Fresh()).Status);
         Assert.StartsWith("Si es una emergencia", h.Sent[^1]);
+        Assert.Equal("urgent", (await h.Fresh()).Priority); // MR-47: the team sees it first
     }
 
     [Theory]

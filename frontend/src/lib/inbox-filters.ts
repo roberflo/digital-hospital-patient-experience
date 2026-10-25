@@ -30,3 +30,12 @@ export const filtersActive = (f: InboxFilters, search: string) =>
   (Object.keys(defaultInboxFilters) as (keyof InboxFilters)[]).some(
     (k) => f[k].trim() !== defaultInboxFilters[k],
   );
+/** A stored view, complete: the API's defaults (`ViewFilters`) fill what it lacks. */
+export const fromView = (saved: Partial<InboxFilters>): InboxFilters => ({
+  ...defaultInboxFilters,
+  state: '',
+  ...saved,
+});
+/** A saved view is the current one while every filter matches it (MR-57). */
+export const sameFilters = (a: InboxFilters, b: InboxFilters) =>
+  (Object.keys(defaultInboxFilters) as (keyof InboxFilters)[]).every((k) => a[k] === b[k]);

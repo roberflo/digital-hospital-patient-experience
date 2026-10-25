@@ -19,20 +19,31 @@ public static class CrmEndpoints
         if (q.Length > 100) throw new ArgumentException("Búsqueda demasiado larga");
         // Names and phones are encrypted: stream scoped records without truncating the search.
         var matches = new List<Contact>(); var seen = 0;
-        // As the desk types: «7000-0001», «+503 7000 0001» or «jose hernandez» find «José Hernández».
-        var digits = new string(q.Where(char.IsAsciiDigit).ToArray());
         await foreach (var row in query.AsAsyncEnumerable())
         {
-            if (System.Globalization.CultureInfo.InvariantCulture.CompareInfo.IndexOf(row.Name, q.Trim(), System.Globalization.CompareOptions.IgnoreCase | System.Globalization.CompareOptions.IgnoreNonSpace) < 0 && !(digits.Length >= 4 && row.Phone.Contains(digits))) continue;
+            if (!ContactMatches(row, q)) continue;
             if (seen++ < offset) continue; matches.Add(row); if (matches.Count == 100) break;
         }
         return matches;
+    }
+    /// <summary>As the desk types: «7000-0001», «+503 7000 0001» or «jose hernandez» find «José Hernández». One rule for contacts and the inbox (MR-53).</summary>
+    public static bool ContactMatches(Contact row, string q)
+    {
+        var digits = new string(q.Where(char.IsAsciiDigit).ToArray());
+        return System.Globalization.CultureInfo.InvariantCulture.CompareInfo.IndexOf(row.Name, q.Trim(), System.Globalization.CompareOptions.IgnoreCase | System.Globalization.CompareOptions.IgnoreNonSpace) >= 0 || (digits.Length >= 4 && row.Phone.Contains(digits));
+    }
+    /// <summary>The dashboard figures. With the hospital's agent off, its open conversations wait for the team (MR-46).</summary>
+    public static async Task<OverviewCounts> Overview(CrmDb db, TenantScope t)
+    {
+        var agentOn = await db.Tenants.Where(x => x.Id == t.Id).Select(x => x.AgentEnabled).SingleAsync();
+        var agent = await db.Conversations.CountAsync(x => x.Status == "agent" && x.State == "open");
+        return new(await db.Contacts.CountAsync(), await db.Conversations.CountAsync(x => x.State != "resolved"), await db.Conversations.CountAsync(x => x.Status == "human" && x.State == "open") + (agentOn ? 0 : agent), agentOn ? agent : 0, await db.Opportunities.CountAsync(x => x.Stage != "won" && x.Stage != "lost"), await db.Jobs.CountAsync(x => x.Status == "pending"), await db.Jobs.CountAsync(x => x.Status == "failed" || x.Status == "uncertain"));
     }
     public static void MapCrm(this WebApplication app)
     {
         var api = app.MapGroup("/api").RequireAuthorization();
         api.MapGet("/me", async (CrmDb db, TenantScope t, CurrentUser u) => new { u.Subject, u.Name, u.Role, tenant = await db.Tenants.Where(x => x.Id == t.Id).Select(x => new { x.Id, x.Name, x.TimeZone, x.AgentEnabled }).SingleAsync() });
-        api.MapGet("/overview", async (CrmDb db) => new { contacts = await db.Contacts.CountAsync(), conversations = await db.Conversations.CountAsync(x => x.State != "resolved"), human = await db.Conversations.CountAsync(x => x.Status == "human" && x.State == "open"), agent = await db.Conversations.CountAsync(x => x.Status == "agent" && x.State == "open"), opportunities = await db.Opportunities.CountAsync(x => x.Stage != "won" && x.Stage != "lost"), pending = await db.Jobs.CountAsync(x => x.Status == "pending"), failed = await db.Jobs.CountAsync(x => x.Status == "failed" || x.Status == "uncertain") });
+        api.MapGet("/overview", Overview);
         api.MapGet("/agent-metrics", (CrmDb db, int? days, CancellationToken ct) => AgentMetrics.Read(db, days, ct));
         api.MapGet("/contacts", Contacts);
         api.MapPost("/contacts", async (ContactInput b, CrmDb db, TenantScope t, CurrentUser u, IConfiguration c) =>
@@ -159,6 +170,7 @@ public static class CrmEndpoints
     static void SetContact(Contact row, ContactInput b, IConfiguration c, bool phone = true) { row.Name = Rules.Required(b.Name); if (phone) { row.Phone = Rules.ContactPhone(b.Phone); row.PhoneHash = Rules.PhoneHash(row.Phone, c["PHONE_HASH_KEY"]!); } row.Email = b.Email ?? ""; row.Tags = b.Tags ?? ""; if (row.Email.Length > 320 || row.Tags.Length > 500) throw new ArgumentException("Campo demasiado largo"); }
     static void ValidateStage(string stage) { if (stage is not ("new" or "contacted" or "scheduled" or "won" or "lost")) throw new ArgumentException("Etapa inválida"); }
 }
+public record OverviewCounts(int Contacts, int Conversations, int Human, int Agent, int Opportunities, int Pending, int Failed);
 public record ContactInput(string Name, string Phone, string? Email, string? Tags);
 public record OpportunityInput(string Title, Guid ContactId, decimal Value, string Stage, Guid? ConversationId=null);
 public record StageInput(string Stage);

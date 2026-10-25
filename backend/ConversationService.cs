@@ -3,6 +3,8 @@ using Microsoft.EntityFrameworkCore;
 using Recepcion.Integrations;
 namespace Recepcion;
 
+/// <summary>Why a send cannot go out: <c>channel</c>, <c>window</c> or <c>paused</c>, with the text the person reads.</summary>
+public record SendBlock(string Code, string Reason);
 public sealed class ConversationService(CrmDb db, TenantScope scope, KapsoClient kapso)
 {
     public async Task<Message> Send(Guid id, string body, string sender, string requestKey, string? mediaId = null, string type = "text", CancellationToken ct = default, string? actingSubject = null, CurrentUser? actor = null, Choices? choices = null)
@@ -47,10 +49,16 @@ public sealed class ConversationService(CrmDb db, TenantScope scope, KapsoClient
     public async Task<Channel> RequireSendable(Conversation conv, bool manual, CancellationToken ct = default)
     {
         var channel = await db.Channels.SingleAsync(x => x.Id == conv.ChannelId, ct);
-        if (!channel.Enabled) throw new ArgumentException("Este número está desactivado. Un administrador puede activarlo en WhatsApp.");
-        if (!Rules.WithinWindow(conv.LastInboundAt, DateTimeOffset.UtcNow)) throw new ArgumentException("Ventana de WhatsApp cerrada. Espera un mensaje del paciente o utiliza una plantilla aprobada desde Kapso.");
-        kapso.RequireSending(manual);
+        if (SendBlock(conv, channel, manual) is { } block) throw new ArgumentException(block.Reason);
         return channel;
+    }
+    /// <summary>The one rule RequireSendable enforces, readable without throwing: the inbox shows it before anyone types (MR-48).</summary>
+    public SendBlock? SendBlock(Conversation conv, Channel channel, bool manual)
+    {
+        if (!channel.Enabled) return new("channel", "Este número está desactivado. Un administrador puede activarlo en WhatsApp.");
+        if (!Rules.WithinWindow(conv.LastInboundAt, DateTimeOffset.UtcNow)) return new("window", "Ventana de 24 horas cerrada: WhatsApp solo permite enviar plantillas aprobadas hasta que el paciente vuelva a escribir.");
+        if (!kapso.CanSend(manual)) return new("paused", KapsoClient.PausedReason(manual));
+        return null;
     }
     public Task<IDisposable> Lock(Guid id, CancellationToken ct = default) => Lock(db, id, ct);
     /// <summary>Session-level advisory lock on <paramref name="id"/>; re-entrant on the same context's connection.</summary>

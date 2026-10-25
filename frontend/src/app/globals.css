@@ -25,6 +25,8 @@
   --color-input: var(--input);
   --color-border: var(--border);
   --color-destructive: var(--destructive);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
@@ -76,6 +78,9 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+  /* Something waits for a person: amber, AA on its own surface in both themes. */
+  --warning: oklch(0.95 0.07 90);
+  --warning-foreground: oklch(0.42 0.1 60);
 }
 
 .dark {
@@ -110,6 +115,8 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+  --warning: oklch(0.34 0.07 75);
+  --warning-foreground: oklch(0.93 0.09 90);
 }
 
 @layer base {
@@ -118,5 +125,12 @@
   }
   body {
     @apply bg-background text-foreground;
+  }
+}
+
+/* MR-56: below lg an open chat replaces the list; the page title and search would only push it down. */
+@media (width < 64rem) {
+  body:has([data-chat-open]) [data-page-heading] {
+    display: none;
   }
 }

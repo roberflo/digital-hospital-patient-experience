@@ -4,6 +4,13 @@ test.afterEach(async ({ page }) => {
   await page.unrouteAll({ behavior: 'wait' });
 });
 async function draftConversation(page: Page) {
+  // These tests are about the session, not WhatsApp's rules: the demo conversation's 24-hour window
+  // depends on when the demo was seeded, so it is answered as one that can be sent (MR-48).
+  await page.route('**/api/crm/conversations?*', async (route) => {
+    const response = await route.fetch();
+    const rows = (await response.json()) as { sendBlock: unknown }[];
+    await route.fulfill({ response, json: rows.map((row) => ({ ...row, sendBlock: null })) });
+  });
   await login(page);
   await page.goto('/?view=inbox');
   await page.getByLabel('Filtrar por estado').selectOption('');
@@ -48,7 +55,8 @@ test('expired session preserves draft and selection, renews in another tab and n
   await expect(
     page.getByRole('heading', { name: 'Ana Martínez', exact: true }).first(),
   ).toBeVisible();
-  await expect(page).toHaveURL(/\?view=inbox$/);
+  // MR-54: the open conversation is part of the address, and it is the same one.
+  await expect(page).toHaveURL(/\?view=inbox&conversationId=[0-9a-f-]{36}$/);
   expect(sends).toBe(1);
   await auth.close();
 });

@@ -31,34 +31,51 @@ public static class WhatsAppEndpoints
         var type = file.ContentType.Split('/')[0]; if (type == "application") type = "document";
         var msg = await svc.Send(id, Path.GetFileName(file.FileName), "human", key, mid, type, actingSubject: u.Subject, actor: u); CrmEndpoints.Audit(db, t, u, "media.sent", msg.Id); await db.SaveChangesAsync(); return Results.Ok(msg);
     }
-    public static void MapWhatsApp(this WebApplication app)
+    /// <summary>The inbox page: up to 100 conversations under the filters, with what the list and the open chat need to show.</summary>
+    public static async Task<List<InboxRow>> List(CrmDb db, TenantScope t, CurrentUser user, IConfiguration config, ConversationService svc, string? phone, string? phoneNumberId, string? status,string? state,string? assignment,Guid? conversationId,Guid? contactId,Guid? channelId,string? priority,string? label,string? q,int? page)
     {
-        var api = app.MapGroup("/api").RequireAuthorization();
-        api.MapGet("/conversations", async (CrmDb db, CurrentUser user, IConfiguration config, string? phone, string? phoneNumberId, string? status,string? state,string? assignment,Guid? conversationId,Guid? contactId,Guid? channelId,string? priority,string? label,int? page) =>
-        {
-            var query=db.Conversations.Where(x=>(conversationId==null||x.Id==conversationId)&&(status==null||x.Status==status)&&(state==null||x.State==state)&&(contactId==null||x.ContactId==contactId)&&(channelId==null||x.ChannelId==channelId)&&(priority==null||x.Priority==priority));
+            if(q?.Length>100)throw new ArgumentException("Búsqueda demasiado larga");
+            // MR-46: with the hospital's agent off nobody answers an «agent» conversation; it waits for the team (F-1: shown, never rewritten).
+            var agentOn=await db.Tenants.Where(x=>x.Id==t.Id).Select(x=>x.AgentEnabled).SingleAsync();
+            var query=db.Conversations.AsQueryable();
+            if(status=="human"&&!agentOn)query=query.Where(x=>x.Status=="human"||x.Status=="agent");
+            else if(status=="agent"&&!agentOn)query=query.Where(x=>false);
+            else if(status!=null)query=query.Where(x=>x.Status==status);
+            query=query.Where(x=>(conversationId==null||x.Id==conversationId)&&(state==null||x.State==state)&&(contactId==null||x.ContactId==contactId)&&(channelId==null||x.ChannelId==channelId)&&(priority==null||x.Priority==priority));
             if(!string.IsNullOrEmpty(phone)){var hash=Rules.PhoneHash(phone,config["PHONE_HASH_KEY"]!);query=query.Where(x=>db.Contacts.Any(c=>c.Id==x.ContactId&&c.PhoneHash==hash));}
             if(!string.IsNullOrEmpty(phoneNumberId))query=query.Where(x=>db.Channels.Any(c=>c.Id==x.ChannelId&&c.PhoneNumberId==phoneNumberId));
             if(assignment=="mine")query=query.Where(x=>x.AssignedTo==user.Subject);
             if(assignment?.StartsWith("member:",StringComparison.Ordinal)==true){var subject=assignment[7..];query=query.Where(x=>x.AssignedTo==subject);}
             if(assignment=="unassigned")query=query.Where(x=>x.AssignedTo==null);
             if(!string.IsNullOrEmpty(label)){var needle=InboxWorkflow.Labels(label);query=query.Where(x=>(", "+x.Labels+", ").Contains(", "+needle+", "));}
+            if(!string.IsNullOrWhiteSpace(q)){
+                // MR-53: names and phones are encrypted, so contacts are matched as CrmEndpoints.Contacts does; labels are plain text.
+                var term=q.Trim();var labelNeedle=term.ToLowerInvariant();var matched=new List<Guid>();
+                await foreach(var c in db.Contacts.AsNoTracking().AsAsyncEnumerable())if(CrmEndpoints.ContactMatches(c,term))matched.Add(c.Id);
+                // ponytail: the matched ids travel as one array parameter; a hospital with tens of thousands of matches would want a search index.
+                query=query.Where(x=>matched.Contains(x.ContactId)||x.Labels.Contains(labelNeedle));
+            }
             var conv=await query.OrderByDescending(x=>x.Priority=="urgent"?3:x.Priority=="high"?2:x.Priority=="normal"?1:0).ThenByDescending(x=>x.UpdatedAt).ThenBy(x=>x.Id).Skip((Math.Clamp(page??1,1,10000)-1)*100).Take(100).ToListAsync();
             var ids=conv.Select(x=>x.Id).ToArray();
             var unread=await db.Messages.Where(x=>ids.Contains(x.ConversationId)&&x.Sender=="patient"&&!x.IsHistory&&!db.ConversationReads.Any(r=>r.ConversationId==x.ConversationId&&r.Subject==user.Subject&&r.LastReadAt>=x.ReceivedAt)).GroupBy(x=>x.ConversationId).Select(g=>new{Id=g.Key,Count=g.Count()}).ToDictionaryAsync(x=>x.Id,x=>x.Count);
             var contacts = await db.Contacts.Where(x => conv.Select(v => v.ContactId).Contains(x.Id)).ToDictionaryAsync(x => x.Id);
             var channels = await db.Channels.ToDictionaryAsync(x => x.Id);
-            return conv.Select(x => new { conversation = x, contact = contacts.GetValueOrDefault(x.ContactId), channel = channels.GetValueOrDefault(x.ChannelId),unreadCount=unread.GetValueOrDefault(x.Id) });
-        });
-        api.MapGet("/conversations/{id:guid}/messages", async (Guid id, CrmDb db) => await Messages(id, db) is { } messages ? Results.Ok(messages) : Results.NotFound());
-        api.MapPost("/conversations/{id:guid}/messages", SendMessage);
-        api.MapPost("/conversations/{id:guid}/media", SendMedia).DisableAntiforgery();
-        api.MapGet("/messages/{id:guid}/media", async (Guid id, CrmDb db, KapsoClient kapso) =>
-        {
-            var m = await db.Messages.SingleOrDefaultAsync(x => x.Id == id); if (m?.MediaId is null) return Results.NotFound(); var media = await kapso.Download(m.MediaId); return Results.File(media.Bytes, media.Type, fileDownloadName: m.MediaName ?? "archivo", enableRangeProcessing: true);
-        });
-        api.MapPatch("/conversations/{id:guid}", async (Guid id, ConversationInput b, CrmDb db, CurrentUser u, TenantScope t, ConversationService svc) =>
-        {
+            // MR-47: the agent's handoff stays visible until a person answers or takes the conversation.
+            var handoffs=(await db.Activities.AsNoTracking().Where(a=>a.ConversationId!=null&&ids.Contains(a.ConversationId.Value)&&a.Kind=="handoff").ToListAsync())
+                .GroupBy(a=>a.ConversationId!.Value).ToDictionary(g=>g.Key,g=>g.MaxBy(a=>a.CreatedAt)!);
+            var replied=await db.Messages.Where(m=>ids.Contains(m.ConversationId)&&m.Sender=="human").GroupBy(m=>m.ConversationId).Select(g=>new{g.Key,At=g.Max(m=>m.CreatedAt)}).ToDictionaryAsync(x=>x.Key,x=>x.At);
+            InboxHandoff? Handoff(Conversation c)=>c.Status=="human"&&handoffs.GetValueOrDefault(c.Id) is {ActorRole:"agent_ai"} h&&!(replied.TryGetValue(c.Id,out var at)&&at>h.CreatedAt)?new(h.Body,h.CreatedAt):null;
+            SendBlock? Block(Conversation c,bool manual)=>channels.GetValueOrDefault(c.ChannelId) is {} ch?svc.SendBlock(c,ch,manual):null;
+            // F-2: a closed window does not stop the agent: the patient's next message reopens it.
+            SendBlock? AgentBlock(Conversation c)=>Block(c,false) is {Code:not "window"} b?b:null;
+            return conv.Select(x => new InboxRow(x, contacts.GetValueOrDefault(x.ContactId), channels.GetValueOrDefault(x.ChannelId), unread.GetValueOrDefault(x.Id), Block(x,true), AgentBlock(x), Handoff(x))).ToList();
+    }
+    /// <summary>Every conversation label in use in this hospital, for the inbox filter.</summary>
+    public static async Task<List<string>> Labels(CrmDb db) =>
+        (await db.Conversations.Where(x => x.Labels != "").Select(x => x.Labels).Distinct().ToListAsync())
+            .SelectMany(x => x.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)).Distinct().Order(StringComparer.Ordinal).Take(200).ToList();
+    public static async Task<IResult> SetAttention(Guid id, ConversationInput b, CrmDb db, CurrentUser u, TenantScope t, ConversationService svc)
+    {
             using var teamLease = await svc.Lock(t.Id); using var lease = await svc.Lock(id); var conv = await db.Conversations.SingleOrDefaultAsync(x => x.Id == id); if (conv is null) return Results.NotFound();
             TeamEndpoints.RequireEditable(conv,u);
             if(b.ExpectedRevision is {} revision && revision != conv.Revision)return Results.Conflict(new{title="La conversación cambió. Actualiza antes de guardar."});
@@ -68,9 +85,22 @@ public static class WhatsAppEndpoints
             if(b.Status=="closed")InboxWorkflow.SetState(conv,"resolved");
             else if(b.Status=="agent"||conv.State=="resolved")InboxWorkflow.SetState(conv,"open");
             conv.Status = b.Status; conv.AssignedTo = b.AssignedTo; conv.Revision++; conv.UpdatedAt = DateTimeOffset.UtcNow;
-            db.Activities.Add(new Activity { TenantId = t.Id, ContactId = conv.ContactId, ConversationId = id, Actor = u.Name, ActorRole = u.Role, ActorSubject = u.Subject, Kind = "handoff", Body = b.Status == "agent" ? "Atención automática reanudada." : b.Status == "closed" ? "Conversación cerrada." : "Atención humana solicitada. Revisa mensajes y acciones anteriores." });
+            db.Activities.Add(new Activity { TenantId = t.Id, ContactId = conv.ContactId, ConversationId = id, Actor = u.Name, ActorRole = u.Role, ActorSubject = u.Subject, Kind = "handoff", Body = b.Status == "agent" ? "Atención automática reanudada." : b.Status == "closed" ? "Conversación cerrada." : $"{u.Name} tomó la conversación." });
             CrmEndpoints.Audit(db, t, u, "conversation." + b.Status, id); await db.SaveChangesAsync(); return Results.Ok(conv);
+    }
+    public static void MapWhatsApp(this WebApplication app)
+    {
+        var api = app.MapGroup("/api").RequireAuthorization();
+        api.MapGet("/conversations", List);
+        api.MapGet("/conversations/labels", Labels);
+        api.MapGet("/conversations/{id:guid}/messages", async (Guid id, CrmDb db) => await Messages(id, db) is { } messages ? Results.Ok(messages) : Results.NotFound());
+        api.MapPost("/conversations/{id:guid}/messages", SendMessage);
+        api.MapPost("/conversations/{id:guid}/media", SendMedia).DisableAntiforgery();
+        api.MapGet("/messages/{id:guid}/media", async (Guid id, CrmDb db, KapsoClient kapso) =>
+        {
+            var m = await db.Messages.SingleOrDefaultAsync(x => x.Id == id); if (m?.MediaId is null) return Results.NotFound(); var media = await kapso.Download(m.MediaId); return Results.File(media.Bytes, media.Type, fileDownloadName: m.MediaName ?? "archivo", enableRangeProcessing: true);
         });
+        api.MapPatch("/conversations/{id:guid}", SetAttention);
         // The four below, and only they, are what the platform owner operates here; POST /channels takes a caller-supplied number and stays closed to it.
         api.MapGet("/channels", async (CrmDb db) => await db.Channels.ToListAsync()).WithMetadata(new PlatformOperable());
         api.MapPost("/channels", async (ChannelInput b, CrmDb db, CurrentUser u, TenantScope t, KapsoClient k, IConfiguration c) =>
@@ -216,6 +246,9 @@ public static class WhatsAppEndpoints
     internal static string? Get(JsonElement e, string key) => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(key, out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
 }
 public record SendInput(string Body);
+/// <summary>One inbox row. <c>SendBlock</c>: why a person cannot send now; <c>AgentBlock</c>: why the agent could not; <c>Handoff</c>: the agent passed it to the team and nobody has answered yet.</summary>
+public record InboxRow(Conversation Conversation, Contact? Contact, Channel? Channel, int UnreadCount, SendBlock? SendBlock, SendBlock? AgentBlock, InboxHandoff? Handoff);
+public record InboxHandoff(string Reason, DateTimeOffset At);
 public record ConversationInput(string Status, string? AssignedTo, long? ExpectedRevision = null);
 public record ChannelInput(string Name, string PhoneNumberId, string? DoctorId, bool Coexistence);
 public record ChannelState(bool Enabled);

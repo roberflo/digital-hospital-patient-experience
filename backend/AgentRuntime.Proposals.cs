@@ -290,6 +290,7 @@ public sealed partial class AgentRuntime
     async Task Handoff(Conversation conv, string reason, CancellationToken ct, bool urgent = false, bool offerDoctor = false)
     {
         using var l = await conversations.Lock(conv.Id, ct); await db.Entry(conv).ReloadAsync(ct); conv.Status = "human"; conv.Summary = reason; conv.Revision++;
+        if (urgent) conv.Priority = "urgent"; // MR-47: the team sees an urgent handoff first
         var channel = await db.Channels.SingleAsync(x => x.Id == conv.ChannelId, ct);
         if (channel.DoctorId is { Length: > 0 } doctor && await db.Members.AnyAsync(x => x.Subject == doctor && x.Role == "doctor" && !x.Disabled, ct)) conv.AssignedTo = doctor;
         db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = conv.ContactId, Kind = "handoff", Actor = "Agente", ActorRole = "agent_ai", Body = reason }); await db.SaveChangesAsync(ct);

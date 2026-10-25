@@ -118,7 +118,8 @@ export default function Workspace() {
             view === 'inbox' ? 'gap-3 md:py-4' : 'gap-6',
           )}
         >
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          {/* MR-56: on a phone an open chat takes the page; globals.css hides this heading then. */}
+          <div data-page-heading className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-col gap-1">
               <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
               {descriptions[view] && <p className="text-muted-foreground">{descriptions[view]}</p>}

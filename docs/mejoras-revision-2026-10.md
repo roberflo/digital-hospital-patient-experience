@@ -117,6 +117,34 @@ pasa en vacío.
 | MR-41 | Hospital acepta `Idempotency-Key` en `POST v1/agenda` y `POST v1/patients` (por inquilino y llamador): la misma clave devuelve el resultado original sin crear otro; Recepción la envía. | Hospital: prueba del módulo con dos POST iguales → una cita. Recepción: el handler falso recibe la cabecera. | I2 |
 | MR-45 | Un doctor con número propio (canal con `DoctorId` igual a su `subject` de `/api/me`) entra a la bandeja `/?view=inbox` filtrada a su número; puede quitar el filtro («Todos los canales») y ver las del hospital. Un enlace con `channelId`, `conversationId` o `phone`, o la vista de equipo de un responsable, manda sobre el filtro inicial. Sin cambio de permisos ni de API: `/api/channels` ya publica `doctorId` y `/api/me` el `subject` (`Channel.DoctorId` se valida contra `Member.Subject`, `WhatsAppEndpoints.cs`). | `tests/inbox-doctor.spec.ts` con `/api/crm/me` y `/api/crm/channels` simulados: la lectura de conversaciones lleva `channelId=<canal del doctor>`; tras «Todos los canales» ya no lo lleva; con `?conversationId=` no lo lleva. | Dueño 2026-10-25 |
 
+## Lote F — bandeja de WhatsApp (revisión en navegador del 2026-10-25, `/?view=inbox`)
+
+Asunciones de producto (asumidas, no bloqueantes): **F-1** apagar el agente del hospital no cambia
+datos: una conversación con `Status=agent` sigue así en la base y se *muestra* como «Sin atender»;
+**F-2** la ventana cerrada no impide activar el agente (responde al siguiente mensaje del paciente, que
+la reabre); sólo lo impiden el número desactivado o el envío automático apagado; **F-3** la búsqueda
+de la bandeja no busca en el cuerpo de los mensajes: B16 sólo filtra dentro de una conversación
+(`chat-panel.tsx`), no hay búsqueda de mensajes en servidor que reutilizar.
+
+| # | Criterio | Cómo se prueba | Origen |
+|---|---|---|---|
+| MR-46 | Con el agente del hospital apagado (`Tenant.AgentEnabled=false`), una conversación abierta con `Status=agent` se muestra «Sin atender» (estilo de aviso) en la tarjeta, la cabecera del chat y la cabecera móvil, nunca «Agente IA»; el filtro «Agente» no la cuenta y «Personas» sí; `/overview` la suma a `human` («Esperando a tu equipo», insignia de la barra lateral) y `agent` es 0. Asumida F-1. | .NET `InboxListTests`: agente apagado → `status=agent` vacío, `status=human` la incluye, `Overview.Human` la cuenta y `Agent=0`; encendido → como antes. Playwright `inbox-ux.spec.ts`: con `/me` `agentEnabled=false` la tarjeta y la cabecera dicen «Sin atender» y no «Agente IA». | Revisión F1 |
+| MR-47 | Un traspaso urgente del agente (`Handoff(urgent: true)`) sube la prioridad a «urgent». Mientras el último traspaso de la conversación es del agente y ninguna persona ha respondido después, `GET /conversations` publica `handoff: { reason, at }`; la tarjeta muestra «Transferida» y el motivo en lugar del último mensaje, y la cabecera del chat el motivo. Lo que recibe el paciente no cambia. | .NET: el traspaso urgente deja `Priority=urgent` y el no urgente no la toca; `handoff` presente tras el traspaso y `null` tras una respuesta humana o un traspaso de una persona; los textos enviados al paciente siguen iguales (pruebas existentes de `AgentPersonChoiceTests`/`AgentGuardTests`). Playwright: tarjeta con «Transferida» y el motivo; cabecera con el motivo. | Revisión F2 |
+| MR-48 | `GET /conversations` publica por conversación `sendBlock` (`null` o `{ code, reason }`, `code` ∈ `channel`, `window`, `paused`) con la **misma** regla que `RequireSendable` (una sola función, `ConversationService.SendBlock`). La conversación abierta muestra el motivo como aviso fijo sobre el redactor y «Enviar» y «Adjuntar» quedan deshabilitados y descritos por ese aviso; con la ventana cerrada dice que WhatsApp sólo permite plantillas aprobadas hasta que el paciente vuelva a escribir. Ningún texto de error del envío nombra al proveedor («Kapso»). | .NET `InboxListTests`: canal apagado, ventana cerrada y envío en pausa dan su código y el mismo texto que lanza `RequireSendable`; `InboxSendTests.Refused_send_changes_nothing` además comprueba que el texto no contiene «Kapso». Playwright: con `sendBlock` el aviso es visible antes de escribir y «Enviar» está deshabilitado. | Revisión F3 |
+| MR-49 | «Activar agente» avisa en su confirmación que la conversación quedará sin responsable y que el agente responderá los próximos mensajes; se deshabilita, con el motivo visible, cuando el agente no podría enviar (`agentBlock`: número desactivado o envío automático apagado; asumida F-2). Cuando una persona toma la conversación, la actividad dice «{persona} tomó la conversación.», no «Atención humana solicitada». | Playwright: el texto de la confirmación; con `agentBlock` el botón está deshabilitado y el motivo visible. .NET: el PATCH `status=human` deja la actividad «{Nombre} tomó la conversación.». | Revisión F4 |
+| MR-50 | Cambiar el estado de la conversación abierta a uno fuera del filtro activo no cierra el chat: sigue abierta hasta que la persona elige otra o vuelve. | Playwright: filtro «Abierta», la conversación pasa a «Pendiente» (la lista ya no la trae) y el chat sigue visible. | Revisión F5 |
+| MR-51 | Posponer es un solo control («Posponer 1 h / 1 día / 1 semana») que fija estado y hora juntos; elegir otro plazo con la conversación pospuesta la reprograma. El selector de estado no ofrece «Pospuesta» sin plazo. | Playwright: cada botón envía `state=snoozed` con `snoozedUntil` ≈ ahora + plazo; con la conversación ya pospuesta, otro botón vuelve a enviar con el nuevo plazo. | Revisión F6 |
+| MR-52 | Las tarjetas muestran las etiquetas de la conversación (hasta 2 y «+N»). El filtro por etiqueta es un selector con las etiquetas existentes del hospital, leídas de `GET /conversations/labels`. | .NET: `labels` devuelve las etiquetas distintas del inquilino, ordenadas, sin las de otro. Playwright: la tarjeta con 3 etiquetas muestra 2 y «+1»; el selector lista las de `/conversations/labels` y elegir una envía `label=`. | Revisión F7 |
+| MR-53 | La búsqueda de la bandeja va al servidor (`q=`): nombre y teléfono del contacto (cifrados: mismo recorrido que `CrmEndpoints.Contacts`, una sola regla `ContactMatches`) y etiquetas de la conversación, dentro del inquilino. Asumida F-3. | .NET: `q` encuentra por nombre sin acentos, por dígitos del teléfono y por etiqueta; nunca una conversación de otro inquilino. Playwright: escribir en «Buscar» envía `q=`; ya no aparece «solo revisa las 100 conversaciones». | Revisión F8 |
+| MR-54 | Abrir una conversación escribe `conversationId` en la URL (`history.replaceState`); recargar la vuelve a abrir. Cerrarla lo quita. | Playwright: tras abrir, la URL lleva `conversationId=<id>`; tras recargar el chat sigue abierto. | Revisión F9 |
+| MR-55 | A 1280–1440 px la columna de la lista mide 320 px (384 px desde 1536) y el selector «quién atiende» ocupa su propia fila, sin que el contador de «Más filtros» tape «Agente». | Capturas a 1280/1440/1920; Playwright: las cajas de «Agente» y «Más filtros» no se solapan a 1440. | Revisión F10 |
+| MR-56 | A 360 px la cabecera del chat muestra quién atiende (incluido «Sin atender»), y con un chat abierto se ocultan el título de página y la búsqueda. | Playwright (proyecto móvil): con chat abierto el estado es visible y el `h1` «Bandeja de entrada» no. | Revisión F11 |
+| MR-57 | El selector de vistas guardadas muestra una vista sólo mientras los filtros coinciden con ella (si no, vuelve a «Mis vistas guardadas»), y aplicar una vista con filtros ocultos abre «Más filtros». | Revisión visual; lógica en `server-tests/inbox-filters.test.ts` (`sameFilters`). | Revisión F12 |
+| MR-58 | Desde 1280 px, con la tercera columna visible, no se muestra «Ver información del paciente». | Playwright (escritorio 1440): el botón no está. | Revisión F13 |
+| MR-59 | Insertar una respuesta guardada la pone en el cursor del borrador, sin borrar lo escrito. | Revisión manual; sin lógica nueva más allá de `setRangeText`. | Revisión F14 |
+| MR-60 | En el panel de contexto el expediente («Vincular paciente» / «Ver paciente vinculado») va primero. | Revisión visual. | Revisión F16 |
+| MR-61 | Cada número dice qué cuenta: la insignia de la barra lateral se anuncia «N esperando a tu equipo»; Equipo dice «sin resolver y sin responsable (incluye las del agente)». | Revisión visual y nombre accesible de la insignia. | Revisión F17 |
+
 ## Estado (2026-10-17)
 
 Commits de Recepción salvo «Hospital». Fecha de todos: 2026-10-17.
@@ -142,6 +170,7 @@ Commits de Recepción salvo «Hospital». Fecha de todos: 2026-10-17.
 | MR-43 | Hecho en Recepción; depende de Hospital (`mr/hosp-43`) — desplegar Hospital antes | Recepción rama `mr/rec-43` |
 | MR-44 | Hecho en Recepción; depende de Hospital (`mr/hosp-43`) — desplegar Hospital antes (sin `attendance` la lectura falla y el perfil no muestra la línea) | Recepción rama `mr/rec-43`, `AttendanceTests` |
 | MR-45 | Hecho (2026-10-25), sin cambio de backend | `tests/inbox-doctor.spec.ts` |
+| MR-46…MR-61 | Hecho (2026-10-25). Sustituyen: MR-53 retira el aviso «solo revisa las 100 conversaciones» de MR-18 (la prueba de MR-18 ahora comprueba `q=`); MR-54 hace que recargar reabra el chat (`clinical.spec.ts` MR-44 y `session.spec.ts` lo esperan); MR-48 deshabilita «Enviar» en las conversaciones demo con la ventana cerrada (`session.spec.ts` las sirve como enviables: su tema es la sesión). Sin búsqueda en el cuerpo de los mensajes (F-3) | .NET `InboxListTests` (+13), `AgentPersonChoiceTests`; `tests/inbox-ux.spec.ts` (+24); `server-tests/inbox-filters.test.ts` (`sameFilters`) |
 
 ## Anti-criterios
 
@@ -155,6 +184,10 @@ Commits de Recepción salvo «Hospital». Fecha de todos: 2026-10-17.
 - Contar como «cita previa» una a la que el paciente no llegó (cancelada, no-show, sin registrar), o limitar la búsqueda a una ventana fija (OQ-2, MR-43).
 - Recalcular el tipo de visita de citas ya creadas (MR-43); contar «sin registrar» como no-show o mostrar un error si la lectura de asistencia falla (MR-44).
 - Guardar el certificado del llavero o cualquier secreto en el repositorio o en el respaldo del dump.
+- Mostrar «Agente IA» o contar en «Con el agente» una conversación que nadie atiende porque el agente del hospital está apagado, o cambiar su `Status` en masa para ocultarlo (MR-46).
+- Calcular en el navegador una regla de envío distinta de `RequireSendable`, o dejar «Enviar» activo cuando el servidor ya sabe que rechazará el envío (MR-48).
+- Cambiar lo que el paciente recibe en un traspaso (MR-47), o prometer «El agente responderá» cuando no puede enviar (MR-49).
+- Buscar fuera del inquilino o truncar la búsqueda a la página cargada (MR-53).
 
 ## No se hace
 

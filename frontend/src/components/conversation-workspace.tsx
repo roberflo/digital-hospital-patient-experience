@@ -9,6 +9,7 @@ import { HospitalCommercialLink } from './commercial-shared';
 import { Alert, AlertDescription } from './ui/alert';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
+import { ButtonGroup } from './ui/button-group';
 import {
   Dialog,
   DialogContent,
@@ -41,6 +42,11 @@ export const priorities = [
   ['high', 'Alta'],
   ['urgent', 'Urgente'],
 ] as const;
+const snoozes = [
+  [60, '1 h'],
+  [1440, '1 día'],
+  [10080, '1 semana'],
+] as const;
 export const stages = [
   ['new', 'Nuevo'],
   ['contacted', 'En seguimiento'],
@@ -52,7 +58,6 @@ export const stages = [
 export function WorkflowControls({ chat, onChange }: { chat: Chat; onChange: () => void }) {
   const c = chat.conversation;
   const [busy, setBusy] = useState(false);
-  const [delay, setDelay] = useState('60');
   const id = useId();
   const zone = useHospitalZone();
   async function update(values: Record<string, unknown>) {
@@ -83,36 +88,46 @@ export function WorkflowControls({ chat, onChange }: { chat: Chat; onChange: () 
             aria-label="Estado de conversación"
             disabled={busy}
             value={c.state}
-            onChange={(e) =>
-              update({
-                state: e.target.value,
-                snoozedUntil:
-                  e.target.value === 'snoozed'
-                    ? new Date(Date.now() + Number(delay) * 60000).toISOString()
-                    : null,
-              })
-            }
+            onChange={(e) => update({ state: e.target.value, snoozedUntil: null })}
           >
+            {/* MR-51: postponing needs a time, so it is chosen below; «Pospuesta» only names the current state. */}
             {conversationStates.map(([v, l]) => (
-              <NativeSelectOption key={v} value={v}>
+              <NativeSelectOption
+                key={v}
+                value={v}
+                disabled={v === 'snoozed'}
+                hidden={v === 'snoozed' && c.state !== 'snoozed'}
+              >
                 {l}
               </NativeSelectOption>
             ))}
           </NativeSelect>
         </Field>
         <Field className="gap-1.5">
-          <FieldLabel htmlFor={id + '-delay'}>Posponer por</FieldLabel>
-          <NativeSelect
-            id={id + '-delay'}
-            size="sm"
-            value={delay}
-            onChange={(e) => setDelay(e.target.value)}
-          >
-            <NativeSelectOption value="60">Una hora</NativeSelectOption>
-            <NativeSelectOption value="1440">Un día</NativeSelectOption>
-            <NativeSelectOption value="10080">Una semana</NativeSelectOption>
-          </NativeSelect>
-          {c.snoozedUntil && (
+          <FieldLabel id={id + '-snooze'}>
+            {c.state === 'snoozed' ? 'Cambiar la espera' : 'Posponer'}
+          </FieldLabel>
+          <ButtonGroup className="w-full *:flex-1" aria-labelledby={id + '-snooze'}>
+            {snoozes.map(([minutes, label]) => (
+              <Button
+                key={minutes}
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={busy}
+                aria-label={'Posponer ' + label}
+                onClick={() =>
+                  update({
+                    state: 'snoozed',
+                    snoozedUntil: new Date(Date.now() + minutes * 60000).toISOString(),
+                  })
+                }
+              >
+                {label}
+              </Button>
+            ))}
+          </ButtonGroup>
+          {c.state === 'snoozed' && c.snoozedUntil && (
             <FieldDescription>
               Reapertura: {inZone(c.snoozedUntil, zone, dateTime)}
             </FieldDescription>
