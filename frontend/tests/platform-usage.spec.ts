@@ -102,3 +102,32 @@ test('a failed read says so and retries; an installation without clinics says it
   await section.getByLabel('Mes').fill('2026-01');
   await expect(section.getByText('Aún no hay clínicas')).toBeVisible();
 });
+
+test('AI usage shows its numbers once metered', async ({ page }) => {
+  // AC 26: since parte B the AI columns come filled; zero is a number, not «sin medir».
+  const metered = (n: number) => ({
+    ...counts(n),
+    aiCalls: 300 * n,
+    inputTokens: 1_250_000 * n,
+    outputTokens: 0,
+    cachedInputTokens: 900_000 * n,
+  });
+  const section = await enterAsOwner(page, (route, month) =>
+    route.fulfill({
+      json: {
+        ...report(month),
+        aiMetered: true,
+        tenants: report(month).tenants.map((t, i) => ({ ...t, usage: metered(i + 1) })),
+        totals: metered(3),
+      },
+    }),
+  );
+  const table = section.getByRole('table');
+  const north = table.getByRole('row', { name: /Clínica Sintética Norte/ });
+  await expect(north.getByRole('cell').nth(10)).toHaveText('300');
+  await expect(north.getByRole('cell').nth(11)).toHaveText(/^1[.,\s ]?250[.,\s ]?000$/);
+  await expect(north.getByRole('cell').nth(12)).toHaveText('0');
+  const total = table.getByRole('row', { name: /Total/ });
+  await expect(total.getByRole('cell').nth(13)).toHaveText(/^2[.,\s ]?700[.,\s ]?000$/);
+  await expect(section.getByText('sin medir')).toHaveCount(0);
+});

@@ -42,7 +42,7 @@ public sealed class UsageReportTests : IAsyncLifetime
         => db.Activities.Add(new Activity { TenantId = c.TenantId, ConversationId = c.Id, ContactId = c.ContactId, Kind = kind, ActorRole = role, Actor = "x", Body = "actividad-secreta", CreatedAt = at });
     static readonly DateTimeOffset March = new(2026, 3, 10, 15, 0, 0, TimeSpan.Zero);
 
-    // ---- AC 4, 5, 6, 8, 10, 11 ----
+    // ---- AC 4, 5, 6, 8, 10, 23 (sustituye a 11) ----
     [Fact] public async Task CountsEachClinicsMonthByClass()
     {
         var a = await Clinic("a", conversations: 3); var (c1, c2, c3) = (a.Conversations[0], a.Conversations[1], a.Conversations[2]);
@@ -67,11 +67,11 @@ public sealed class UsageReportTests : IAsyncLifetime
         var report = await UsageReport.Read("2026-03", Owner, db, scope, CancellationToken.None);
 
         Assert.Equal("2026-03", report.Month);
-        Assert.False(report.AiMetered);
+        Assert.True(report.AiMetered);
         var mine = report.Tenants.Where(x => x.Name.StartsWith(tag, StringComparison.Ordinal)).ToList();
         Assert.Equal(new[] { a.Id, b.Id }, mine.Select(x => x.Id));
-        Assert.Equal(new UsageCounts(2, 1, 3, 2, 2, 1, 2, 2, 1, 1, null, null, null, null), mine[0].Usage);
-        Assert.Equal(new UsageCounts(1, 1, 1, 0, 0, 0, 1, 1, 0, 0, null, null, null, null), mine[1].Usage);
+        Assert.Equal(new UsageCounts(2, 1, 3, 2, 2, 1, 2, 2, 1, 1, 0, 0, 0, 0), mine[0].Usage); // metered, no model calls: zeros
+        Assert.Equal(new UsageCounts(1, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0), mine[1].Usage);
         // The wire, as minimal APIs serialize it: the contract's fields and nothing a person could be read from.
         var wire = JsonSerializer.Serialize(report, new JsonSerializerOptions(JsonSerializerDefaults.Web));
         using var doc = JsonDocument.Parse(wire);
@@ -103,10 +103,32 @@ public sealed class UsageReportTests : IAsyncLifetime
         Assert.Equal((1, 1), (Patients(march, madrid.Id), Patients(april, madrid.Id)));
     }
 
-    // ---- AC 9 ----
+    // ---- AC 23 ----
+    [Fact] public async Task AiColumnsAreTheMonthsMeteredSums()
+    {
+        var a = await Clinic("ia");
+        Model(a.Id, new(2026, 3, 1), "nvidia", "nemotron", 2, 100, 50, 10); Model(a.Id, new(2026, 3, 31), "anthropic", "claude-opus-5-5", 1, 7, 3, 0);
+        Model(a.Id, new(2026, 2, 28), "nvidia", "nemotron", 50, 5000, 500, 0); Model(a.Id, new(2026, 4, 1), "nvidia", "nemotron", 60, 6000, 600, 0); // the months around
+        await db.SaveChangesAsync();
+        var b = await Clinic("ib"); Model(b.Id, new(2026, 3, 15), "nvidia", "nemotron", 5, 900, 90, 9); await db.SaveChangesAsync();
+        var c = await Clinic("ic"); scope.Id = Guid.Empty;
+
+        var report = await UsageReport.Read("2026-03", Owner, db, scope, CancellationToken.None);
+
+        Assert.True(report.AiMetered);
+        UsageCounts Of(Guid id) => report.Tenants.Single(x => x.Id == id).Usage;
+        Assert.Equal((3L, 107L, 53L, 10L), (Of(a.Id).AiCalls, Of(a.Id).InputTokens, Of(a.Id).OutputTokens, Of(a.Id).CachedInputTokens));
+        Assert.Equal((5L, 900L, 90L, 9L), (Of(b.Id).AiCalls, Of(b.Id).InputTokens, Of(b.Id).OutputTokens, Of(b.Id).CachedInputTokens));
+        Assert.Equal((0L, 0L, 0L, 0L), (Of(c.Id).AiCalls, Of(c.Id).InputTokens, Of(c.Id).OutputTokens, Of(c.Id).CachedInputTokens));
+    }
+    void Model(Guid tenant, DateOnly day, string provider, string model, long calls, long input, long output, long cached)
+        => db.AiUsage.Add(new AiUsage { TenantId = tenant, Day = day, Provider = provider, Model = model, Calls = calls, InputTokens = input, OutputTokens = output, CachedInputTokens = cached });
+
+    // ---- AC 9, 23 ----
     [Fact] public async Task TotalsAreTheSumOfTheRows()
     {
-        var a = await Clinic("ta"); Message(a.Conversations[0], "patient", March, "received"); Message(a.Conversations[0], "agent", March); Step(a.Conversations[0], "appointment", March); await db.SaveChangesAsync();
+        var a = await Clinic("ta"); Message(a.Conversations[0], "patient", March, "received"); Message(a.Conversations[0], "agent", March); Step(a.Conversations[0], "appointment", March);
+        Model(a.Id, new(2026, 3, 10), "nvidia", "nemotron", 4, 400, 40, 4); await db.SaveChangesAsync();
         var b = await Clinic("tb"); Message(b.Conversations[0], "human", March); await db.SaveChangesAsync();
         scope.Id = Guid.Empty;
 
@@ -115,7 +137,9 @@ public sealed class UsageReportTests : IAsyncLifetime
         var rows = report.Tenants.Select(x => x.Usage).ToList();
         Assert.True(rows.Count >= 2);
         Assert.Equal(new UsageCounts(rows.Sum(x => x.NumbersConnected), rows.Sum(x => x.NumbersEnabled), rows.Sum(x => x.PatientMessages), rows.Sum(x => x.AgentReplies), rows.Sum(x => x.HumanReplies),
-            rows.Sum(x => x.TemplatesSent), rows.Sum(x => x.AgentConversations), rows.Sum(x => x.Appointments), rows.Sum(x => x.Registrations), rows.Sum(x => x.Prescriptions), null, null, null, null), report.Totals);
+            rows.Sum(x => x.TemplatesSent), rows.Sum(x => x.AgentConversations), rows.Sum(x => x.Appointments), rows.Sum(x => x.Registrations), rows.Sum(x => x.Prescriptions),
+            rows.Sum(x => x.AiCalls), rows.Sum(x => x.InputTokens), rows.Sum(x => x.OutputTokens), rows.Sum(x => x.CachedInputTokens)), report.Totals);
+        Assert.True(report.Totals.AiCalls >= 4);
     }
 
     // ---- AC 12 ----

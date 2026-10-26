@@ -211,6 +211,8 @@ public sealed class Job : TenantRow
 }
 public sealed class Receipt : TenantRow { public string Key { get; set; } = ""; public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow; }
 public sealed class CalendarLink : TenantRow { public Guid AppointmentId { get; set; } public string GoogleEventId { get; set; } = ""; public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow; }
+/// <summary>docs/usage-report.md parte B: model calls a provider answered and their tokens, per clinic, local day, provider and model. Counters only (INV-U5).</summary>
+public sealed class AiUsage : TenantRow { public DateOnly Day { get; set; } public string Provider { get; set; } = ""; public string Model { get; set; } = ""; public long Calls { get; set; } public long InputTokens { get; set; } public long OutputTokens { get; set; } public long CachedInputTokens { get; set; } }
 public sealed class Audit : TenantRow { public string Actor { get; set; } = ""; public string Action { get; set; } = ""; public string Resource { get; set; } = ""; public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow; }
 
 public sealed class CrmDb(DbContextOptions<CrmDb> options, TenantScope scope, IDataProtectionProvider protection) : DbContext(options)
@@ -230,6 +232,7 @@ public sealed class CrmDb(DbContextOptions<CrmDb> options, TenantScope scope, ID
     public DbSet<ConversationMacro> Macros => Set<ConversationMacro>();
     public DbSet<SavedReply> SavedReplies => Set<SavedReply>();
     public DbSet<CalendarLink> CalendarLinks => Set<CalendarLink>();
+    public DbSet<AiUsage> AiUsage => Set<AiUsage>();
     protected override void OnModelCreating(ModelBuilder b)
     {
         Map<AppointmentReminder>(b);
@@ -272,6 +275,7 @@ public sealed class CrmDb(DbContextOptions<CrmDb> options, TenantScope scope, ID
         b.Entity<Job>().HasIndex(x => new { x.TenantId, x.Key }).IsUnique();
         b.Entity<Job>().HasIndex(x => new { x.TenantId, x.Status, x.CreatedAt });
         b.Entity<CalendarLink>().HasIndex(x => new { x.TenantId, x.AppointmentId }).IsUnique();
+        Map<AiUsage>(b); b.Entity<AiUsage>().HasIndex(x => new { x.TenantId, x.Day, x.Provider, x.Model }).IsUnique(); // the upsert's key
         b.Entity<Opportunity>().Property(x => x.Value).HasPrecision(14, 2);
         b.Entity<Conversation>().HasOne<Contact>().WithMany().HasForeignKey(x => new { x.TenantId, x.ContactId }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict);
         b.Entity<Conversation>().HasOne<Channel>().WithMany().HasForeignKey(x => new { x.TenantId, x.ChannelId }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict);

@@ -2,7 +2,7 @@ using System.Globalization;
 using Microsoft.EntityFrameworkCore;
 namespace Recepcion;
 
-/// <summary>Null AI columns: not metered yet (docs/usage-report.md, parte B).</summary>
+/// <summary>The AI columns are null only while AiMetered is false; since parte B they are always metered (docs/usage-report.md AC 23).</summary>
 public record UsageCounts(int NumbersConnected, int NumbersEnabled, int PatientMessages, int AgentReplies, int HumanReplies, int TemplatesSent, int AgentConversations, int Appointments, int Registrations, int Prescriptions,
     long? AiCalls, long? InputTokens, long? OutputTokens, long? CachedInputTokens);
 public record ClinicUsage(Guid Id, string Name, UsageCounts Usage);
@@ -22,6 +22,10 @@ public static class UsageReport
         var tenants = await db.Tenants.AsNoTracking().OrderBy(x => x.Name).ThenBy(x => x.Id).Select(x => new { x.Id, x.Name, x.TimeZone }).ToListAsync(ct);
         var channels = await db.Channels.IgnoreQueryFilters().Where(x => !x.PhoneNumberId.StartsWith("demo"))
             .GroupBy(x => x.TenantId).Select(g => new { g.Key, Connected = g.Count(), Enabled = g.Count(x => x.Enabled) }).ToDictionaryAsync(x => x.Key, ct);
+        // AI days are already each clinic's local day (parte B): one grouped read for every clinic.
+        var (firstDay, nextDay) = (DateOnly.FromDateTime(first), DateOnly.FromDateTime(first.AddMonths(1)));
+        var ai = await db.AiUsage.IgnoreQueryFilters().Where(x => x.Day >= firstDay && x.Day < nextDay).GroupBy(x => x.TenantId)
+            .Select(g => new { g.Key, Calls = g.Sum(x => x.Calls), Input = g.Sum(x => x.InputTokens), Output = g.Sum(x => x.OutputTokens), Cached = g.Sum(x => x.CachedInputTokens) }).ToDictionaryAsync(x => x.Key, ct);
         var messages = new Dictionary<(Guid, string, string), int>(); var conversations = new Dictionary<Guid, int>(); var actions = new Dictionary<(Guid, string), int>();
         // Each clinic's month starts at its own local midnight: one read per distinct zone, never one per clinic.
         // ponytail: Messages has no (TenantId, CreatedAt) index; a monthly read walks the conversation index. Add one if it gets slow.
@@ -45,13 +49,14 @@ public static class UsageReport
             channels.GetValueOrDefault(t.Id)?.Connected ?? 0, channels.GetValueOrDefault(t.Id)?.Enabled ?? 0,
             Sent(t.Id, "patient"), Sent(t.Id, "agent"), Sent(t.Id, "human"), messages.GetValueOrDefault((t.Id, "system", "template")),
             conversations.GetValueOrDefault(t.Id), actions.GetValueOrDefault((t.Id, "appointment")), actions.GetValueOrDefault((t.Id, "patient_registered")), actions.GetValueOrDefault((t.Id, "prescription_delivered")),
-            null, null, null, null))).ToList();
+            ai.GetValueOrDefault(t.Id)?.Calls ?? 0, ai.GetValueOrDefault(t.Id)?.Input ?? 0, ai.GetValueOrDefault(t.Id)?.Output ?? 0, ai.GetValueOrDefault(t.Id)?.Cached ?? 0))).ToList();
         var all = rows.Select(x => x.Usage).ToList();
         var totals = new UsageCounts(all.Sum(x => x.NumbersConnected), all.Sum(x => x.NumbersEnabled), all.Sum(x => x.PatientMessages), all.Sum(x => x.AgentReplies), all.Sum(x => x.HumanReplies),
-            all.Sum(x => x.TemplatesSent), all.Sum(x => x.AgentConversations), all.Sum(x => x.Appointments), all.Sum(x => x.Registrations), all.Sum(x => x.Prescriptions), null, null, null, null);
+            all.Sum(x => x.TemplatesSent), all.Sum(x => x.AgentConversations), all.Sum(x => x.Appointments), all.Sum(x => x.Registrations), all.Sum(x => x.Prescriptions),
+            all.Sum(x => x.AiCalls), all.Sum(x => x.InputTokens), all.Sum(x => x.OutputTokens), all.Sum(x => x.CachedInputTokens));
         // The owner read every clinic's counts: each one keeps that in its own trail. CrmDb guards one tenant per save.
         // ponytail: one insert per clinic per read; batch with a raw insert if clinics reach the thousands.
         foreach (var t in rows) { scope.Id = t.Id; db.Audits.Add(new Audit { TenantId = t.Id, Actor = u.Subject, Action = "usage.read", Resource = month }); await db.SaveChangesAsync(ct); }
-        return new(month, false, rows, totals);
+        return new(month, true, rows, totals);
     }
 }

@@ -75,6 +75,48 @@ namespace Recepcion.Api.Migrations
                     b.ToTable("Activities");
                 });
 
+            modelBuilder.Entity("Recepcion.AiUsage", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<long>("CachedInputTokens")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("Calls")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateOnly>("Day")
+                        .HasColumnType("date");
+
+                    b.Property<long>("InputTokens")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Model")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<long>("OutputTokens")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Provider")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "Day", "Provider", "Model")
+                        .IsUnique();
+
+                    b.ToTable("AiUsage");
+                });
+
             modelBuilder.Entity("Recepcion.AppointmentReminder", b =>
                 {
                     b.Property<Guid>("Id")
@@ -935,6 +977,15 @@ namespace Recepcion.Api.Migrations
                 });
 
             modelBuilder.Entity("Recepcion.Activity", b =>
+                {
+                    b.HasOne("Recepcion.Tenant", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Recepcion.AiUsage", b =>
                 {
                     b.HasOne("Recepcion.Tenant", null)
                         .WithMany()

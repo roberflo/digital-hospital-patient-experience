@@ -14,7 +14,8 @@ La identidad de plataforma y su compuerta son las de `docs/platform-owner.md` (R
 - Un mensaje **histórico** (`IsHistory`, importado al conectar en coexistencia) no es uso del mes y no cuenta. Un envío que **falló** (`Status = failed`: no salió) no cuenta; `sending` e `uncertain` sí (pudieron salir).
 - **Conversación atendida por el agente**: conversación con al menos una `Activity` de `ActorRole = agent_ai` en el mes (la regla de `Attended` en `AgentMetrics`).
 - **Acción del agente**: `Activity` de `ActorRole = agent_ai` con `Kind` `appointment` (agendar, cambiar o cancelar una cita), `patient_registered` o `prescription_delivered` — los tipos de `AgentMetrics`. Una cita que agenda una persona no es del agente.
-- **Uso de IA**: llamadas al modelo y tokens de entrada, salida y entrada en caché, por modelo. **Sin medir** en esta entrega (ver «Parte B»).
+- **Uso de IA**: llamadas al modelo que un proveedor **respondió** y sus tokens de entrada, salida y entrada en caché, por proveedor y modelo (ver «Parte B»).
+- **Día de IA** de una clínica: la fecha local en su `Tenant.TimeZone` cuando el proveedor respondió. El mes de IA son los días locales del 1 al último del mes: el mismo corte que el resto del reporte.
 
 ## Invariantes
 
@@ -54,7 +55,7 @@ Una fila por `Tenant` (también una clínica en modo `reminders` o sin actividad
 | 8 | INV-U2: las filas de otra clínica no cambian los conteos de la primera | `CountsEachClinicsMonthByClass` (la segunda clínica tiene datos y se comprueba por separado) |
 | 9 | INV-U4: `totals` es la suma de las filas | `UsageReportTests.TotalsAreTheSumOfTheRows` |
 | 10 | Sin PHI en el cable: los campos son exactamente los del contrato; un nombre de contacto, teléfono o cuerpo sembrados no aparecen | `CountsEachClinicsMonthByClass` serializa como la API y busca las cadenas |
-| 11 | Las columnas de IA son `null` y `aiMetered` es `false` mientras no exista la medición (parte B) | El mismo caso |
+| 11 | ~~Las columnas de IA son `null` y `aiMetered` es `false` mientras no exista la medición~~ Sustituido por AC 23 al llegar la parte B: `aiMetered` es `true` y una clínica sin llamadas sale con ceros | `CountsEachClinicsMonthByClass` (ahora espera `0` y `true`) |
 | 12 | Cada lectura deja un `Audit` `usage.read` en cada clínica que muestra, con `Actor = platform:<sub>` y `Resource` = el mes | `UsageReportTests.EveryReadIsAuditedInEachClinicItShows` |
 | 13 | `month` ausente o mal formado → 400, sin auditar | `UsageReportTests.AMalformedMonthIsABadRequest` |
 | 14 | Consultas agrupadas: un número fijo de lecturas por zona horaria distinta, nunca una por clínica | Revisión del diff (`UsageReport.Read`); `ponytail:` con el techo |
@@ -80,8 +81,40 @@ Una fila por `Tenant` (también una clínica en modo `reminders` o sin actividad
 - **Asumida** — `appointment` cuenta agendar, cambiar y cancelar por igual (así lo escribe el agente).
 - **Asumida** — la fecha de un mensaje es su `CreatedAt` (la de WhatsApp para los entrantes, la de creación para los salientes).
 - **Asumida** — se audita cada lectura en cada clínica mostrada, como `reminder_doubts.read`; con cientos de clínicas son cientos de filas por lectura.
-- **Bloqueante para la parte B** — la medición de tokens toca `backend/AgentGateway.cs`, que otra sesión estaba editando: no se empezó. Necesita una tabla nueva (`AiUsage`) y por tanto una migración ya aprobada por el propietario.
+- **Resuelta** — la parte B (tabla `AiUsage` y su migración) la aprobó el propietario como parte de la etapa 1.
 
-## Parte B — medición de IA (pendiente)
+## Parte B — medición de IA
 
-Registrar cada llamada al modelo (`ChatResponse.Usage`: `InputTokenCount`, `OutputTokenCount`, `CachedInputTokenCount`) por clínica, día y modelo en `AiUsage(TenantId, Day, Model, Calls, InputTokens, OutputTokens, CachedInputTokens)` con upsert atómico, desde un `DelegatingChatClient` en la pasarela; el respaldo cuenta contra el modelo que respondió. Al llegar, `aiMetered` pasa a `true` y las cuatro columnas se llenan.
+Cada llamada al modelo que un proveedor responde suma en `AiUsage(TenantId, Day, Provider, Model, Calls, InputTokens, OutputTokens, CachedInputTokens)`, una fila por clave, con un `INSERT … ON CONFLICT DO UPDATE` atómico. La suma la hace un envoltorio alrededor de **cada proveedor** de la pasarela (`AgentRuntime.Chat()`): un proveedor que falla no responde y no suma; el respaldo suma contra su propio proveedor y modelo. `Provider` es la ranura de la pasarela (`nvidia`, `openai`, `anthropic`); `Model` es el `ModelId` que trae la respuesta o, si no lo trae, el configurado.
+
+- **INV-U5** `AiUsage` guarda solo la clave y cuatro contadores: nunca mensajes, instrucciones, nombres ni teléfonos.
+- **INV-U6** Una fila de `AiUsage` es de una clínica (`TenantId` + filtro global de `TenantRow`); la suma usa el `TenantScope` del turno.
+
+| AC | Criterio | Cómo se prueba |
+|---|---|---|
+| 17 | Una llamada respondida suma 1 a `Calls` y los tokens de `ChatResponse.Usage` (`InputTokenCount`, `OutputTokenCount`, `CachedInputTokenCount`) en la fila de la clínica, su día, proveedor y modelo | `AiUsageTests.EachAnsweredCallAddsToTheClinicsRow` (una llamada a herramienta y la respuesta: dos llamadas, una sola fila) |
+| 18 | Una fila por clave: dos llamadas con la misma clave incrementan la misma fila | El mismo caso |
+| 19 | Un proveedor que falla no suma; el que respondió suma con su proveedor y modelo | `AiUsageTests.OnlyTheProviderThatAnsweredCounts` (NIM caído, OpenAI responde) |
+| 20 | Una respuesta sin `Usage` cuenta la llamada con tokens en `0`: ni falla el turno ni escribe un número inventado | `AiUsageTests.AResponseWithoutUsageCountsTheCallOnly` |
+| 21 | INV-U6: dos clínicas nunca se mezclan; cada una ve solo su fila con el filtro global | `AiUsageTests.TwoClinicsNeverMixAndEachDayIsLocal` |
+| 22 | `Day` es la fecha local de la clínica | El mismo caso: una clínica en `Pacific/Kiritimati` (UTC+14) y otra en `Pacific/Pago_Pago` (UTC−11) siempre tienen fechas locales distintas; un día UTC fallaría en una de las dos |
+| 23 | El reporte llena las cuatro columnas con la suma de las filas de la clínica cuyos días caen en el mes, `aiMetered = true`, ceros sin llamadas; los totales las suman (INV-U4) | `UsageReportTests.AiColumnsAreTheMonthsMeteredSums` (filas el último día del mes, el primero del siguiente y de otra clínica) y `TotalsAreTheSumOfTheRows` |
+| 24 | Una sola consulta agrupada para la IA de todas las clínicas, nunca una por clínica | Revisión del diff (`UsageReport.Read`) |
+| 25 | INV-U5: la tabla no tiene más columnas que la clave y los contadores | Revisión de la migración `AiUsage` |
+| 26 | Web: con `aiMetered` los números de IA se muestran con el mismo formato que el resto | `frontend/tests/platform-usage.spec.ts` «AI usage shows its numbers once metered» (sin cambio de componente: `Cells` ya formatea todo valor no nulo) |
+
+### Anti-criterios de la parte B
+
+- Guardar texto del turno (mensajes, instrucciones, salida del modelo) o cualquier dato del paciente en `AiUsage`.
+- Sumar la llamada de un proveedor que falló, o sumar dos veces una llamada que respondió el respaldo.
+- Que una respuesta sin `Usage` tumbe el turno del paciente o escriba tokens inventados.
+- Leer `AiUsage` de otra clínica fuera del manejador del reporte.
+- Precios o dinero.
+
+### Preguntas abiertas de la parte B
+
+- **Asumida** — el día se guarda en la zona de la clínica **al responder**; si una clínica cambia de zona a mitad de mes, los días ya guardados no se recalculan.
+- **Asumida** — una respuesta sin `Usage` cuenta como llamada con tokens en cero (la llamada ocurrió; los tokens no se inventan). Los proveedores actuales sí lo informan.
+- **Asumida** — el reintento por respuesta vacía (`AgentRuntime.Run`) son dos llamadas y cuenta dos: los dos se pagaron.
+- **Asumida** — la suma se escribe en cuanto el proveedor responde, fuera del `SaveChanges` del turno: un turno que falla después sigue contando lo que se gastó.
+- **Asumida** — solo mide la pasarela del agente de WhatsApp (`AgentRuntime.Chat()`), la única que llama a un modelo hoy. Las evaluaciones (`AgentEvals`) pasan por ella y suman en su inquilino sintético.
