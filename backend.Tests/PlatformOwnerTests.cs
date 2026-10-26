@@ -93,6 +93,7 @@ public sealed class PlatformOwnerTests : IAsyncLifetime
     static readonly string[] Operable =
     [
         "GET /api/platform/tenants", "GET /api/platform/hospitals", "POST /api/platform/tenants",
+        "GET /api/platform/usage", // docs/usage-report.md AC 1
         "GET /api/hospital/connection", "GET /api/hospital/connection/setup", "PUT /api/hospital/connection", "POST /api/hospital/connection/check",
         "GET /api/platform/installation",
         "GET /api/channels", "POST /api/channels/onboarding", "POST /api/channels/sync", "PATCH /api/channels/{id:guid}", "POST /api/channels/{id:guid}/diagnostics",
@@ -101,7 +102,7 @@ public sealed class PlatformOwnerTests : IAsyncLifetime
     {
         Assert.Equal(Operable.Order(StringComparer.Ordinal), Api.Value.Where(x => Mark(x) is not null).Select(Key).Order(StringComparer.Ordinal));
         // Only the list works before a reception is chosen.
-        Assert.Equal(new[] { "GET /api/platform/hospitals", "GET /api/platform/tenants", "POST /api/platform/tenants" }, Api.Value.Where(x => Mark(x) is { NeedsTenant: false }).Select(Key).Order(StringComparer.Ordinal));
+        Assert.Equal(new[] { "GET /api/platform/hospitals", "GET /api/platform/tenants", "GET /api/platform/usage", "POST /api/platform/tenants" }, Api.Value.Where(x => Mark(x) is { NeedsTenant: false }).Select(Key).Order(StringComparer.Ordinal));
     }
     [Fact] public async Task EveryOtherMappedApiRouteDeniesThePlatformOwner()
     {

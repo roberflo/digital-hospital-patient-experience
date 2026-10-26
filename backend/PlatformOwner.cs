@@ -128,6 +128,7 @@ public static class PlatformOwner
         app.MapGet("/api/platform/tenants", Tenants).RequireAuthorization().WithMetadata(new PlatformOperable(NeedsTenant: false));
         app.MapGet("/api/platform/hospitals", Hospitals).RequireAuthorization().WithMetadata(new PlatformOperable(NeedsTenant: false));
         app.MapPost("/api/platform/tenants", Open).RequireAuthorization().WithMetadata(new PlatformOperable(NeedsTenant: false));
+        app.MapGet("/api/platform/usage", UsageReport.Read).RequireAuthorization().WithMetadata(new PlatformOperable(NeedsTenant: false));
     }
 }
 /// <summary><paramref name="Mode"/>: null while it has no space here; «reception» or «reminders» once it has.</summary>

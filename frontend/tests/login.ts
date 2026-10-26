@@ -10,6 +10,8 @@ export const users = {
   doctor: { username: 'dev-medicos-a', name: 'Dra. Mónica Sintética Aguilar' },
   other: { username: 'dev-administrador-b', name: 'Alba Sintética Bonilla' },
   hospital: { username: 'dev-recepcion-c', name: 'Rosa Sintética Castillo' },
+  // Realm role platform-owner, no tenant_id (docs/platform-owner.md).
+  platform: { username: 'dev-plataforma', name: 'Pía Sintética Dueña de Plataforma' },
 } as const;
 export type User = keyof typeof users;
 

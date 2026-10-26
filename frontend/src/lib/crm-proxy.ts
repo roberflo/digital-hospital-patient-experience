@@ -35,7 +35,7 @@ export const sameOrigin = (req: NextRequest) =>
 type Context = { params: Promise<{ path: string[] }> };
 // Rutas de plataforma sin recepción elegida: la lista de recepciones (y abrir una, REC-3) y los
 // hospitales que aún no la tienen. Nunca llevan X-Acting-Tenant.
-const TENANTLESS = new Set(['platform/tenants', 'platform/hospitals']);
+const TENANTLESS = new Set(['platform/tenants', 'platform/hospitals', 'platform/usage']);
 const refuseActing = (status: number, code: string, title: string) =>
   NextResponse.json({ title, code }, { status, headers: { 'Cache-Control': 'no-store' } });
 export const proxy = (req: NextRequest, context: Context) => forward(req, context);

@@ -30,6 +30,7 @@ import { HospitalConnection } from './hospital-connection';
 import { ThemeToggle } from './theme-toggle';
 import { setActing, ReceptionOpener, ReceptionPicker } from './platform-receptions';
 import { WhatsAppSection } from './platform-whatsapp';
+import { UsageReport } from './platform-usage';
 
 type ActingFor = { tenantId: string; name: string };
 
@@ -181,6 +182,7 @@ export default function PlatformWorkspace({
           <>
             <ReceptionPicker />
             <ReceptionOpener />
+            <UsageReport />
           </>
         )}
       </main>
