@@ -181,7 +181,7 @@ public sealed partial class AgentRuntime
         // Which prescription left, so the CRM history and Hospital's own export audit can be matched. The id is a reference, not clinical content.
         db.Activities.Add(new Activity { TenantId = scope.Id, ConversationId = conv.Id, ContactId = contact.Id, Kind = "prescription_delivered", Actor = "Agente", ActorRole = "agent_ai", Body = $"Receta emitida entregada por WhatsApp. Referencia Hospital: {prescription}." }); await db.SaveChangesAsync(ct);
         // Sending bumps the conversation revision; the rest of the turn continues on the new one.
-        revision = conv.Revision; return Result(new { sent = sent.Status == "sent", status = sent.Status });
+        revision = conv.Revision; delivered |= sent.Status == "sent"; return Result(new { sent = sent.Status == "sent", status = sent.Status });
     }
     async Task Confirm(Conversation conv, Contact contact, string code, Job job, CancellationToken ct)
     {

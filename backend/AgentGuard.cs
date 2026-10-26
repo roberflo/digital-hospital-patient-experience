@@ -102,9 +102,15 @@ public static partial class AgentGuard
     public static bool Affirms(string body) => Yes().IsMatch(body);
 
     /// <summary>The reply tells the patient they are being transferred. The runtime then transfers them for real.</summary>
-    public static bool ClaimsHandoff(string reply) => Transfer().Matches(reply).Any(match =>
+    public static bool ClaimsHandoff(string reply) => Asserts(Transfer(), reply);
+    /// <summary>The reply with each sentence that announces a transfer taken out: what is left when nobody was transferred.</summary>
+    public static string WithoutHandoffClaims(string reply) =>
+        Regex.Replace(Regex.Replace(Sentence().Replace(reply, s => ClaimsHandoff(s.Value) ? "" : s.Value), @"[ \t]+(?=\n|$)", ""), @"\n{3,}", "\n\n").Trim();
+    /// <summary>The reply says something was written down for the team. True only if record_note ran; otherwise nothing was kept.</summary>
+    public static bool ClaimsNote(string reply) => Asserts(Noted(), reply);
+    /// <summary>A claim stated, not asked: «¿Te paso con recepción?» or «¿Lo dejo anotado?» is an offer the patient still has to accept.</summary>
+    static bool Asserts(Regex claim, string reply) => claim.Matches(reply).Any(match =>
     {
-        // «¿Te paso con recepción?» is an offer the patient still has to accept, not an announcement.
         var from = reply.LastIndexOfAny(['.', '!', '?', ';', '\n'], match.Index) + 1; var to = reply.IndexOfAny(['.', '!', '?', ';', '\n'], match.Index + match.Length);
         return !(reply[from..match.Index].Contains('¿') || (to >= 0 && reply[to] == '?'));
     });
@@ -203,6 +209,8 @@ public static partial class AgentGuard
     [GeneratedRegex(@"(?i)\bno\s+(?:es|se\s+trata\s+de|tengo|hay)\s+(?:una\s+|ninguna\s+)?emergencias?\b|\bninguna\s+emergencia\b|\bsin\s+emergencia\b")] private static partial Regex NotAnEmergency();
     [GeneratedRegex(@"(?i)\b(?:voy|vamos|procedo)\s+a\s+(?:derivar|transferir|pasar|comunicar)\w*|\b(?:te|lo|la|le)\s+(?:derivo|transfiero|paso|comunico|derivar[eé]|transferir[eé]|pasar[eé]|comunicar[eé])\b|\b(?:un|una)\s+(?:agente|asesor|asesora|persona|miembro del equipo)\s+(?:te|lo|la|le)\s+atender[aá]")] private static partial Regex Transfer();
     [GeneratedRegex(@"(?i)(?:https?://|www\.)\S+")] private static partial Regex Link();
+    [GeneratedRegex(@"(?i)\b(?:anotad|apuntad)[oa]s?\b|\b(?:anot|apunt)é\b|\b(?:he|hemos)\s+(?:anotado|apuntado|tomado\s+nota)\b|\btomé\s+nota\b|\bdejé\s+(?:una\s+)?nota\b")] private static partial Regex Noted();
+    [GeneratedRegex(@"[^.!?;\n]+[.!?;]*")] private static partial Regex Sentence();
     [GeneratedRegex(@"(?i)\b\d+(?:[.,]\d+)?\s*(?:mg|mcg|µg|g|ml|ui|gotas?|tabletas?|pastillas?|c[aá]psulas?|comprimidos?|ampollas?|cucharadas?)\b|\bcada\s+\d+\s*(?:horas?|hrs?|h|d[ií]as?)\b")] private static partial Regex Dose();
     [GeneratedRegex(@"(?i)\b(?:qued[oó]|est[aá]|ha\s+sido|ha\s+quedado|fue)\s+(?:ya\s+)?(?:confirmad|agendad|reprogramad|cancelad|reservad|programad)[ao]\b|\b(?:he|hemos)\s+(?:confirmado|agendado|reprogramado|cancelado|reservado)\b|\b(?:cancel|agend|reprogram|reserv)é\b")] private static partial Regex Done();
     [GeneratedRegex(@"(?i)^\W*(s[ií]|sip|claro|correcto|afirmativo|as[ií] es|ok|okay|dale|de acuerdo|confirmo|conf[ií]rm[ae]la|conf[ií]rmalo|confirmar)\b")] private static partial Regex Yes();

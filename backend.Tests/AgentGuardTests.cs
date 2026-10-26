@@ -742,6 +742,43 @@ public sealed class AgentGuardTests : IAsyncLifetime
     }
 
     [Theory]
+    [InlineData("Te envié tu receta. Te paso con recepción por si tienes dudas.", "Te envié tu receta.")]
+    [InlineData("Voy a derivarte a recepción.", "Te envié tu receta por aquí.")]
+    public async Task ATransferAnnouncedAfterDeliveringThePrescriptionIsDroppedNotTurnedIntoAnOffer(string reply, string sent)
+    {
+        // Found by the evals (recetas-101): the PDF went out and the closing «te paso con recepción» became «Eso prefiero que lo vea una persona»,
+        // which contradicts the delivery. Nobody was transferred, so the claim is dropped and what remains is sent.
+        await h.Link(); await h.Say("patient", "Perdí mi receta, ¿me la pueden mandar otra vez?");
+        var hospital = h.Hospital(new { prescriptionId = Guid.NewGuid(), patientId = h.Contact.PatientId, encounterId = Guid.NewGuid(), state = "signed", signedAt = DateTimeOffset.UtcNow, contentWithheld = false, lines = Array.Empty<object>() });
+
+        await h.Runtime(h.Model(AgentHarness.ToolCall("send_latest_prescription", new { }), AgentHarness.Reply(reply)), h.Sender(), hospital).Run(h.Job, CancellationToken.None);
+
+        Assert.Equal(1, h.Documents);
+        Assert.Equal("agent", (await h.Fresh()).Status);
+        Assert.DoesNotContain(await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id).ToListAsync(), a => a.Kind == "handoff_offer");
+        Assert.Contains(sent, h.Sent);
+        Assert.DoesNotContain(h.Sent, text => text.Contains("paso con") || text.Contains("derivar") || text.Contains("prefiero que lo vea"));
+    }
+
+    [Theory]
+    [InlineData("Lo siento mucho. Ya quedó anotado.", false, true)]
+    [InlineData("Lo anoté para el equipo.", false, true)]
+    [InlineData("Tomé nota de lo que me dices.", false, true)]
+    [InlineData("Lo siento mucho. Ya quedó anotado.", true, false)]   // record_note ran: the claim is true
+    [InlineData("¿Quieres que lo deje anotado para el equipo?", false, false)] // an offer, not a claim
+    public async Task ANoteClaimedWithoutRecordingItIsWithheld(string reply, bool recorded, bool withheld)
+    {
+        // Found by the evals (recetas-108): «Ya quedó anotado» went out and record_note was never called, so nothing was written for the team.
+        await h.Say("patient", "Quiero que el doctor sepa que me cambié de teléfono.");
+        var model = recorded ? h.Model(AgentHarness.ToolCall("record_note", new { note = "Nota sintética" }), AgentHarness.Reply(reply)) : h.Model(AgentHarness.Reply(reply));
+
+        await h.Runtime(model, h.Sender()).Run(h.Job, CancellationToken.None);
+
+        Assert.Equal(!withheld, h.Sent.Contains(reply));
+        Assert.Equal(withheld, (await h.Db.Activities.Where(a => a.ConversationId == h.Conversation.Id && a.Kind == "guard").ToListAsync()).Any(a => a.Body.Contains("anotación")));
+    }
+
+    [Theory]
     [InlineData("Creo que tomé una sobredosis", "Si es una emergencia, llama ya al *2200 0000*")]
     [InlineData("Quiero hablar con una persona, por favor", "Le pasé tu consulta al equipo del hospital")]
     public async Task HandoffMessageSaysWhatHappensNext(string message, string opening)

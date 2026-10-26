@@ -23,6 +23,9 @@ De 50 hallazgos: 19 vigentes, 20 vigentes en parte, 9 falsos, 2 ya resueltos (ta
   Hospital no tiene **ninguna** cita del paciente anterior a la nueva, de cualquier fecha, sin contar
   las canceladas (`cancelled-by-patient`, `cancelled-by-clinic`); si no, «subsecuente» (`follow-up`).
   Si Hospital no responde, `follow-up`.
+- **Reacciones y síntomas (decisión del dueño 2026-10-25):** reacción a un medicamento ⇒ se ofrece
+  una persona (no derivación forzada); síntomas sin señal de alarma ⇒ sin recomendar medicamentos,
+  se ofrece cita. Las señales de alarma no cambian. Criterios 83–89 de `docs/reception-agent.md`.
 - **MR-43, decisión del dueño (2026-10-17), sustituye «cualquiera, sin canceladas» de OQ-2:** «primera
   vez» = el paciente no tiene ninguna cita anterior **a la que llegó**. Si no llegó a su primera cita
   (no-show, sin registrar o cancelada), la siguiente sigue siendo primera vez. Lo decide Hospital en

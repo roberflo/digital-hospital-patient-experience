@@ -18,7 +18,7 @@ public sealed partial class AgentRuntime
     /// <summary>What to say about money: the hospital's choice. Off, the catalogue still answers whether a service exists; a price the guide itself states stays sayable, as before.</summary>
     string PricesRule() => attention.Prices == "on"
         ? "Precios: di el precio exactamente como lo devuelve hospital_services en listPrice, como «precio de lista» y con su moneda; nunca sumes, estimes ni calcules un monto con descuento. "
-            + "Un precio que la guía diga también puedes decirlo, tal como está en la guía. Si un servicio viene sin listPrice y la guía tampoco dice su precio, lo confirma recepción: no es gratuito. "
+            + "Un precio que la guía diga también puedes decirlo, tal como está en la guía. Si un servicio consta pero viene sin listPrice y la guía tampoco dice su precio, nómbralo y di que su precio no está publicado por aquí y que lo confirma recepción; ofrece pasar con una persona sólo si el paciente pide hablar con alguien, y no uses handoff ni anuncies que lo pasas. Nunca escribas «gratis», «gratuito» ni «sin costo», ni siquiera negados. "
             + "Si preguntan por el convenio de una empresa, usa hospital_agreement sólo con el nombre que el paciente escribió (si no lo ha dicho, pregúntaselo): di el porcentaje tal como viene y que recepción lo aplica al pagar; nunca enumeres empresas ni pruebes nombres."
         : "Precios: este hospital no da por WhatsApp los precios de su catálogo. Si la guía dice el precio, dilo tal como está en la guía; si no, nunca lo estimes: "
             + "en tu mensaje confirma si el servicio consta, di que el precio lo confirma recepción y pregunta si quiere que le pasen la consulta. Usa handoff sólo cuando el paciente acepte: "
