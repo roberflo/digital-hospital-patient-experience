@@ -19,8 +19,17 @@ public class ReminderRulesTests
     [InlineData("STOP","off")][InlineData("cancelar recordatorios","off")]
     [InlineData("BAJA 00000000-0000-4000-8000-000000000001","off")][InlineData("baja 00000000-0000-4000-8000-000000000001","off")]
     [InlineData("No más recordatorios","off")][InlineData("no mas recordatorios","off")][InlineData(" NO MÁS RECORDATORIOS ","off")]
+    [InlineData("No ma\u0301s recordatorios","off")] // review nit 2: «á» written as «a» + U+0301 (NFD), as some keyboards send it
     [InlineData("BAJA mañana",null)][InlineData("BAJA 123",null)][InlineData("CANCELAR 00000000-0000-4000-8000-000000000001",null)][InlineData("No más recordatorios por ahora",null)]
     public void ConsentCommandsDoNotMistakeAppointmentCancellation(string text,string? expected)=>Assert.Equal(expected,ReminderRules.ConsentCommand(text));
+    // Review nit 1: a «No más recordatorios» payload is a command only with a real GUID, as ConsentCommand reads it; anything else reads as its label.
+    [Theory][InlineData("BAJA 00000000-0000-4000-8000-000000000001",true)][InlineData("BAJA ------------------------------------",false)][InlineData("BAJA 0000000000000000000000000000000000ab",false)]
+    public void StopPayloadIsACommandOnlyWithAGuid(string payload,bool command)
+    {
+        var message=JsonSerializer.SerializeToElement(new{type="button",button=new{payload,text="No más recordatorios"}});
+        Assert.Equal(command?payload:"No más recordatorios",WhatsAppContent.Inbound(message,default));
+        Assert.Equal(command,ReminderRules.ConsentCommand(payload) is not null);
+    }
 
     // Criterios 7 y 10: what a tap leaves for the desk is filed where the desk looks, not among CRM updates.
     [Theory]

@@ -44,7 +44,9 @@ public sealed class KapsoClient(HttpClient http, IConfiguration config)
     {
         var raw = await Platform(HttpMethod.Get, "whatsapp/phone_numbers/" + Uri.EscapeDataString(number), ct: ct, general: general);
         var data = raw.TryGetProperty("data", out var d) ? d : raw;
-        var waba = data.GetProperty("business_account_id").GetString()!;
+        // A number Kapso reports without its WhatsApp Business account is the provider's error, said on the screen (400), never a 500 (review minor 5).
+        var waba = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("business_account_id", out var account) && account.ValueKind == JsonValueKind.String && account.GetString() is { Length: > 0 } value
+            ? value : throw new ArgumentException("Kapso no reporta la cuenta de WhatsApp Business de este número; revisa su conexión en Kapso.");
         using var req = Request(HttpMethod.Get, general, Uri.EscapeDataString(waba) + "/message_templates?name=" + Uri.EscapeDataString(name) + "&limit=100");
         using var res = await http.SendAsync(req, ct); res.EnsureSuccessStatusCode();
         var payload = await res.Content.ReadFromJsonAsync<JsonElement>(ct);

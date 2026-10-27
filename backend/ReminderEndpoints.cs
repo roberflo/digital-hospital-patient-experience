@@ -34,27 +34,39 @@ public static class ReminderEndpoints
                 conversation,r.Status is "sent" or "confirmed" or "uncertain"&&requests.Any(a=>a.ConversationId==conversation&&(a.MessageId==null/* before the tapped reminder was kept */||a.MessageId==r.MessageId)&&a.CreatedAt>=since));
         }).ToList();
     }
-    /// <summary>The administrator's reminder settings: channel, pause and the templates of both windows (criterios 13 y 52). Audited.</summary>
-    public static async Task Configure(ReminderSettingsInput input,CrmDb db,CurrentUser user,TenantScope scope,ConversationService service,KapsoClient kapso)
+    /// <summary>The administrator's reminder settings: channel, pause and the templates of both windows (criterios 13 y 52). Audited with the
+    /// templates chosen (names only). Kapso is asked before the tenant's reminder lock, with the request's token (review minor 3).</summary>
+    public static async Task Configure(ReminderSettingsInput input,CrmDb db,CurrentUser user,TenantScope scope,ConversationService service,KapsoClient kapso,CancellationToken ct=default)
     {
-        user.RequireAdmin();using var lease=await service.Lock(ReminderRules.LockId(scope.Id));
-        if(input.ChannelId is {} id&&!await db.Channels.AnyAsync(c=>c.Id==id&&c.Enabled&&c.DoctorId==null))throw new ArgumentException("Selecciona un número general activo de este hospital.");
+        user.RequireAdmin();
+        if(input.ChannelId is {} id&&!await db.Channels.AnyAsync(c=>c.Id==id&&c.Enabled&&c.DoctorId==null,ct))throw new ArgumentException("Selecciona un número general activo de este hospital.");
         if(input.Enabled&&input.ChannelId is null)throw new ArgumentException("Selecciona el número para recordatorios.");
         // A Meta template name (criterio 13).
         foreach(var name in new[]{input.DayTemplate,input.HourTemplate})
             if(name is not null&&!System.Text.RegularExpressions.Regex.IsMatch(name,"^[a-z0-9_]{1,512}$"))throw new ArgumentException("Nombre de plantilla inválido.");
-        var tenant=await db.Tenants.SingleAsync(t=>t.Id==scope.Id);
         // S5, criterio 52 (A-S5-4): a template that changes is taken only if Meta reports it APPROVED with its window's shape, before anything is written.
-        foreach(var (name,current,window) in new[]{(input.DayTemplate,tenant.ReminderDayTemplate,"day_before"),(input.HourTemplate,tenant.ReminderHourTemplate,"hour_before")})
+        var before=await db.Tenants.AsNoTracking().SingleAsync(t=>t.Id==scope.Id,ct);
+        var asked=new HashSet<string>();
+        foreach(var (name,current,window) in new[]{(input.DayTemplate,before.ReminderDayTemplate,"day_before"),(input.HourTemplate,before.ReminderHourTemplate,"hour_before")})
         {
             if(name is null||name==current)continue;
-            var channel=input.ChannelId is {} c?await db.Channels.SingleAsync(x=>x.Id==c):throw new ArgumentException("Selecciona el número para recordatorios.");
-            if(await kapso.ReminderTemplateApproved(channel.PhoneNumberId,name,tenant.ReminderLanguage,window) is null)throw new ArgumentException($"La plantilla {name} aún no está aprobada en Meta.");
+            var channel=input.ChannelId is {} c?await db.Channels.AsNoTracking().SingleAsync(x=>x.Id==c,ct):throw new ArgumentException("Selecciona el número para recordatorios.");
+            var template=await kapso.ReminderTemplate(channel.PhoneNumberId,name,before.ReminderLanguage,ct);
+            if(template.ValueKind!=JsonValueKind.Object)throw new ArgumentException($"La plantilla {name} no existe en Meta para el idioma {before.ReminderLanguage}.");
+            if(!KapsoClient.ValidReminderTemplate(template,window))throw new ArgumentException($"La plantilla {name} aún no está aprobada en Meta.");
+            asked.Add(window);
         }
+        using var lease=await service.Lock(ReminderRules.LockId(scope.Id),ct);
+        var tenant=await db.Tenants.SingleAsync(t=>t.Id==scope.Id,ct);
+        // Someone changed the templates while Kapso answered: what was checked no longer says what changes.
+        if(tenant.ReminderLanguage!=before.ReminderLanguage
+            ||input.DayTemplate is {} d&&d!=tenant.ReminderDayTemplate&&!asked.Contains("day_before")||input.HourTemplate is {} h&&h!=tenant.ReminderHourTemplate&&!asked.Contains("hour_before"))
+            throw new ArgumentException("La configuración de recordatorios cambió. Actualiza e inténtalo de nuevo.");
         tenant.RemindersEnabled=input.Enabled;tenant.ReminderChannelId=input.ChannelId;
         if(input.DayTemplate is {} day)tenant.ReminderDayTemplate=day;
         if(input.HourTemplate is {} hour)tenant.ReminderHourTemplate=hour;
-        CrmEndpoints.Audit(db,scope,user,"appointment_reminders.configured",scope.Id);await db.SaveChangesAsync();
+        db.Audits.Add(new Audit{TenantId=scope.Id,Actor=user.Subject,Action="appointment_reminders.configured",Resource=$"day={tenant.ReminderDayTemplate};hour={tenant.ReminderHourTemplate}"});
+        await db.SaveChangesAsync(ct);
     }
     public static void MapReminderEndpoints(this WebApplication app)
     {
@@ -69,7 +81,7 @@ public static class ReminderEndpoints
                 consentingContacts=await db.Contacts.CountAsync(c=>c.PatientId!=null&&c.ReminderConsentAt!=null),
                 rows=rows.Select(r=>new{r.Id,r.AppointmentId,r.ContactId,patientName=r.ContactId is {} contact?contacts.GetValueOrDefault(contact)?.Name:null,r.StartsAt,r.DueAt,r.Window,r.Status,r.Reason,deliveryStatus=r.MessageId is {} m?deliveries.GetValueOrDefault(m):null})});
         });
-        api.MapPut("/settings",async(ReminderSettingsInput input,CrmDb db,CurrentUser user,TenantScope scope,ConversationService service,KapsoClient kapso)=>{await Configure(input,db,user,scope,service,kapso);return Results.Ok();});
+        api.MapPut("/settings",async(ReminderSettingsInput input,CrmDb db,CurrentUser user,TenantScope scope,ConversationService service,KapsoClient kapso,CancellationToken ct)=>{await Configure(input,db,user,scope,service,kapso,ct);return Results.Ok();});
         api.MapGet("/templates",async(CrmDb db,CurrentUser user,TenantScope scope,KapsoClient kapso,CancellationToken ct)=>{
             user.RequireAdmin();var t=await db.Tenants.SingleAsync(t=>t.Id==scope.Id,ct);
             var ch=await db.Channels.SingleOrDefaultAsync(c=>c.Id==t.ReminderChannelId,ct);if(ch is null)return Results.BadRequest(new{title="Guarda primero el número de recordatorios."});

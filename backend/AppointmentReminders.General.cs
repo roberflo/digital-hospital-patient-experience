@@ -11,8 +11,9 @@ public sealed partial class AppointmentReminderService
     /// <summary>The note on a row whose withdrawal Hospital refused for good (4xx): no more retries; the owner's doubts list shows it.</summary>
     public const string WithdrawalRefused = "Hospital rechazó registrar el retiro de la autorización tras BAJA; revíselo con la clínica.";
     public const string UnusablePhone = "Teléfono inválido o sin código de país; el número general no puede escribirle.";
-    /// <summary>Why a valid number of another country is not written to (criterio 23). Since branch (A) a row never gets it: a stopped
-    /// recipient's rows say <see cref="WaIdMissing"/> (review nit 3). Rows from before still carry it and reopen like the others.</summary>
+    /// <summary>What <see cref="Closed"/> answers for a valid number of another country (criterio 23). Since branch (A) it is only that
+    /// internal answer: <see cref="Refusal"/> turns it into null (written to) or <see cref="UnusablePhone"/>, and a stopped recipient's rows say
+    /// <see cref="WaIdMissing"/> (review nit 3), so no new row is written with it. Rows written before still carry it and reopen like the others.</summary>
     public const string OutsideList = "País fuera de la lista del número general (+503, +502, +504, +1).";
     /// <summary>Criterio 23, the safety net of branch (A): a send outside the closed list whose wa_id did not come back. Also the reason of
     /// that recipient's next rows: it says why, not a country. They reopen when Hospital corrects the phone.</summary>

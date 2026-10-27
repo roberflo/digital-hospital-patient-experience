@@ -458,6 +458,37 @@ public sealed partial class AgentIntegrationTests:IAsyncLifetime {
         await db.Entry(tenant).ReloadAsync();
         Assert.Equal(("recepcion_cita_dia_anterior_v5","recepcion_cita_una_hora_v2"),(tenant.ReminderDayTemplate,tenant.ReminderHourTemplate));
         Assert.Equal(audits+1,await db.Audits.CountAsync(a=>a.Action=="appointment_reminders.configured"));
+        // Review nit 4: the audit names the templates chosen (names only, never PHI).
+        Assert.Equal("day=recepcion_cita_dia_anterior_v5;hour=recepcion_cita_una_hora_v2",(await db.Audits.Where(a=>a.Action=="appointment_reminders.configured").OrderByDescending(a=>a.CreatedAt).FirstAsync()).Resource);
+    }
+    // Review minor 3 (S5): Kapso is asked before the tenant's reminder lock is taken, and with the request's token: a slow Meta never holds
+    // the lock the worker and the consent edits wait on, and a closed request stops waiting for it.
+    [Fact] public async Task TemplateCheckAsksKapsoOutsideTheReminderLockWithTheRequestToken()
+    {
+        var admin=new CurrentUser{Role="admin",Subject="admin-sintetico",Name="Admin"};var locks=Service(new Fake(_=>throw new Exception("Must not send")));
+        bool? lockFree=null;using var cts=new CancellationTokenSource();
+        var kapso=new KapsoClient(new HttpClient(AgentHarness.Hang(req=>{
+            if(req.RequestUri!.AbsolutePath.Contains("phone_numbers"))return Json(new{data=new{business_account_id="synthetic-waba"}});
+            using(var other=new CrmDb(options,scope,protection)){var held=ConversationService.TryLock(other,ReminderRules.LockId(scope.Id)).GetAwaiter().GetResult();lockFree=held is not null;held?.Dispose();}
+            cts.Cancel();return null; // Meta never answers: only the request's token ends the wait
+        })){Timeout=TimeSpan.FromSeconds(10)},config);
+        var ex=await Assert.ThrowsAnyAsync<OperationCanceledException>(()=>ReminderEndpoints.Configure(new(false,conversation.ChannelId,"recepcion_cita_dia_anterior_v5"),db,admin,scope,locks,kapso,cts.Token));
+        Assert.True(lockFree);
+        Assert.IsNotType<TimeoutException>(ex.InnerException); // the request's token ended it, not HttpClient's timeout
+    }
+    // Review nit 3: a template Meta does not have is named as such, not as pending. Review minor 5: a number Kapso reports without its
+    // WhatsApp Business account is a provider error with a message the screen shows, never a 500.
+    [Fact] public async Task TemplateCheckSaysWhatMetaAndKapsoReported()
+    {
+        var admin=new CurrentUser{Role="admin",Subject="admin-sintetico",Name="Admin"};var locks=Service(new Fake(_=>throw new Exception("Must not send")));
+        var phone=(object)new{data=new{business_account_id="synthetic-waba"}};
+        var kapso=new KapsoClient(new HttpClient(new Fake(req=>Task.FromResult(req.RequestUri!.AbsolutePath.Contains("phone_numbers")?Json(phone):Json(new{data=Array.Empty<object>()})))),config);
+        var refused=await Assert.ThrowsAsync<ArgumentException>(()=>ReminderEndpoints.Configure(new(false,conversation.ChannelId,"recepcion_cita_dia_anterior_v5"),db,admin,scope,locks,kapso));
+        Assert.Equal("La plantilla recepcion_cita_dia_anterior_v5 no existe en Meta para el idioma es.",refused.Message);
+        phone=new{data=new{id="synthetic-number"}};
+        refused=await Assert.ThrowsAsync<ArgumentException>(()=>ReminderEndpoints.Configure(new(false,conversation.ChannelId,"recepcion_cita_dia_anterior_v5"),db,admin,scope,locks,kapso));
+        Assert.Equal("Kapso no reporta la cuenta de WhatsApp Business de este número; revisa su conexión en Kapso.",refused.Message);
+        Assert.Equal(0,await db.Audits.CountAsync(a=>a.Action=="appointment_reminders.configured"));
     }
     // Criterio 14: tomorrow's day-before reminders of this tenant, for the administrator and reception, not for doctors.
     [Fact] public async Task TomorrowListIsForAdminAndReceptionOfThisTenantOnly()

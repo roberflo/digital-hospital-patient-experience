@@ -23,7 +23,8 @@ public static partial class WhatsAppContent
         ? "Tocó: " + m.Groups[1].Value switch { "ASISTO" => "Confirmar", "MOVER" => "Cambiar fecha", "BAJA" => "No más recordatorios", _ => "Cancelar" } : body;
     [GeneratedRegex(@"^(ASISTO|MOVER|CANCELAR|BAJA) [0-9a-fA-F-]{36}$")] private static partial Regex ReminderTap();
     static string? Text(JsonElement value, string name) => value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out var found) && found.ValueKind == JsonValueKind.String ? found.GetString() : null;
-    [GeneratedRegex(@"^(?:CONFIRMAR [0-9A-F]{6}|CORREGIR [0-9A-F]{6}|EMERGENCIA|ACTIVAR RECORDATORIOS|BAJA(?: [0-9a-fA-F-]{36})?|AGENDAR|RECETA|PERSONA|MENU|MISCITAS|(?:VERCITA|CANCELAR|ASISTO) [0-9a-fA-F-]{36}|MOVER [0-9a-fA-F-]{36}(?: \S{10,40} [0-9a-fA-F-]{36} \d{1,3}(?: .{1,60})?)?|CITA \S{10,40} [0-9a-fA-F-]{36} \d{1,3}(?: .{1,60})?|VER \d{4}-\d{2}-\d{2} (?:[0-9a-fA-F-]{36}|[*+?]) [MT?])$")] private static partial Regex Command();
+    // BAJA's id has the form ConsentCommand accepts (Guid "D"): a payload that is not a GUID reads as its label (review nit 1).
+    [GeneratedRegex(@"^(?:CONFIRMAR [0-9A-F]{6}|CORREGIR [0-9A-F]{6}|EMERGENCIA|ACTIVAR RECORDATORIOS|BAJA(?: [0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})?|AGENDAR|RECETA|PERSONA|MENU|MISCITAS|(?:VERCITA|CANCELAR|ASISTO) [0-9a-fA-F-]{36}|MOVER [0-9a-fA-F-]{36}(?: \S{10,40} [0-9a-fA-F-]{36} \d{1,3}(?: .{1,60})?)?|CITA \S{10,40} [0-9a-fA-F-]{36} \d{1,3}(?: .{1,60})?|VER \d{4}-\d{2}-\d{2} (?:[0-9a-fA-F-]{36}|[*+?]) [MT?])$")] private static partial Regex Command();
 }
 
 /// <summary>Options the patient can tap instead of typing. Up to three short ones are reply buttons; more, or any with a description, are a list.</summary>

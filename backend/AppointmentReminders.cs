@@ -46,7 +46,7 @@ public static class ReminderRules
     } + " " + reminder).ToArray();
     /// <summary>The «No más recordatorios» button (S5) is BAJA: its payload <c>BAJA {reminderId}</c> and its label, typed or forwarded (A-S5-3).
     /// The id is never read: it does not decide whether or whom (INV-11).</summary>
-    public static string? ConsentCommand(string text) => text.Trim().ToUpperInvariant() switch
+    public static string? ConsentCommand(string text) => text.Trim().Normalize().ToUpperInvariant() switch // NFC: «á» typed as «a» + U+0301 too (review nit 2)
     {
         "BAJA" or "STOP" or "CANCELAR RECORDATORIOS" or "NO MÁS RECORDATORIOS" or "NO MAS RECORDATORIOS" => "off", "ACTIVAR RECORDATORIOS" => "on",
         ['B','A','J','A',' ',..var id] when Guid.TryParseExact(id,"D",out _) => "off", _ => null

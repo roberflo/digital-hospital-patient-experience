@@ -218,8 +218,11 @@ export function AppointmentReminders({ me }: { me: Me }) {
             <div className="flex flex-col gap-2">
               {newTemplates && (
                 <p className={hint}>
-                  Las plantillas nuevas se leen mejor y llevan el botón «No más recordatorios». Se
-                  usan cuando Meta apruebe las dos; hasta entonces siguen las actuales.
+                  Las plantillas nuevas se leen mejor y llevan el botón «No más recordatorios».
+                  Mientras no las uses se envían las actuales, solo si Meta las aprueba y son
+                  compatibles: «Comprobar plantillas» lo muestra. «Usar plantillas nuevas» se
+                  guarda solo cuando Meta ya aprobó las dos; si no, no cambia nada y hay que
+                  volver a pulsarlo después de la aprobación.
                 </p>
               )}
               {!data.sendEnabled && (
