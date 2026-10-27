@@ -43,6 +43,8 @@ public sealed class AgentInteractionTests : IAsyncLifetime
     [InlineData("MOVER 00000000-0000-4000-8000-000000000001", true, "MOVER 00000000-0000-4000-8000-000000000001")]
     [InlineData("CANCELAR 00000000-0000-4000-8000-000000000001", true, "CANCELAR 00000000-0000-4000-8000-000000000001")]
     [InlineData("ASISTO 00000000-0000-4000-8000-000000000001", false, "ASISTO 00000000-0000-4000-8000-000000000001")]
+    [InlineData("BAJA 00000000-0000-4000-8000-000000000001", true, "BAJA 00000000-0000-4000-8000-000000000001")]
+    [InlineData("BAJA 00000000-0000-4000-8000-000000000001", false, "BAJA 00000000-0000-4000-8000-000000000001")]
     [InlineData("DROP TABLE", true, "Confirmar")]   // a payload that is not one of ours reads as the button's visible text
     [InlineData("DROP TABLE", false, "Confirmar")]
     public void TemplateButtonReadsAsTheCommandOrItsText(string payload, bool kapsoContent, string expected)

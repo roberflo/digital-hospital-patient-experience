@@ -66,28 +66,32 @@ public sealed class KapsoClient(HttpClient http, IConfiguration config)
     /// when the window has them, exactly one of its quick-reply lists, in that order. Every template offers a way out (INV-10): the
     /// «No más recordatorios» button, or BAJA in the BODY or the FOOTER. The general number's windows also name {{telefono}}.
     /// Anything else (a header, a URL or phone button, another parameter) is refused.</summary>
-    public static bool ValidReminderTemplate(JsonElement template, string window)
+    public static bool ValidReminderTemplate(JsonElement template, string window) => ReminderLabels(template, window) is not null;
+    /// <summary>The quick-reply labels of a template valid for <paramref name="window"/>, in order (empty when it has none); null when it is not valid.</summary>
+    static string[]? ReminderLabels(JsonElement template, string window)
     {
         if (template.ValueKind != JsonValueKind.Object || !template.TryGetProperty("status",out var status) || status.GetString() != "APPROVED"
             || !template.TryGetProperty("category",out var category) || category.GetString() != "UTILITY"
             || !template.TryGetProperty("parameter_format",out var format) || format.GetString() != "NAMED"
-            || !template.TryGetProperty("components",out var components) || components.ValueKind != JsonValueKind.Array) return false;
+            || !template.TryGetProperty("components",out var components) || components.ValueKind != JsonValueKind.Array) return null;
         var types=components.EnumerateArray().Select(c=>c.GetProperty("type").GetString()).ToArray();
         var general=window is GeneralDayWindow or GeneralHourWindow;
         var hasFooter=types.Length>1&&types[1]=="FOOTER";
         var hasButtons=types.Length>1&&types[^1]=="BUTTONS";
-        if(!types.SequenceEqual(new[]{"BODY"}.Concat(hasFooter?["FOOTER"]:[]).Concat(hasButtons?["BUTTONS"]:[]))||hasFooter&&window=="hour_before")return false;
+        if(!types.SequenceEqual(new[]{"BODY"}.Concat(hasFooter?["FOOTER"]:[]).Concat(hasButtons?["BUTTONS"]:[]))||hasFooter&&window=="hour_before")return null;
         string?[] labels=[];
         if(hasButtons&&!(components[types.Length-1].TryGetProperty("buttons",out var list)&&list.ValueKind==JsonValueKind.Array
-            &&(labels=list.EnumerateArray().Select(b=>b.GetProperty("type").GetString()=="QUICK_REPLY"?b.GetProperty("text").GetString():null).ToArray()).Length>0))return false;
-        if(!WindowButtons(window).Any(allowed=>labels.SequenceEqual(allowed)))return false;
+            &&(labels=list.EnumerateArray().Select(b=>b.GetProperty("type").GetString()=="QUICK_REPLY"?b.GetProperty("text").GetString():null).ToArray()).Length>0))return null;
+        if(WindowButtons(window).FirstOrDefault(allowed=>labels.SequenceEqual(allowed)) is not {} valid)return null;
         var text=components[0].GetProperty("text").GetString()??"";
         var parameters=System.Text.RegularExpressions.Regex.Matches(text,@"\{\{([a-z_]+)\}\}").Select(m=>m.Groups[1].Value).Order().ToArray();
         var footer=hasFooter?components[1].GetProperty("text").GetString()??"":"";
         return parameters.SequenceEqual(general?new[]{"fecha","hora","hospital","telefono"}:new[]{"fecha","hora","hospital"})
-            &&(labels.Contains(StopButton)||(text+"\n"+footer).Contains("BAJA",StringComparison.Ordinal));
+            &&(valid.Contains(StopButton)||(text+"\n"+footer).Contains("BAJA",StringComparison.Ordinal))?valid:null;
     }
-    public async Task<bool> ReminderTemplateApproved(string number,string name,string language,string window,CancellationToken ct=default,bool general=false) => ValidReminderTemplate(await ReminderTemplate(number,name,language,ct,general),window);
+    /// <summary>The approved template's quick-reply labels, in order, so the send composes its payloads from what Meta will show (S5,
+    /// criterio 45); null when Meta does not report it APPROVED with its window's shape.</summary>
+    public async Task<string[]?> ReminderTemplateApproved(string number,string name,string language,string window,CancellationToken ct=default,bool general=false) => ReminderLabels(await ReminderTemplate(number,name,language,ct,general),window);
     /// <summary>Sends an approved reminder. <paramref name="buttons"/> are the quick-reply payloads, in the template's button order; the caller composes them.
     /// <paramref name="general"/>: from the platform's account (criterio 39), never a clinic's key; <paramref name="phoneOfClinic"/> fills {{telefono}}.
     /// Returns the message id and, when it came back, <c>contacts[0].wa_id</c> (TEL-1 criterios 21–22, measured 2026-10-25).</summary>

@@ -43,6 +43,7 @@ public sealed class GeneralNumberTests : IAsyncLifetime
     readonly List<(string Key, string Path, JsonElement Body)> kapso = [];
     readonly Dictionary<string, string?> waIds = []; // E.164 digits ⇒ the wa_id Kapso answers with
     int kapsoCalls;
+    bool generalV2; // S5 (A-S5-1): Meta answers the general names with the v2 buttons
 
     static string RandomPhone() => "5037" + Random.Shared.Next(1000000, 9999999).ToString(CultureInfo.InvariantCulture);
     string Hash(string value) => Rules.PhoneHash(value, HashKey);
@@ -122,8 +123,10 @@ public sealed class GeneralNumberTests : IAsyncLifetime
         var key = request.Headers.GetValues("X-API-Key").Single(); var path = request.RequestUri!.AbsolutePath;
         if (request.Method == HttpMethod.Get)
             return path.Contains("phone_numbers") ? AgentHarness.Json(new { data = new { business_account_id = "synthetic-waba" } }) : AgentHarness.Json(new { data = new[] {
-                Template(KapsoClient.GeneralDayTemplate, "Cita en {{hospital}} el {{fecha}} a las {{hora}}. Llame al {{telefono}}. BAJA", "Cancelar cita"),
-                Template(KapsoClient.GeneralHourTemplate, "Cita hoy en {{hospital}} el {{fecha}} a las {{hora}}. Llame al {{telefono}}. BAJA"),
+                generalV2 ? Template(KapsoClient.GeneralDayTemplate, "Cita en {{hospital}} el {{fecha}} a las {{hora}}. Llame al {{telefono}}.", "Cancelar cita", KapsoClient.StopButton)
+                    : Template(KapsoClient.GeneralDayTemplate, "Cita en {{hospital}} el {{fecha}} a las {{hora}}. Llame al {{telefono}}. BAJA", "Cancelar cita"),
+                generalV2 ? Template(KapsoClient.GeneralHourTemplate, "Cita hoy en {{hospital}} el {{fecha}} a las {{hora}}. Llame al {{telefono}}.", KapsoClient.StopButton)
+                    : Template(KapsoClient.GeneralHourTemplate, "Cita hoy en {{hospital}} el {{fecha}} a las {{hora}}. Llame al {{telefono}}. BAJA"),
                 Template(ReminderRules.DayTemplateV4, "Cita en {{hospital}} el {{fecha}} a las {{hora}}. BAJA", "Confirmar", "Cambiar fecha", "Cancelar"),
                 Template("recepcion_cita_una_hora_v1", "Cita en {{hospital}} el {{fecha}} a las {{hora}}. BAJA") } });
         using var sent = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
@@ -165,7 +168,7 @@ public sealed class GeneralNumberTests : IAsyncLifetime
         object message = payload is null ? new { id = mid, from, type = "text", text = new { body = text }, kapso = new { direction = "inbound", status = "received", origin = "cloud_api", content = text } }
             : payload.StartsWith("CANCELAR-", StringComparison.Ordinal)
             ? new { id = mid, from, type = "interactive", interactive = new { type = "button_reply", button_reply = new { id = payload, title = payload.StartsWith("CANCELAR-SI", StringComparison.Ordinal) ? "Sí, cancelar" : "No" } }, kapso = new { direction = "inbound", status = "received", origin = "cloud_api" } }
-            : new { id = mid, from, type = "button", button = new { payload, text = "Cancelar cita" }, kapso = new { direction = "inbound", status = "received", origin = "cloud_api", content = "Cancelar cita" } };
+            : new { id = mid, from, type = "button", button = new { payload, text = Label(payload) }, kapso = new { direction = "inbound", status = "received", origin = "cloud_api", content = Label(payload) } };
         var body = JsonSerializer.SerializeToUtf8Bytes(new { phone_number_id = number, conversation = new { id = "conv-synthetic", phone_number = from }, message });
         var ctx = new DefaultHttpContext(); ctx.Request.Body = new MemoryStream(body); ctx.Request.ContentLength = body.Length;
         ctx.Request.Headers["X-Webhook-Signature"] = Convert.ToHexString(HMACSHA256.HashData(Encoding.UTF8.GetBytes(secret), body)).ToLowerInvariant();
@@ -174,6 +177,7 @@ public sealed class GeneralNumberTests : IAsyncLifetime
         await using var db = own.NewDb(scope);
         return await GeneralNumber.Receive(ctx, db, scope, config, new KapsoClient(new HttpClient(Kapso()), config), new HospitalClient(new HttpClient(Hospital()), config), NullLoggerFactory.Instance);
     }
+    static string Label(string payload) => payload.StartsWith("BAJA", StringComparison.Ordinal) ? "No más recordatorios" : "Cancelar cita";
     /// <summary>What the general number answered, without the recipient: the bytes a patient sees.</summary>
     static string Shown(JsonElement sent) { var node = JsonNode.Parse(sent.GetRawText())!.AsObject(); node.Remove("to"); return node.ToJsonString(); }
     /// <summary>What a message to the general number could have created: a contact for that phone in any tenant (other test classes write in
@@ -342,6 +346,23 @@ public sealed class GeneralNumberTests : IAsyncLifetime
         await using var db = own.NewDb(new TenantScope());
         Assert.Equal(0, await db.Conversations.IgnoreQueryFilters().CountAsync(c => c.TenantId == clinicA)); // no Conversation, no Message (A17)
         Assert.Equal(0, await db.Messages.IgnoreQueryFilters().CountAsync(m => m.TenantId == clinicA));
+    }
+    // S5, criterio 55: with the v2 buttons, the general dispatch sends CANCELAR {id} and BAJA {id} as the labels say; the hour before, BAJA {id}.
+    [Fact]
+    public async Task TheGeneralV2ButtonsCarryCancelAndStop()
+    {
+        generalV2 = true;
+        recipients[clinicA] = [Recipient(appointmentA, patientA, start)];
+        await Sync(clinicA);
+        var rows = await Rows(clinicA);
+        foreach (var row in rows.OrderBy(r => r.DueAt)) await Dispatch(clinicA, row.Id, row.DueAt);
+
+        var day = rows.Single(r => r.Window == "day_before"); var hour = rows.Single(r => r.Window == "hour_before");
+        string[] Payloads(JsonElement body) => body.GetProperty("template").GetProperty("components").EnumerateArray().Where(c => c.GetProperty("type").GetString() == "button")
+            .Select(c => c.GetProperty("parameters")[0].GetProperty("payload").GetString()!).ToArray();
+        Assert.Equal(2, kapso.Count);
+        Assert.Equal([$"CANCELAR {day.Id}", $"BAJA {day.Id}"], Payloads(kapso[0].Body));
+        Assert.Equal([$"BAJA {hour.Id}"], Payloads(kapso[1].Body));
     }
     [Fact]
     public async Task WithoutAnApprovedPublicNameNothingGoesOut()
@@ -519,8 +540,9 @@ public sealed class GeneralNumberTests : IAsyncLifetime
     }
 
     // ---------------- Criterios 25 y 19 (bajas), A14, A20 ----------------
-    [Fact]
-    public async Task BajaStopsEveryGeneralClinicWithdrawsWhereItWroteAndLeavesOwnNumbersAlone()
+    // S5, criterio 55 (INV-11): the stop button's BAJA {id} does exactly what BAJA typed does; the id never picks a clinic or a row.
+    [Theory][InlineData("text")][InlineData("own")][InlineData("unknown")]
+    public async Task BajaStopsEveryGeneralClinicWithdrawsWhereItWroteAndLeavesOwnNumbersAlone(string how)
     {
         // A: one reminder already sent and one pending. B: only a pending one. Own number: the same phone, with its own consent.
         var sentA = await Sent(clinicA, appointmentA, patientA);
@@ -529,7 +551,8 @@ public sealed class GeneralNumberTests : IAsyncLifetime
         var ownPhone = phone;
         await using (var db = own.NewContext()) { var c = await db.Contacts.SingleAsync(x => x.Id == own.Contact.Id); c.Phone = ownPhone; c.PhoneHash = Hash(ownPhone); c.ReminderConsentAt = DateTimeOffset.UtcNow; await db.SaveChangesAsync(); }
 
-        await Inbound(phone, text: "BAJA");
+        if (how == "text") await Inbound(phone, text: "BAJA");
+        else await Inbound(phone, payload: $"BAJA {(how == "own" ? sentA.Id : Guid.NewGuid())}");
 
         var write = Assert.Single(hospitalWrites); // only where the general number wrote
         Assert.Equal((clinicA, $"/v1/patients/{patientA}/whatsapp-reminders/consent/withdraw"), (write.Tenant, write.Path));
@@ -662,7 +685,8 @@ public sealed class GeneralNumberTests : IAsyncLifetime
     }
 
     // Criterio 23, the safety net of branch (A): a send outside +503/+502/+504/+1 that comes back without its wa_id stays «sent» with a
-    // readable Activity, and the next reminders to that recipient are skipped: a BAJA from an unknown wa_id could not stop them (INV-8).
+    // readable Activity, and the next reminders to that recipient are skipped with that same text (review nit 3: it says why, not a country):
+    // a BAJA from an unknown wa_id could not stop them (INV-8).
     [Fact]
     public async Task AForeignSendWithoutItsWaIdStopsTheNextOnes()
     {
@@ -682,10 +706,10 @@ public sealed class GeneralNumberTests : IAsyncLifetime
         await using (var db = own.NewDb(new TenantScope()))
             Assert.Equal("No se pudo confirmar el número de WhatsApp; los siguientes recordatorios a este paciente se detienen.",
                 (await db.Activities.IgnoreQueryFilters().SingleAsync(a => a.TenantId == clinicA && a.Kind == "general_wa_id_missing")).Body);
-        Assert.Equal(("skipped", AppointmentReminderService.OutsideList), ((await Row(clinicA, hour.Id)).Status, (await Row(clinicA, hour.Id)).Reason));
+        Assert.Equal(("skipped", AppointmentReminderService.WaIdMissing), ((await Row(clinicA, hour.Id)).Status, (await Row(clinicA, hour.Id)).Reason));
         var later = (await Rows(clinicA)).Where(r => r.AppointmentId == next).ToList();
         Assert.Equal(2, later.Count);
-        Assert.All(later, r => Assert.Equal(("skipped", AppointmentReminderService.OutsideList), (r.Status, r.Reason)));
+        Assert.All(later, r => Assert.Equal(("skipped", AppointmentReminderService.WaIdMissing), (r.Status, r.Reason)));
         Assert.Single(kapso); // only the first one went out
     }
 
@@ -800,8 +824,13 @@ public sealed class GeneralNumberTests : IAsyncLifetime
 
             var rowsB = await Rows(clinicB);
             Assert.Equal(2, rowsB.Count);
-            Assert.All(rowsB, r => Assert.Equal(("skipped", AppointmentReminderService.OutsideList), (r.Status, r.Reason)));
+            Assert.All(rowsB, r => Assert.Equal(("skipped", AppointmentReminderService.WaIdMissing), (r.Status, r.Reason)));
             Assert.Single(kapso, k => k.Body.TryGetProperty("template", out _)); // only clinic A's
+
+            // Review nit 3: Hospital corrects B's phone to one the general number writes to ⇒ B's rows reopen with the new hash.
+            recipients[clinicB] = [Recipient(appointmentB, patientB, start, "+1 415 555 0100")];
+            await Sync(clinicB, DateTimeOffset.UtcNow.AddMinutes(16));
+            Assert.All(await Rows(clinicB), r => Assert.Equal(("pending", (string?)null, Hash("14155550100")), (r.Status, r.Reason, r.RecipientHash)));
         }
         finally { await ForgetMexico(); }
     }

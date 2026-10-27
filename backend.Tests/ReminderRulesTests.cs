@@ -15,6 +15,11 @@ public class ReminderRulesTests
         Assert.Equal(DateTimeOffset.Parse(starts).AddHours(-1),ReminderRules.Due(DateTimeOffset.Parse(starts),"hour_before",zone));
     }
     [Theory][InlineData(" baja ","off")][InlineData("ACTIVAR RECORDATORIOS","on")][InlineData("Quiero cancelar mi cita",null)]
+    // S5, criterio 49: STOP and CANCELAR RECORDATORIOS as today; the stop button's payload and its label, typed or forwarded, are BAJA (A-S5-3).
+    [InlineData("STOP","off")][InlineData("cancelar recordatorios","off")]
+    [InlineData("BAJA 00000000-0000-4000-8000-000000000001","off")][InlineData("baja 00000000-0000-4000-8000-000000000001","off")]
+    [InlineData("No más recordatorios","off")][InlineData("no mas recordatorios","off")][InlineData(" NO MÁS RECORDATORIOS ","off")]
+    [InlineData("BAJA mañana",null)][InlineData("BAJA 123",null)][InlineData("CANCELAR 00000000-0000-4000-8000-000000000001",null)][InlineData("No más recordatorios por ahora",null)]
     public void ConsentCommandsDoNotMistakeAppointmentCancellation(string text,string? expected)=>Assert.Equal(expected,ReminderRules.ConsentCommand(text));
 
     // Criterios 7 y 10: what a tap leaves for the desk is filed where the desk looks, not among CRM updates.

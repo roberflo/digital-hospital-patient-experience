@@ -31,10 +31,10 @@ public sealed class ReminderReplyTests : IAsyncLifetime
     }
     public Task DisposeAsync() => h.DisposeAsync().AsTask();
 
-    AppointmentReminder Reminder(Guid contact, DateTimeOffset startsAt, Guid? appointmentId = null, Guid? patient = null, string status = "sent") => new()
+    AppointmentReminder Reminder(Guid contact, DateTimeOffset startsAt, Guid? appointmentId = null, Guid? patient = null, string status = "sent", string window = "day_before") => new()
     {
         TenantId = h.Scope.Id, ContactId = contact, PatientId = patient ?? h.Contact.PatientId!.Value, ChannelId = h.Conversation.ChannelId,
-        AppointmentId = appointmentId ?? appointment, StartsAt = startsAt, DueAt = startsAt.AddDays(-1), Window = "day_before", Status = status, AttemptedAt = status == "pending" ? null : DateTimeOffset.UtcNow,
+        AppointmentId = appointmentId ?? appointment, StartsAt = startsAt, DueAt = window == "hour_before" ? startsAt.AddHours(-1) : startsAt.AddDays(-1), Window = window, Status = status, AttemptedAt = status == "pending" ? null : DateTimeOffset.UtcNow,
     };
     object Booked(DateTimeOffset at, string status = "booked", Guid? id = null) => new { appointmentId = id ?? appointment, clinicianId = Guid.NewGuid(), clinicianName = "Dra. Sintética Rivas", placeName = "Consultorio Sintético 3", scheduledStart = at, durationMinutes = 30, status };
     async Task Tap(string body, HttpMessageHandler hospital, Dictionary<string, string?>? extra = null, AgentHarness.Fake? sender = null)
@@ -46,15 +46,20 @@ public sealed class ReminderReplyTests : IAsyncLifetime
     async Task<string> Status(Guid? id = null) => (await h.Db.AppointmentReminders.AsNoTracking().SingleAsync(r => r.Id == (id ?? row.Id))).Status;
     async Task Human() { h.Conversation.Status = "human"; await h.Db.SaveChangesAsync(); }
 
-    /// <summary>Sends a pending reminder the way the worker does and returns the three button payloads that went to WhatsApp.</summary>
+    /// <summary>Sends a pending reminder the way the worker does and returns the three button payloads that went to WhatsApp: the day before
+    /// with v4 (Confirmar, Cambiar fecha, Cancelar), the hour before with S5's v2 (Necesito reprogramar, Cancelar cita, No más recordatorios).</summary>
     async Task<string[]> Dispatch(AppointmentReminder reminder, DateTimeOffset bookedAt, Guid id)
     {
         string[] payloads = [];
         var kapso = new AgentHarness.Fake(async request =>
         {
             if (request.Method == HttpMethod.Get)
-                return request.RequestUri!.AbsolutePath.Contains("phone_numbers") ? AgentHarness.Json(new { data = new { business_account_id = "synthetic-waba" } })
-                    : AgentHarness.Json(new { data = new[] { new { name = ReminderRules.DayTemplateV4, language = "es", status = "APPROVED", category = "UTILITY", parameter_format = "NAMED", components = new object[] { new { type = "BODY", text = "Cita en {{hospital}} el {{fecha}} a las {{hora}}. BAJA" }, new { type = "BUTTONS", buttons = new[] { new { type = "QUICK_REPLY", text = "Confirmar" }, new { type = "QUICK_REPLY", text = "Cambiar fecha" }, new { type = "QUICK_REPLY", text = "Cancelar" } } } } } } });
+            {
+                if (request.RequestUri!.AbsolutePath.Contains("phone_numbers")) return AgentHarness.Json(new { data = new { business_account_id = "synthetic-waba" } });
+                var name = Uri.UnescapeDataString(request.RequestUri.Query.Split('&')[0]["?name=".Length..]);
+                string[] labels = name == HourTemplateV2 ? ["Necesito reprogramar", "Cancelar cita", "No más recordatorios"] : ["Confirmar", "Cambiar fecha", "Cancelar"];
+                return AgentHarness.Json(new { data = new[] { new { name, language = "es", status = "APPROVED", category = "UTILITY", parameter_format = "NAMED", components = new object[] { new { type = "BODY", text = "Cita en {{hospital}} el {{fecha}} a las {{hora}}. BAJA" }, new { type = "BUTTONS", buttons = labels.Select(text => new { type = "QUICK_REPLY", text }) } } } } });
+            }
             using var sent = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
             payloads = sent.RootElement.GetProperty("template").GetProperty("components").EnumerateArray().Where(c => c.GetProperty("type").GetString() == "button").Select(c => c.GetProperty("parameters")[0].GetProperty("payload").GetString()!).ToArray();
             return AgentHarness.KapsoSent("reminder-" + Guid.NewGuid(), sent.RootElement.GetProperty("to").GetString()!.TrimStart('+'));
@@ -63,6 +68,9 @@ public sealed class ReminderReplyTests : IAsyncLifetime
         Assert.Equal("sent", await Status(reminder.Id)); Assert.Equal(3, payloads.Length);
         return payloads;
     }
+
+    const string HourTemplateV2 = "recepcion_cita_una_hora_v2";
+    async Task UseHourTemplateV2() { var tenant = await h.Db.Tenants.SingleAsync(t => t.Id == h.Scope.Id); tenant.ReminderHourTemplate = HourTemplateV2; await h.Db.SaveChangesAsync(); }
 
     // Criterio 3 (amended, I-1): the buttons carry the reminder, never the appointment.
     [Fact]
@@ -127,11 +135,13 @@ public sealed class ReminderReplyTests : IAsyncLifetime
     }
 
     // I-1 (3): a reminder of another contact, patient or tenant is refused.
-    [Theory][InlineData("other_contact")][InlineData("other_patient")][InlineData("other_tenant")]
+    // S5, criterio 51: an hour-before reminder of this very patient has no «Confirmar»; a fabricated ASISTO with its id confirms nothing.
+    [Theory][InlineData("other_contact")][InlineData("other_patient")][InlineData("other_tenant")][InlineData("hour_window")]
     public async Task AReminderThatIsNotThisPatientsIsRefused(string scenario)
     {
         var target = Guid.NewGuid(); Guid reminder;
         if (scenario == "other_tenant") reminder = await OtherTenantReminder(target);
+        else if (scenario == "hour_window") { var hour = Reminder(h.Contact.Id, start, target, window: "hour_before"); h.Db.Add(hour); await h.Db.SaveChangesAsync(); reminder = hour.Id; }
         else
         {
             var other = new Contact { TenantId = h.Scope.Id, Name = "Otro Sintético", Phone = "50370000111", PhoneHash = Guid.NewGuid().ToString(), PatientId = Guid.NewGuid() };
@@ -254,20 +264,24 @@ public sealed class ReminderReplyTests : IAsyncLifetime
     // Criterio 9. The reminder's buttons reuse the agent's two-step flow on the appointment the reminder is about; the deterministic step
     // before the agent must not swallow them. The body is what WhatsAppContent reads from the template tap (criterio 5).
     static string Tapped(string payload) { var message = JsonSerializer.SerializeToElement(new { type = "button", button = new { payload, text = "Cancelar" } }); return WhatsAppContent.Inbound(message, default); }
-    [Fact]
-    public async Task ReminderButtonsReuseTheTwoStepFlow()
+    // S5, criterios 45 y 50: the hour before's «Necesito reprogramar» and «Cancelar cita» (v2) take the same path as the day before's.
+    [Theory][InlineData("day_before")][InlineData("hour_before")]
+    public async Task ReminderButtonsReuseTheTwoStepFlow(string window)
     {
-        var target = Guid.NewGuid(); var pending = Reminder(h.Contact.Id, start, target, status: "pending"); h.Db.Add(pending); await h.Db.SaveChangesAsync();
-        var buttons = await Dispatch(pending, start, target);
+        if (window == "hour_before") await UseHourTemplateV2();
+        var target = Guid.NewGuid(); var pending = Reminder(h.Contact.Id, start, target, status: "pending", window: window); h.Db.Add(pending); await h.Db.SaveChangesAsync();
+        var sent = await Dispatch(pending, start, target);
+        Assert.Equal(window == "day_before" ? [$"ASISTO {pending.Id}", $"MOVER {pending.Id}", $"CANCELAR {pending.Id}"] : [$"MOVER {pending.Id}", $"CANCELAR {pending.Id}", $"BAJA {pending.Id}"], sent);
+
         var doctor = Guid.NewGuid(); var free = new DateTimeOffset(DateTime.UtcNow.Date.AddDays(5).AddHours(15), TimeSpan.Zero);
         var availability = new { clinicalDayFrom = "", clinicalDayTo = "", maxDaysPerQuery = 31, rollState = "open", professionals = new[] { new { clinicianId = doctor, clinicianName = "Dra. Sintética Rivas", placeName = "Consultorio 1", defaultDurationMinutes = 30, days = new[] { new { clinicalDay = "", state = "open", takenSlotCount = 0, utcOffset = "-06:00", slots = new[] { new { slotId = "a", startsAt = free, durationMinutes = 30, takenBy = 0, offered = true } } } } } } };
         var hospital = h.Hospital(appointments: [Booked(start, id: target)], availability: availability);
 
-        await Tap(Tapped(buttons[1]), hospital);
+        await Tap(Tapped(sent.Single(p => p.StartsWith("MOVER "))), hospital);
         Assert.StartsWith($"MOVER {target} ", Assert.Single(AgentHarness.Options(h.Interactive[^1])).Id);
         Assert.Empty(h.HospitalWrites);
 
-        await Tap(Tapped(buttons[2]), hospital);
+        await Tap(Tapped(sent.Single(p => p.StartsWith("CANCELAR "))), hospital);
         Assert.StartsWith("*Cancelar cita:*", h.Sent[^1]);
         Assert.Empty(h.HospitalWrites);
 
@@ -279,19 +293,22 @@ public sealed class ReminderReplyTests : IAsyncLifetime
     }
 
     // Criterio 10: with a person, a change or cancel tap only leaves a note for the desk, once.
-    [Theory][InlineData("MOVER", "cambiar")][InlineData("CANCELAR", "cancelar")]
-    public async Task HumanConversationOnlyNotesChangeRequests(string verb, string said)
+    // S5, criterio 50: also for an hour-before reminder.
+    [Theory][InlineData("MOVER", "cambiar", "day_before")][InlineData("CANCELAR", "cancelar", "day_before")][InlineData("MOVER", "cambiar", "hour_before")][InlineData("CANCELAR", "cancelar", "hour_before")]
+    public async Task HumanConversationOnlyNotesChangeRequests(string verb, string said, string window)
     {
         await Human();
+        var tapped = row;
+        if (window == "hour_before") { tapped = Reminder(h.Contact.Id, start, window: window); h.Db.Add(tapped); await h.Db.SaveChangesAsync(); }
 
-        await Tap($"{verb} {row.Id}", h.Hospital(appointments: [Booked(start)]));
-        await Tap($"{verb} {row.Id}", h.Hospital(appointments: [Booked(start)]));
+        await Tap($"{verb} {tapped.Id}", h.Hospital(appointments: [Booked(start)]));
+        await Tap($"{verb} {tapped.Id}", h.Hospital(appointments: [Booked(start)]));
 
         Assert.Empty(h.HospitalWrites);
         Assert.Empty(h.Sent);
         var note = Assert.Single(await Notes(), a => a.Kind == "reminder_change_request");
         Assert.Equal($"El paciente pidió {said} la cita desde el recordatorio.", note.Body);
-        Assert.Equal("sent", await Status());
+        Assert.Equal("sent", await Status(tapped.Id));
     }
 
     // A reminder that never reached the patient, or was withdrawn, is not something they can have tapped.
@@ -312,6 +329,7 @@ public sealed class ReminderReplyTests : IAsyncLifetime
     [InlineData("ASISTO", "Confirmar", "cancelled-by-patient", "appointment_confirmation_rejected", "Tocó: Confirmar")]
     [InlineData("CANCELAR", "Cancelar", "booked", "reminder_change_request", "Tocó: Cancelar")]
     [InlineData("MOVER", "Cambiar fecha", "booked", "reminder_change_request", "Tocó: Cambiar fecha")]
+    [InlineData("BAJA", "No más recordatorios", "booked", "reminder_consent", "Tocó: No más recordatorios")] // S5, criterio 46
     public async Task TapsArriveThroughTheWebhook(string verb, string text, string hospitalStatus, string kind, string shown)
     {
         await Human();
@@ -329,6 +347,39 @@ public sealed class ReminderReplyTests : IAsyncLifetime
         Assert.Equal(shown, messages!.Single(m => m.Type == "button").Body); // the tap, whatever its second-precision timestamp sorts it to
         Assert.DoesNotContain(messages!, m => m.Body.Contains(row.Id.ToString()));
         Assert.Equal($"{verb} {row.Id}", (await inbox.Messages.AsNoTracking().SingleAsync(m => m.Type == "button")).Body); // the agent still reads the command
+    }
+
+    // S5, criterios 47 y 48 (INV-11): the stop button on the clinic's own number is BAJA, exactly. Whatever reminder its id names (this one,
+    // none, another clinic's), the contact that tapped is opted out and nothing else changes; from then on nothing is sent to them.
+    [Theory]
+    [InlineData("agent", "own")][InlineData("agent", "unknown")][InlineData("agent", "other_tenant")]
+    [InlineData("human", "own")][InlineData("human", "unknown")][InlineData("human", "other_tenant")]
+    public async Task TheStopButtonIsBaja(string state, string which)
+    {
+        if (state == "human") await Human();
+        var id = which switch { "own" => row.Id, "unknown" => Guid.NewGuid(), _ => await OtherTenantReminder(Guid.NewGuid()) };
+        var next = Reminder(h.Contact.Id, ReminderRules.Instant(start.AddDays(1)), Guid.NewGuid(), status: "pending"); h.Db.Add(next); await h.Db.SaveChangesAsync();
+
+        // The harness's own message a minute back: the tap's second-precision timestamp must not sort before it, or the agent answers neither.
+        await using (var earlier = h.NewContext()) await earlier.Messages.Where(m => m.ConversationId == h.Conversation.Id).ExecuteUpdateAsync(m => m.SetProperty(x => x.CreatedAt, x => x.CreatedAt.AddMinutes(-1)));
+        var job = await Webhook($"BAJA {id}", "No más recordatorios");
+
+        h.Db.ChangeTracker.Clear();
+        await using (var read = h.NewContext()) Assert.Null((await read.Contacts.AsNoTracking().SingleAsync(c => c.Id == h.Contact.Id)).ReminderConsentAt);
+        Assert.Equal("El paciente retiró su autorización de recordatorios.", Assert.Single(await Notes(), a => a.Kind == "reminder_consent").Body);
+        await h.Runtime(NoModel, h.Sender(), h.Hospital(appointments: [Booked(start)])).Run(job, CancellationToken.None);
+        if (state == "agent") Assert.Equal("Desactivé tus recordatorios de citas por WhatsApp.", Assert.Single(h.Sent));
+        else Assert.Empty(h.Sent);
+        Assert.Empty(h.HospitalWrites); // own number: no withdrawal in Hospital (A19, A-S5-6)
+
+        var never = new AgentHarness.Fake(_ => throw new InvalidOperationException("Must not send"));
+        await h.Reminders(never, h.Hospital(appointments: [Booked(next.StartsAt, id: next.AppointmentId)]), new() { ["REMINDERS_SEND_ENABLED"] = "true" }).Dispatch(next.Id, next.DueAt);
+        await using var after = h.NewContext();
+        var stopped = await after.AppointmentReminders.AsNoTracking().SingleAsync(r => r.Id == next.Id);
+        Assert.Equal(("cancelled", "Autorización, paciente o canal ya no disponibles."), (stopped.Status, stopped.Reason));
+        Assert.Equal("sent", await Status()); // the tapped reminder itself is not touched
+        if (which == "other_tenant") Assert.Equal("sent", (await after.AppointmentReminders.IgnoreQueryFilters().AsNoTracking().SingleAsync(r => r.Id == id)).Status);
+        Assert.DoesNotContain(await Notes(), a => a.Kind is "reminder_change_request" or "appointment_confirmed" or "appointment_confirmation_rejected");
     }
 
     async Task<Job> Webhook(string payload, string text)

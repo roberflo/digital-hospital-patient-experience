@@ -36,12 +36,20 @@ public static class ReminderRules
         var local=TimeZoneInfo.ConvertTime(start,TimeZoneInfo.FindSystemTimeZoneById(zone));
         return (local.ToString("dd/MM/yyyy",CultureInfo.InvariantCulture),local.ToString("HH:mm",CultureInfo.InvariantCulture));
     }
-    /// <summary>Payloads of the day-before buttons (Confirmar, Cambiar fecha, Cancelar): verb and the id of the reminder sent, nothing else.
-    /// The reminder, not the appointment, so a tap answers exactly that send: after a move, the old reminder no longer confirms the new start (owner, I-1).</summary>
-    public static string[] Payloads(Guid reminder) => [$"ASISTO {reminder}", $"MOVER {reminder}", $"CANCELAR {reminder}"];
+    /// <summary>Payloads of a reminder's buttons, one per label of the approved template and in its order: verb and the id of the reminder
+    /// sent, nothing else (S5, criterio 45). The reminder, not the appointment, so a tap answers exactly that send: after a move, the old
+    /// reminder no longer confirms the new start (owner, I-1).</summary>
+    public static string[] Payloads(Guid reminder, IEnumerable<string> labels) => labels.Select(label => label switch
+    {
+        "Confirmar" => "ASISTO", "Cambiar fecha" or "Necesito reprogramar" => "MOVER", "Cancelar" or "Cancelar cita" => "CANCELAR", KapsoClient.StopButton => "BAJA",
+        _ => throw new ArgumentException("Botón de plantilla desconocido"),
+    } + " " + reminder).ToArray();
+    /// <summary>The «No más recordatorios» button (S5) is BAJA: its payload <c>BAJA {reminderId}</c> and its label, typed or forwarded (A-S5-3).
+    /// The id is never read: it does not decide whether or whom (INV-11).</summary>
     public static string? ConsentCommand(string text) => text.Trim().ToUpperInvariant() switch
     {
-        "BAJA" or "STOP" or "CANCELAR RECORDATORIOS" => "off", "ACTIVAR RECORDATORIOS" => "on", _ => null
+        "BAJA" or "STOP" or "CANCELAR RECORDATORIOS" or "NO MÁS RECORDATORIOS" or "NO MAS RECORDATORIOS" => "off", "ACTIVAR RECORDATORIOS" => "on",
+        ['B','A','J','A',' ',..var id] when Guid.TryParseExact(id,"D",out _) => "off", _ => null
     };
 }
 
@@ -177,7 +185,7 @@ public sealed partial class AppointmentReminderService(CrmDb db,TenantScope scop
         if(!ReminderRules.StillBooked(agenda,row))
         {await Stop("cancelled","Cita cancelada o reprogramada en Hospital.");return;}
         var template=row.Window=="day_before"?tenant.ReminderDayTemplate:tenant.ReminderHourTemplate;
-        if(!await kapso.ReminderTemplateApproved(channel.PhoneNumberId,template,tenant.ReminderLanguage,row.Window,ct)){row.Reason="Plantilla pendiente de aprobación o incompatible.";await db.SaveChangesAsync(ct);return;}
+        if(await kapso.ReminderTemplateApproved(channel.PhoneNumberId,template,tenant.ReminderLanguage,row.Window,ct) is not {} labels){row.Reason="Plantilla pendiente de aprobación o incompatible.";await db.SaveChangesAsync(ct);return;}
         // Consent edits and dispatch share this lock; external phone changes are verified above.
         var conv=await db.Conversations.SingleOrDefaultAsync(c=>c.ContactId==contact.Id&&c.ChannelId==channel.Id,ct);
         if(conv is null){conv=new(){TenantId=scope.Id,ContactId=contact.Id,ChannelId=channel.Id,Status="human"};db.Add(conv);await db.SaveChangesAsync(ct);}
@@ -191,7 +199,7 @@ public sealed partial class AppointmentReminderService(CrmDb db,TenantScope scop
         await db.SaveChangesAsync(ct); // Durable attempt before external I/O, never automatically replay.
         try
         {
-            message.ExternalId=(await kapso.SendReminder(channel.PhoneNumberId,contact.Phone,template,tenant.ReminderLanguage,tenant.Name,date,time,ct,row.Window=="day_before"?ReminderRules.Payloads(row.Id):null)).Id;
+            message.ExternalId=(await kapso.SendReminder(channel.PhoneNumberId,contact.Phone,template,tenant.ReminderLanguage,tenant.Name,date,time,ct,ReminderRules.Payloads(row.Id,labels))).Id;
             message.Status="sent";row.Status="sent";
         }
         catch(Exception ex) when(ex is HttpRequestException or TaskCanceledException or ArgumentException)

@@ -11,10 +11,11 @@ public sealed partial class AppointmentReminderService
     /// <summary>The note on a row whose withdrawal Hospital refused for good (4xx): no more retries; the owner's doubts list shows it.</summary>
     public const string WithdrawalRefused = "Hospital rechazó registrar el retiro de la autorización tras BAJA; revíselo con la clínica.";
     public const string UnusablePhone = "Teléfono inválido o sin código de país; el número general no puede escribirle.";
-    /// <summary>Why a valid number of another country is not written to (criterio 23): in branch (A), only after a send to it came back without
-    /// its wa_id. It reopens like the others.</summary>
+    /// <summary>Why a valid number of another country is not written to (criterio 23). Since branch (A) a row never gets it: a stopped
+    /// recipient's rows say <see cref="WaIdMissing"/> (review nit 3). Rows from before still carry it and reopen like the others.</summary>
     public const string OutsideList = "País fuera de la lista del número general (+503, +502, +504, +1).";
-    /// <summary>Criterio 23, the safety net of branch (A): a send outside the closed list whose wa_id did not come back.</summary>
+    /// <summary>Criterio 23, the safety net of branch (A): a send outside the closed list whose wa_id did not come back. Also the reason of
+    /// that recipient's next rows: it says why, not a country. They reopen when Hospital corrects the phone.</summary>
     public const string WaIdMissing = "No se pudo confirmar el número de WhatsApp; los siguientes recordatorios a este paciente se detienen.";
     /// <summary>The text rows were skipped with while only +503 was written to; they reopen like the current one (criterio 18).</summary>
     const string PreviousUnusablePhone = "Teléfono inválido o fuera de El Salvador (+503); el número general aún no lo admite.";
@@ -72,10 +73,10 @@ public sealed partial class AppointmentReminderService
         // One unusable phone never stops the others: its rows say why (criterio 19).
         var stopped = await Unconfirmed(current.Where(r => Closed(r.Phone) is OutsideList).Select(r => Hash(r.Phone)), ct);
         var recipients = current.Select(r => Hash(r.Phone) is { } hash && stopped.Contains(hash)
-            ? (Id: r.AppointmentId, Start: ReminderRules.Instant(r.ScheduledStart), r.PatientId, Hash: (string?)null, Refusal: (string?)OutsideList, r.ConsentSince)
+            ? (Id: r.AppointmentId, Start: ReminderRules.Instant(r.ScheduledStart), r.PatientId, Hash: (string?)null, Refusal: (string?)WaIdMissing, r.ConsentSince)
             : (Id: r.AppointmentId, Start: ReminderRules.Instant(r.ScheduledStart), r.PatientId, Hash: Hash(r.Phone), Refusal: Refusal(r.Phone), r.ConsentSince)).ToList();
         var pending = await db.AppointmentReminders.Where(r => r.Status == "pending" || r.Status == "sending").ToListAsync(ct);
-        foreach (var row in pending.Where(r => r.Status == "pending" && r.RecipientHash is { } h && stopped.Contains(h))) { row.Status = "skipped"; row.Reason = OutsideList; }
+        foreach (var row in pending.Where(r => r.Status == "pending" && r.RecipientHash is { } h && stopped.Contains(h))) { row.Status = "skipped"; row.Reason = WaIdMissing; }
         foreach (var row in pending.Where(r => r.Status == "sending" && r.AttemptedAt < now.AddMinutes(-10))) { row.Status = "uncertain"; row.Reason = "Envío interrumpido; no se repite."; }
         var optedOut = await OptedOut(recipients.Select(r => r.Hash).Concat(pending.Select(r => r.RecipientHash)), ct);
         foreach (var row in pending.Where(r => r.Status == "pending"))
@@ -94,10 +95,10 @@ public sealed partial class AppointmentReminderService
                 if (existing is not null)
                 {
                     var reopen = existing.AttemptedAt is null && existing.ContactId is null && existing.PatientId == r.PatientId && r.Hash is not null
-                        && (existing.Status == "cancelled" || existing.Status == "skipped" && existing.Reason is UnusablePhone or PreviousUnusablePhone or OutsideList);
+                        && (existing.Status == "cancelled" || existing.Status == "skipped" && existing.Reason is UnusablePhone or PreviousUnusablePhone or OutsideList or WaIdMissing);
                     if (reopen) { existing.RecipientHash = r.Hash; existing.Status = "pending"; existing.Reason = null; }
                     // Still unwritable: the row says why today (a text from before criterio 23 is replaced by the current one).
-                    else if (r.Hash is null && existing.Status == "skipped" && existing.Reason is UnusablePhone or PreviousUnusablePhone or OutsideList) existing.Reason = r.Refusal;
+                    else if (r.Hash is null && existing.Status == "skipped" && existing.Reason is UnusablePhone or PreviousUnusablePhone or OutsideList or WaIdMissing) existing.Reason = r.Refusal;
                     continue;
                 }
                 var due = ReminderRules.Due(r.Start, window, tenant.TimeZone);
@@ -132,16 +133,16 @@ public sealed partial class AppointmentReminderService
         if (recipient is null) { await Stop("Cita cancelada o reprogramada, teléfono cambiado o autorización retirada en Hospital."); return; }
         if (optedOut(row.RecipientHash, recipient.ConsentSince)) { await Stop("El teléfono pidió BAJA en el número general."); return; }
         var outside = Closed(recipient.Phone) is OutsideList;
-        if (outside && (await Unconfirmed([row.RecipientHash], ct)).Count > 0) { row.Status = "skipped"; row.Reason = OutsideList; await db.SaveChangesAsync(ct); return; }
+        if (outside && (await Unconfirmed([row.RecipientHash], ct)).Count > 0) { row.Status = "skipped"; row.Reason = WaIdMissing; await db.SaveChangesAsync(ct); return; }
         var dayBefore = row.Window == "day_before";
         var template = dayBefore ? KapsoClient.GeneralDayTemplate : KapsoClient.GeneralHourTemplate;
-        if (!await kapso.ReminderTemplateApproved(number, template, tenant.ReminderLanguage, dayBefore ? KapsoClient.GeneralDayWindow : KapsoClient.GeneralHourWindow, ct, general: true)) { await Wait("Plantilla pendiente de aprobación o incompatible."); return; }
+        if (await kapso.ReminderTemplateApproved(number, template, tenant.ReminderLanguage, dayBefore ? KapsoClient.GeneralDayWindow : KapsoClient.GeneralHourWindow, ct, general: true) is not { } labels) { await Wait("Plantilla pendiente de aprobación o incompatible."); return; }
         row.Status = "sending"; row.AttemptedAt = now; row.Reason = null;
         await db.SaveChangesAsync(ct); // Durable attempt before external I/O, never automatically replayed.
         var (date, time) = ReminderRules.Local(row.StartsAt, tenant.TimeZone);
         try
         {
-            var (_, waId) = await kapso.SendReminder(number, recipient.Phone, template, tenant.ReminderLanguage, name, date, time, ct, dayBefore ? [$"CANCELAR {row.Id}"] : null, general: true, phoneOfClinic: clinicPhone);
+            var (_, waId) = await kapso.SendReminder(number, recipient.Phone, template, tenant.ReminderLanguage, name, date, time, ct, ReminderRules.Payloads(row.Id, labels), general: true, phoneOfClinic: clinicPhone);
             row.Status = "sent";
             // Criterio 22: only the wa_id's HMAC, never the wa_id. One of 8 digits is unusable (criterio 30), like one that did not come back.
             try { row.WaIdHash = waId is null ? null : Rules.PhoneHash(Rules.WaId(waId), config["PHONE_HASH_KEY"]!); } catch (ArgumentException) { row.WaIdHash = null; }

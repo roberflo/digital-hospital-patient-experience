@@ -79,10 +79,11 @@ public sealed partial class AgentRuntime
         }
         return false;
     }
-    /// <summary>«Cambiar fecha» / «Cancelar» of a day-before reminder sent to this contact: the verb and that reminder.</summary>
+    /// <summary>«Cambiar fecha» / «Cancelar» of the day before, or «Necesito reprogramar» / «Cancelar cita» of the hour before (S5, criterio 50),
+    /// of a reminder sent to this contact: the verb and that reminder.</summary>
     async Task<(string Verb, AppointmentReminder Row)?> TappedReminder(string body, CancellationToken ct) =>
         AgentGuard.AppointmentChoice(body) is { Verb: "MOVER" or "CANCELAR", StartsAt: null } change
-        && await db.AppointmentReminders.AsNoTracking().SingleOrDefaultAsync(r => r.Id == change.Appointment && r.Window == "day_before" && r.ContactId == conv.ContactId, ct) is { } row
+        && await db.AppointmentReminders.AsNoTracking().SingleOrDefaultAsync(r => r.Id == change.Appointment && r.ContactId == conv.ContactId, ct) is { } row
             ? (change.Verb, row) : null;
     /// <summary>When the agent handed this conversation to the team, if no person has answered or acted on it since. A conversation
     /// the team took by itself, or one that stopped on an error, is theirs alone.</summary>

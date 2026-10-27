@@ -44,7 +44,9 @@ type Settings = {
   error?: string;
   rows: Reminder[];
 };
-const dayTemplateV4 = 'recepcion_cita_dia_anterior_v4';
+// S5 (criterio 53): the owner's readable templates with the «No más recordatorios» button; the server takes them only once Meta approves both.
+const dayTemplateV5 = 'recepcion_cita_dia_anterior_v5';
+const hourTemplateV2 = 'recepcion_cita_una_hora_v2';
 const statuses: Record<string, string> = {
   pending: 'Programado',
   sending: 'Enviando',
@@ -76,13 +78,17 @@ export function AppointmentReminders({ me }: { me: Me }) {
   const { data: channels } = useSWR<Channel[]>('/channels', fetcher);
   const [busy, setBusy] = useState(false);
   const [templates, setTemplates] = useState<{ name: string; status: string; ready: boolean }[]>();
-  async function save(enabled: boolean, channelId?: string, dayTemplate?: string) {
+  async function save(
+    enabled: boolean,
+    channelId?: string,
+    templates?: { dayTemplate: string; hourTemplate: string },
+  ) {
     setBusy(true);
     try {
       await api('/appointment-reminders/settings', 'PUT', {
         enabled,
         channelId: channelId || null,
-        ...(dayTemplate && { dayTemplate }),
+        ...templates,
       });
       await mutate();
       toast.success('Recordatorios actualizados');
@@ -92,6 +98,9 @@ export function AppointmentReminders({ me }: { me: Me }) {
       setBusy(false);
     }
   }
+  const newTemplates =
+    data !== undefined &&
+    (data.dayTemplate !== dayTemplateV5 || data.hourTemplate !== hourTemplateV2);
   const format = (value: string) =>
     inZone(value, me.tenant.timeZone, {
       dateStyle: 'short',
@@ -190,24 +199,27 @@ export function AppointmentReminders({ me }: { me: Me }) {
               >
                 Comprobar plantillas
               </Button>
-              {data.dayTemplate !== dayTemplateV4 && (
+              {newTemplates && (
                 <Button
                   variant="outline"
                   disabled={busy || !data.channelId}
                   onClick={() => {
                     setTemplates(undefined);
-                    void save(data.enabled, data.channelId, dayTemplateV4);
+                    void save(data.enabled, data.channelId, {
+                      dayTemplate: dayTemplateV5,
+                      hourTemplate: hourTemplateV2,
+                    });
                   }}
                 >
-                  Usar plantilla con botones
+                  Usar plantillas nuevas
                 </Button>
               )}
             </div>
             <div className="flex flex-col gap-2">
-              {data.dayTemplate !== dayTemplateV4 && (
+              {newTemplates && (
                 <p className={hint}>
-                  El aviso del día anterior necesita la plantilla con botones (Confirmar, Cambiar
-                  fecha, Cancelar). Mientras no esté aprobada, ese aviso no se envía.
+                  Las plantillas nuevas se leen mejor y llevan el botón «No más recordatorios». Se
+                  usan cuando Meta apruebe las dos; hasta entonces siguen las actuales.
                 </p>
               )}
               {!data.sendEnabled && (
@@ -218,8 +230,8 @@ export function AppointmentReminders({ me }: { me: Me }) {
               )}
               <p className={hint}>
                 {data.consentingContacts} pacientes vinculados con autorización. Regístrala en la
-                ficha de la conversación o pide al paciente escribir ACTIVAR RECORDATORIOS. BAJA
-                desactiva los avisos.
+                ficha de la conversación o pide al paciente escribir ACTIVAR RECORDATORIOS. El
+                paciente los desactiva con el botón «No más recordatorios» o escribiendo BAJA.
               </p>
               <p className={hint}>
                 Se usan dos plantillas de notificación aprobadas. No se incluyen recetas ni

@@ -234,8 +234,9 @@ public static class WhatsAppEndpoints
         if (contact is null) { contact = new Contact { TenantId = scope.Id, Name = Get(conversation, "contact_name") ?? "Paciente", Phone = Rules.WaId(phone), PhoneHash = hash }; db.Add(contact); db.Activities.Add(new Activity{TenantId=scope.Id,ContactId=contact.Id,Actor="WhatsApp",ActorRole="system",Kind="contact_created",Body="Contacto creado automáticamente al recibir su primera conversación de WhatsApp."}); }
         var conv = await db.Conversations.SingleOrDefaultAsync(x => x.ChannelId == ch.Id && x.ContactId == contact.Id);
         if (conv is null) { conv = new Conversation { TenantId = scope.Id, ChannelId = ch.Id, ContactId = contact.Id, ExternalId = Get(conversation, "id") ?? "", Status = (await db.Tenants.AnyAsync(x=>x.Id==scope.Id&&x.AgentEnabled))&&ch.Enabled?"agent":"human" }; db.Add(conv); db.Activities.Add(InboxWorkflow.Event(scope,conv,"WhatsApp","conversation_created","Conversación vinculada al contacto CRM.")); }
-        var consentText = Get(k,"content") ?? (msg.TryGetProperty("text",out var consentBody)?Get(consentBody,"body"):null) ?? "";
-        var consentCommand = Get(k,"direction")!="outbound" && Get(k,"origin")!="history_sync" && !(k.ValueKind==JsonValueKind.Object&&k.TryGetProperty("passive",out var consentPassive)&&consentPassive.ValueKind==JsonValueKind.True) && evt=="whatsapp.message.received" ? ReminderRules.ConsentCommand(consentText) : null;
+        // What the patient said, a template tap's payload first (S5: the «No más recordatorios» button is BAJA); text reads as kapso.content, as before.
+        var content = WhatsAppContent.Inbound(msg, k);
+        var consentCommand = Get(k,"direction")!="outbound" && Get(k,"origin")!="history_sync" && !(k.ValueKind==JsonValueKind.Object&&k.TryGetProperty("passive",out var consentPassive)&&consentPassive.ValueKind==JsonValueKind.True) && evt=="whatsapp.message.received" ? ReminderRules.ConsentCommand(content) : null;
         if(consentCommand is not null)
         {
             var reminderLock=BitConverter.ToInt64(ReminderRules.LockId(scope.Id).ToByteArray(),0);
@@ -250,7 +251,7 @@ public static class WhatsAppEndpoints
         var reconciled = await db.Messages.SingleOrDefaultAsync(x => x.ExternalId == external);
         if (reconciled is not null) { if (status == "read" || status == "failed" || (status == "delivered" && reconciled.Status != "read")) reconciled.Status = status; return null; }
         var origin = Get(k, "origin"); var outbound = Get(k, "direction") == "outbound"; var history = origin == "history_sync"; var passive = k.ValueKind == JsonValueKind.Object && k.TryGetProperty("passive", out var pass) && pass.ValueKind == JsonValueKind.True;
-        var type = Get(msg, "type") ?? "text"; var content = WhatsAppContent.Inbound(msg, k);
+        var type = Get(msg, "type") ?? "text";
         if (k.ValueKind == JsonValueKind.Object && k.TryGetProperty("transcript", out var transcript)) content = Get(transcript, "text") ?? content;
         string? media = null; if (msg.TryGetProperty(type, out var typeData)) media = Get(typeData, "id");
         var timestamp = long.TryParse(Get(msg, "timestamp"), out var unix) && unix > 0 && unix <= DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeSeconds() ? DateTimeOffset.FromUnixTimeSeconds(unix) : DateTimeOffset.UtcNow;

@@ -50,12 +50,26 @@ test('admin configures reminder channel, pauses dispatch and sees template and q
       },
     }),
   );
-  const saved: { enabled: boolean; channelId: string; dayTemplate?: string }[] = [];
+  const saved: {
+    enabled: boolean;
+    channelId: string;
+    dayTemplate?: string;
+    hourTemplate?: string;
+  }[] = [];
+  // S5, criterio 52: the server refuses the new templates while Meta has not approved them.
+  let approved = false;
   await page.route('**/api/crm/appointment-reminders/settings', async (r) => {
     const body = r.request().postDataJSON();
     expect(body.channelId).toBe(channel);
-    enabled = body.enabled;
     saved.push(body);
+    if (body.dayTemplate && !approved)
+      return r.fulfill({
+        status: 400,
+        json: {
+          title: 'La plantilla recepcion_cita_dia_anterior_v5 aún no está aprobada en Meta.',
+        },
+      });
+    enabled = body.enabled;
     await r.fulfill({ json: {} });
   });
   await page.route('**/api/crm/appointment-reminders/templates', (r) =>
@@ -90,11 +104,22 @@ test('admin configures reminder channel, pauses dispatch and sees template and q
   await expect(
     page.getByRole('button', { name: 'Activar recordatorios', exact: true }),
   ).toBeVisible();
-  // Criterio 13: the tenant still has v1; the administrator switches the day-before reminder to the template with buttons.
+  // S5, criterio 53: the tenant still has v1; one PUT moves both windows to the new templates, and a refusal shows the server's message.
   expect(saved.every((body) => body.dayTemplate === undefined)).toBe(true);
-  await page.getByRole('button', { name: 'Usar plantilla con botones', exact: true }).click();
-  await expect.poll(() => saved.at(-1)?.dayTemplate).toBe('recepcion_cita_dia_anterior_v4');
-  expect(saved.at(-1)?.enabled).toBe(false);
+  await page.getByRole('button', { name: 'Usar plantillas nuevas', exact: true }).click();
+  await expect(
+    page.getByText('La plantilla recepcion_cita_dia_anterior_v5 aún no está aprobada en Meta.'),
+  ).toBeVisible();
+  approved = true;
+  await page.getByRole('button', { name: 'Usar plantillas nuevas', exact: true }).click();
+  await expect
+    .poll(() => saved.at(-1))
+    .toMatchObject({
+      dayTemplate: 'recepcion_cita_dia_anterior_v5',
+      hourTemplate: 'recepcion_cita_una_hora_v2',
+      enabled: false,
+    });
+  await expect(page.getByText('Recordatorios actualizados')).toBeVisible();
 });
 test('staff cannot administer reminders and other tenant contact authorization is hidden', async ({
   page,
