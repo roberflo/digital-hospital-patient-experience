@@ -415,7 +415,8 @@ test('AT-8 with more than 30 steps the previous ones are one click away', async 
   const seen = await serveTrail(page, (p) =>
     feedPage([trailStep(Number(p.get('page')))], 31, Number(p.get('page'))),
   );
-  await openConversation(page, chat('Ana Sintética', { status: 'agent' }));
+  const row = chat('Ana Sintética', { status: 'agent' });
+  await openConversation(page, row);
   await trailButton(page).click();
   await page
     .getByRole('navigation', { name: 'Páginas del rastro' })
@@ -423,7 +424,7 @@ test('AT-8 with more than 30 steps the previous ones are one click away', async 
     .click();
   await expect(page.getByText('Consulta de disponibilidad: completado. (2)')).toBeVisible();
   expect(seen.at(-1)?.get('page')).toBe('2');
-  expect(seen.at(-1)?.get('conversationId')).not.toBeNull();
+  expect(seen.at(-1)?.get('conversationId')).toBe(row.conversation.id);
 });
 
 test('AT-9 the trail refreshes within 10 s only when open and on page 1', async ({ page }) => {
@@ -436,7 +437,10 @@ test('AT-9 the trail refreshes within 10 s only when open and on page 1', async 
   await expect.poll(() => seen.length).toBe(1);
   await page.clock.fastForward(11000);
   await expect.poll(() => seen.length).toBe(2); // open on page 1: it refreshes by itself
-  await page.getByRole('button', { name: 'Siguiente' }).click();
+  await page
+    .getByRole('navigation', { name: 'Páginas del rastro' })
+    .getByRole('button', { name: 'Siguiente' })
+    .click();
   await expect.poll(() => seen.length).toBe(3);
   await page.clock.fastForward(11000);
   await page.waitForTimeout(500);
@@ -458,6 +462,7 @@ test('AT-10 the trail opens by keyboard, announces its state and fits 360 px', a
 });
 
 test('AT-5 a conversation of the agent whose number is off can be taken', async ({ page }) => {
+  await agentSwitch(page, true); // MR-49: else «apagado» wins as the reason
   await serveTrail(page, () => feedPage([]));
   await openConversation(
     page,

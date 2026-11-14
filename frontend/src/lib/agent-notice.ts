@@ -15,7 +15,7 @@ export function agentNotice({
   agentBlock: SendBlock | null;
   role: string;
 }) {
-  const off = !agentEnabled && status !== 'closed';
+  const off = !agentEnabled;
   const blocked = off ? null : agentBlock;
   const text = blocked
     ? `El agente no podría responder: ${blocked.reason}`
@@ -32,7 +32,7 @@ export function agentNotice({
     text,
     /** The value for `StatusBadge`: an «agent» conversation nobody can answer is unattended (MR-46). */
     badge: status === 'agent' && (off || blocked) ? 'unattended' : status,
-    /** «Activar agente» is pointless while the agent is off or blocked; «Tomar conversación» never is. */
-    canActivate: status === 'agent' || !(off || blocked),
+    /** «Activar agente» only if the agent could answer (on, no block), closed or not; «Tomar conversación» is always possible. */
+    canActivate: status === 'agent' || (agentEnabled && !agentBlock),
   };
 }

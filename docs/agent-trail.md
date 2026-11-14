@@ -1,12 +1,13 @@
 # Rastro del agente en la conversación
 
-**Estado (2026-11-14, S1 construida sobre `a811340`):** S1 **construida**. Verificados: criterios 1 (backend),
-2, 11 (backend; 1613/1613 con `scripts/test-backend.sh`), 3, 4, 5, 6 (`test:ui` 9/9, `test:server` 48/48, typecheck y
-lint limpios). **Sin verificar:** criterios 7–10 y la parte de navegador del 1 (`tests/inbox-ux.spec.ts`, pruebas
-`AT-1`, `AT-5`, `AT-7`…`AT-10` escritas, no corridas: la API y la web de Recepción no estaban levantadas ni se
-pudo levantarlas sin tocar el checkout compartido); el movimiento reducido del 10 sigue siendo revisión visual.
-Defecto de INV-4 corregido (`agent-notice.ts` gobierna aviso e insignia). OQ-1/2/3 no bloquearon S1 (statu quo
-congelado); OQ-5 bloquea sólo S3. Pendiente fuera de alcance: la insignia de la lista y `/overview` (OQ-11).
+**Estado (2026-11-14, S1 construida y revisada sobre `a811340`):** S1 **construida**. Verificados: criterios 1
+(backend), 2, 11 (backend; 1613/1613 con `scripts/test-backend.sh`), 3, 4, 6 (`test:ui` 10/10, `test:server`
+48/48, typecheck y lint limpios) y 5: la parte del aviso con `agent-notice` y `test:ui`; la insignia de la
+cabecera sólo queda verificada con la prueba `AT_5` de `ui-tests`. **Sin verificar:** criterios 7–10 y la parte
+de navegador del 1 (`tests/inbox-ux.spec.ts`, pruebas `AT-1`, `AT-5`, `AT-7`…`AT-10` escritas, no corridas: la
+API y la web de Recepción no estaban levantadas); el movimiento reducido del 10 sigue siendo revisión visual.
+OQ-1/2/3 no bloquearon S1 (statu quo congelado); OQ-5 bloquea sólo S3. Pendiente fuera de alcance: la
+insignia de la lista y `/overview` (OQ-11).
 
 Petición (2026-10-04): llevar a Recepción la «pestaña Agente» de `trycompai/crm`. Medido contra
 `origin/main` (`6ff1cfd`), el agente de Recepción conversa con el paciente por WhatsApp, no con
@@ -163,3 +164,10 @@ es nulo (MR-46 sólo cubre el agente apagado; mismo defecto, otra superficie), y
   automática». Texto de producto; el dueño puede cambiarlo sin tocar criterios.
 - **OQ-11 — asumida.** El criterio 5 cubre el aviso y la insignia de la conversación abierta; la
   tarjeta de la lista y los conteos se quedan como están.
+- **OQ-12 — bloqueante para cerrar INV-2/INV-5; decide el dueño.** El rastro aún muestra el GUID de
+  «Referencia Hospital», el nombre de una excepción y texto del modelo en notas y motivos de traspaso.
+  Enmendar los invariantes o redactar esos cuerpos en `DisplayBody`.
+- **Nota — `/?view=activity` cambió con S1.** Los pasos `guard` llevan ahora la frase «El texto retenido no
+  se guardó.» y la búsqueda ya no encuentra los nombres crudos de las cuatro consultas nuevas
+  (`hospital_services`, `hospital_contact`, `hospital_disciplines`, `hospital_agreement`): `DisplayBody` los
+  reescribe antes de buscar.

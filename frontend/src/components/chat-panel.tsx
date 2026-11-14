@@ -61,7 +61,7 @@ import {
   ActivityTimeline,
 } from './workspace-shared';
 import { FormDialog } from './form-dialog';
-import { EventCard, type Feed } from './activity-workspace';
+import { EventCard, type Event, type Feed } from './activity-workspace';
 /** Tracks a CSS media query; reads the real value on the first client render. */
 function useMediaQuery(query: string) {
   return useSyncExternalStore(
@@ -78,6 +78,9 @@ function useMediaQuery(query: string) {
  * docs/agent-trail.md S1: what happened in this conversation, newest first. Closed by default; open, it asks the
  * server for this conversation only (never the contact: that mixes numbers) and polls only on page 1.
  */
+/** The SWR key of the trail: null while closed, so a closed trail reads nothing. */
+export const trailKey = (open: boolean, conversationId: string, page: number) =>
+  open ? `/activity-feed?${new URLSearchParams({ conversationId, page: String(page) })}` : null;
 export function AgentTrail({
   conversationId,
   zone,
@@ -91,10 +94,17 @@ export function AgentTrail({
   const [page, setPage] = useState(1);
   const id = useId();
   const { data, error, isValidating, mutate } = useSWR<Feed>(
-    open ? `/activity-feed?${new URLSearchParams({ conversationId, page: String(page) })}` : null,
+    trailKey(open, conversationId, page),
     fetcher,
-    { refreshInterval: page === 1 ? 10000 : 0 },
+    { refreshInterval: page === 1 ? 10000 : 0, revalidateOnFocus: page === 1 },
   );
+  // One heading per day, as in /?view=activity: a step from twelve days ago must not read as today's.
+  const days = new Map<string, Event[]>();
+  for (const event of data?.items ?? [])
+    days.set(dayInZone(event.createdAt, zone), [
+      ...(days.get(dayInZone(event.createdAt, zone)) ?? []),
+      event,
+    ]);
   return (
     <div className="flex flex-col gap-2">
       <Button
@@ -120,15 +130,29 @@ export function AgentTrail({
               </AlertDescription>
             </Alert>
           )}
-          {!error && !data && <Spinner aria-hidden="true" role="presentation" />}
-          {!error && data?.items.length === 0 && (
+          {!error && !data && <Spinner />}
+          {data?.items.length === 0 && (
             <p className="text-sm text-muted-foreground">
               El agente no hizo nada en esta conversación.
             </p>
           )}
-          {!error &&
-            data?.items.map((event) => <EventCard key={event.id} event={event} zone={zone} />)}
-          {!error && data && data.total > data.pageSize && (
+          {[...days.entries()].map(([day, events]) => (
+            <section className="flex flex-col gap-2" key={day} aria-label={`Pasos del ${day}`}>
+              <h4 className="text-xs font-medium text-muted-foreground first-letter:uppercase">
+                {new Date(day + 'T12:00:00Z').toLocaleDateString('es-SV', {
+                  timeZone: 'UTC',
+                  weekday: 'long',
+                  day: 'numeric',
+                  month: 'long',
+                  year: 'numeric',
+                })}
+              </h4>
+              {events.map((event) => (
+                <EventCard key={event.id} event={event} zone={zone} />
+              ))}
+            </section>
+          ))}
+          {data && data.total > data.pageSize && (
             <nav className="flex items-center justify-center gap-3" aria-label="Páginas del rastro">
               <Button
                 variant="outline"
@@ -471,10 +495,8 @@ export function ChatPanel({
                   </Button>
                 </ConfirmAction>
               </AlertDescription>
-              <div className="col-start-2 mt-2">
-                <AgentTrail conversationId={c.id} zone={me.tenant.timeZone} />
-              </div>
             </Alert>
+            <AgentTrail conversationId={c.id} zone={me.tenant.timeZone} />
             <div className="flex flex-wrap items-center gap-2">
               <PatientClinical
                 key={`${c.id}:${c.assignedTo}:${c.status}:${chat.contact.patientId}`}

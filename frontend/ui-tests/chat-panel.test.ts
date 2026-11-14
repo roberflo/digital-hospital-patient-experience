@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createElement as h } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { SWRConfig } from 'swr';
-import { AgentTrail, ChatPanel } from '../src/components/chat-panel.tsx';
+import { AgentTrail, ChatPanel, trailKey } from '../src/components/chat-panel.tsx';
 
 // RXE-C1/C2/C4 on the real inbox bubble: the action is where the person reads the message, and only there.
 const LABEL = 'Guardar en el expediente';
@@ -119,6 +119,11 @@ test('AT_5_an_agent_conversation_whose_number_is_off_does_not_claim_the_agent_at
     agentBlock: { code: 'channel', reason: 'El número está desactivado.' },
   });
   assert.ok(!html.includes('El agente está atendiendo'));
+  const badge = html.slice(html.indexOf('whitespace-nowrap'), html.indexOf('Tomar conversación'));
+  assert.ok(
+    badge.includes('Sin atender') && !badge.includes('Agente IA'),
+    'insignia de la cabecera',
+  );
   assert.ok(html.includes('El agente no podría responder: El número está desactivado.'));
   assert.ok(tomar(html) && !/\sdisabled=/.test(tomar(html)), tomar(html));
 });
@@ -163,7 +168,7 @@ test('AT_3_a_handoff_step_shows_who_when_and_the_reason', () => {
   const html = trail([
     step({ kind: 'handoff', actor: 'Agente', body: 'Pidió hablar con una persona' }),
   ]);
-  for (const text of ['Agente', '10:30', 'Pidió hablar con una persona'])
+  for (const text of ['Agente', '10:30', '25 de octubre de 2026', 'Pidió hablar con una persona'])
     assert.ok(html.includes(text), text);
 });
 test('AT_4_a_withheld_answer_reads_as_such_with_its_category_and_says_the_text_was_not_kept', () => {
@@ -186,4 +191,10 @@ test('AT_closed_by_default_it_shows_no_steps_and_asks_for_nothing', () => {
   );
   assert.ok(html.includes('aria-expanded="false"'));
   assert.ok(!html.includes('El agente no hizo nada'));
+});
+
+test('AT_closed_the_trail_asks_for_nothing_the_key_is_null_and_open_it_names_the_conversation', () => {
+  assert.equal(trailKey(false, 'c-1', 1), null);
+  assert.equal(trailKey(true, 'c-1', 2), '/activity-feed?conversationId=c-1&page=2');
+  assert.ok(!String(trailKey(true, 'c-1', 1)).includes('contactId'));
 });

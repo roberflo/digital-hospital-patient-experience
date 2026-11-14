@@ -41,8 +41,11 @@ test('a human conversation: the block stops «Activar agente», the agent off to
   assert.equal(blocked.canActivate, false);
   assert.equal(agentNotice({ ...human, agentEnabled: false }).canActivate, false);
 });
-test('a closed conversation says so and ignores the agent being off', () => {
+test('a closed conversation says so, unless the agent is off, which then wins and blocks «Activar agente»', () => {
   const n = agentNotice({ ...base, status: 'closed', agentEnabled: false });
-  assert.equal(n.text, 'La conversación está cerrada.');
   assert.equal(n.badge, 'closed');
+  assert.equal(n.canActivate, false); // «Activar agente» would promise what the off switch forbids
+  assert.match(n.text, /apagado para todo el hospital/); // the off switch wins as the reason
+  assert.equal(agentNotice({ ...base, status: 'closed' }).text, 'La conversación está cerrada.');
+  assert.equal(agentNotice({ ...base, status: 'closed' }).canActivate, true);
 });
