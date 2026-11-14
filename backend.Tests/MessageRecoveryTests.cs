@@ -239,17 +239,60 @@ public sealed class MessageRecoveryTests : IAsyncLifetime
         Assert.Equal(Iso(Now - MessageRecovery.Grace - MessageRecovery.Grace), Query(asked[1], "since")); // the pass completed
     }
 
-    [Fact] public async Task M4_a_hung_Kapso_holds_the_tenant_for_the_budget_at_most()
+    [Fact] public async Task M4_a_hung_Kapso_holds_the_tenant_for_the_budget_at_most_and_the_next_pass_resumes()
     {
-        var log = new Lines(); var hung = new Answering(async (r, ct) => { asked.Add(r.RequestUri!); await Task.Delay(Timeout.Infinite, ct); throw new InvalidOperationException(); });
+        // The first page is read and saved; the second hangs past the pass's budget (M-4). The next pass goes on from the last complete page (M-9).
+        var log = new Lines(); var hang = true;
+        var kapso = new Answering(async (r, ct) =>
+        {
+            asked.Add(r.RequestUri!);
+            if (Query(r.RequestUri!, "after") == "") return Page([Item("wamid.rec-page-1", Now.AddMinutes(-20))], after: "p2");
+            if (hang) await Task.Delay(Timeout.Infinite, ct);
+            return Page([Item("wamid.rec-page-2", Now.AddMinutes(-10))]);
+        });
         var clock = System.Diagnostics.Stopwatch.StartNew();
-        await Recover(Now, hung, log, budget: TimeSpan.FromMilliseconds(300), timeout: Timeout.InfiniteTimeSpan).WaitAsync(TimeSpan.FromSeconds(10));
+        await Recover(Now, kapso, log, budget: TimeSpan.FromMilliseconds(300), timeout: Timeout.InfiniteTimeSpan).WaitAsync(TimeSpan.FromSeconds(10));
 
         Assert.True(clock.Elapsed < TimeSpan.FromSeconds(5), clock.Elapsed.ToString());
         Assert.Contains(log.All, x => x.StartsWith("Warning Message recovery failed") && x.Contains(h.Scope.Id.ToString()));
-        answer = _ => Task.FromResult(Page([]));
+        Assert.Equal(["wamid.rec-page-1"], (await Saved()).Select(x => x.ExternalId));
+        hang = false;
+        await Recover(Now + MessageRecovery.Every, kapso);
+
+        Assert.Equal(3, asked.Count);
+        Assert.Equal(("p2", Query(asked[0], "since"), Query(asked[0], "until")), (Query(asked[2], "after"), Query(asked[2], "since"), Query(asked[2], "until")));
+        Assert.Equal(["wamid.rec-page-1", "wamid.rec-page-2"], (await Saved()).Select(x => x.ExternalId));
+    }
+
+    [Fact] public async Task M9_a_number_that_hangs_does_not_starve_the_ones_behind_it()
+    {
+        var second = new Channel { TenantId = h.Scope.Id, Name = "Synthetic 2", PhoneNumberId = Guid.NewGuid().ToString("N"), Enabled = true }; h.Db.Add(second); await h.Db.SaveChangesAsync();
+        var numbers = await h.Db.Channels.AsNoTracking().OrderBy(x => x.Id).Select(x => x.PhoneNumberId).ToListAsync(); // the order a pass starts from
+        var kapso = new Answering(async (r, ct) =>
+        {
+            asked.Add(r.RequestUri!);
+            if (r.RequestUri!.AbsolutePath.Contains(numbers[0])) await Task.Delay(Timeout.Infinite, ct);
+            return Page([]);
+        });
+        await Recover(Now, kapso, budget: TimeSpan.FromMilliseconds(300), timeout: Timeout.InfiniteTimeSpan).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.DoesNotContain(asked, x => x.AbsolutePath.Contains(numbers[1])); // the budget went on the first
+
+        await Recover(Now + MessageRecovery.Every, kapso, budget: TimeSpan.FromMilliseconds(300), timeout: Timeout.InfiniteTimeSpan).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Contains(numbers[1], asked[1].AbsolutePath); // this pass started from the one left out
+    }
+
+    [Fact] public async Task M10_a_cursor_Kapso_repeats_closes_the_window()
+    {
+        var log = new Lines();
+        answer = r => Task.FromResult(Query(r.RequestUri!, "after") == "" ? Page([Item("wamid.rec-loop-1", Now.AddMinutes(-20))], after: "same") : Page([Item("wamid.rec-loop-2", Now.AddMinutes(-10))], after: "same"));
+        await Recover(Now, log: log);
         await Recover(Now + MessageRecovery.Every);
-        Assert.Equal(Iso(Now + MessageRecovery.Every - MessageRecovery.Cap), Query(asked[1], "since")); // the cut pass left no cursor: the whole Cap again, not until − Grace
+
+        Assert.Equal(4, asked.Count); // two per pass, not a page limit of the same page; the second pass is a new window
+        Assert.Equal(("", Iso(Now - MessageRecovery.Grace - MessageRecovery.Grace)), (Query(asked[2], "after"), Query(asked[2], "since")));
+        Assert.Equal(["wamid.rec-loop-1", "wamid.rec-loop-2"], (await Saved()).Select(x => x.ExternalId));
+        var warning = Assert.Single(log.All, x => x.StartsWith("Warning"));
+        Assert.Contains("repeated", warning); Assert.Contains(h.Conversation.ChannelId.ToString(), warning); Assert.DoesNotContain("wamid", warning); Assert.DoesNotContain(Phone, warning);
     }
 
     [Fact] public async Task C12_a_recovered_message_touches_neither_consent_nor_appointments()

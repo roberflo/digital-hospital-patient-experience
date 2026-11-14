@@ -1,11 +1,10 @@
 # A01 — Recuperar los mensajes que el webhook no entregó
 
-**Estado (2026-11-14):** S1 construida y revisada (I-1, M-1, M-2, M-4, M-6 cerrados; ver «Revisión
-adversaria»), con `KAPSO_RECOVERY_ENABLED` apagado por defecto: apagada no hace ninguna llamada. Criterios
-1–15 en verde en `backend.Tests/MessageRecoveryTests.cs`, `InboxListTests.A01_7_*` y
-`AgentWaitingTests.A01_*` contra Postgres. Encenderla espera G0 (contrato real de Kapso; las pruebas
-usan el ejemplo de la documentación, sin confirmar), la revisión de `security-auditor` (OQ-A01-6) y la
-decisión del dueño. Sin migración.
+**Estado (2026-11-14):** en main, apagado (`KAPSO_RECOVERY_ENABLED`); encender espera G0, la
+revisión de seguridad (OQ-A01-6) y la firma de OQ-A01-2/M-11. Dos revisiones adversarias cerradas (ver
+«Revisión adversaria»); criterios 1–15 en verde en `backend.Tests/MessageRecoveryTests.cs`,
+`InboxListTests.A01_7_*` y `AgentWaitingTests.A01_*` (criterios 62–64 de `reception-agent.md` tras una
+recuperación). Sin migración.
 
 Petición (`backlog.md:82`): un job por canal que pida a Kapso los mensajes desde `LastWebhookAt`.
 
@@ -119,7 +118,9 @@ con un número de pruebas, hecha por quien tenga `KAPSO_API_KEY` del entorno. De
    y `timestamp`?
 2. ¿`since` y `until` filtran por la hora de WhatsApp o por la de alta en Kapso?
 3. ¿En qué orden pagina, y `after` termina con cursor ausente? ¿Sigue valiendo un cursor `after` en
-   la pasada siguiente, con el mismo `since` y `until`? (la reanudación de M-1 lo da por hecho)
+   la pasada siguiente, con el mismo `since` y `until`? (la reanudación de M-1 y M-9 lo da por hecho)
+   ¿Puede devolver el mismo `after` que se le pidió? Si lo hace, hoy la ventana se cierra con un aviso
+   (M-10) y lo que quedara detrás de ese cursor no se pide.
 4. ¿Hay límite de frecuencia?
 5. ¿Aparecen los mensajes cuyo webhook falló o se omitió por pausa?
 
@@ -183,6 +184,14 @@ Documentado, sin cambio de código:
   `Message` repetidas.
 - **Nit 3.** Una conversación creada por la recuperación queda con `ExternalId = ""`: el listado no
   trae el id de conversación de Kapso donde el webhook lo trae (`conversation.id`).
+- **Segunda revisión (2026-11-14), corregido.** M-9: una pasada cortada por el presupuesto guarda
+  `(since, until, after de la última página completa)` y la siguiente sigue desde ahí; los números se
+  recorren en orden estable y la pasada siguiente empieza por el que quedó detrás del cortado, así que
+  ninguno se queda sin turno detrás de uno colgado. M-10: un `after` igual al pedido cierra la ventana y
+  deja un aviso sin datos del paciente. Pruebas de 62 y 63 tras una recuperación
+  (`AgentWaitingTests.A01_after_*`), con rojo por mutación.
+- **Nit `AgentMetrics`.** Sus `kinds` contarán `recovered` y los `handoff` de «Sistema» que deja la
+  recuperación; no son traspasos del agente.
 - **Despliegue.** Al encenderla, el dueño añade `KAPSO_RECOVERY_ENABLED` a la documentación de
   despliegue; hoy no figura porque está apagada.
 
@@ -220,6 +229,12 @@ pausado en Kapso»; A03; persistir el cursor.
   `human`, y el agente no las retoma aunque el paciente vuelva a escribir, hasta que alguien pulse
   «Activar agente». Lo que hay que decidir para S2: hasta qué antigüedad puede contestar el agente, y
   qué hace con un mensaje tardío que nombra una urgencia.
+- **M-11 — bloqueante para encender — lo firman el dueño y el médico responsable** (2026-11-14, bajo
+  OQ-A01-2). En una conversación que estaba en `agent` o `closed`, tras un mensaje recuperado queda en
+  `human` con un `handoff` de «Sistema», que no abre la espera de los criterios 62–64: un mensaje
+  posterior **en vivo** que nombre una emergencia no recibe el teléfono de emergencias automático hasta
+  que alguien pulse «Activar agente». En una que ya esperaba tras un traspaso del agente sí lo recibe
+  (I-1). Sin cambio de código en S1.
 - **OQ-A01-3 — bloqueante para ese aviso; no bloquea S1 (clínica: dueño + médico responsable).** ¿Debe
   el paciente recibir algo automático cuando su mensaje se recupera tarde? Statu quo congelado: no se
   envía nada.

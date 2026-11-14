@@ -23,6 +23,8 @@ public static class MessageRecovery
     static readonly ConcurrentDictionary<Guid, Cursor> cursors = new();
     /// <summary>When each tenant's last pass began: checked before anything is read, so a tick between passes costs nothing.</summary>
     static readonly ConcurrentDictionary<Guid, DateTimeOffset> ran = new();
+    /// <summary>Per tenant, the channel a pass starts from: the one after the channel a budget cut stopped at, so no number starves behind a stuck one (M-9).</summary>
+    static readonly ConcurrentDictionary<Guid, int> start = new();
 
     /// <summary>One pass over the tenant's numbers, when due. A failure is logged by type, per channel, and never thrown nor moves the cursor (INV-9).
     /// <paramref name="at"/> is «now», for the tests.</summary>
@@ -33,16 +35,19 @@ public static class MessageRecovery
         ran[scope.Id] = now;
         using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct); limit.CancelAfter(budget ?? Budget);
         List<Channel> channels;
-        try { channels = await db.Channels.AsNoTracking().Where(x => !x.PhoneNumberId.StartsWith("demo")).ToListAsync(limit.Token); }
+        try { channels = await db.Channels.AsNoTracking().Where(x => !x.PhoneNumberId.StartsWith("demo")).OrderBy(x => x.Id).ToListAsync(limit.Token); }
         catch (Exception ex) when (!ct.IsCancellationRequested) { log.LogWarning("Message recovery failed {ErrorType}. Tenant {TenantId}.", ex.GetType().Name, scope.Id); return; }
         var floor = now - Cap;
-        foreach (var ch in channels)
+        var first = channels.Count == 0 ? 0 : start.GetValueOrDefault(scope.Id) % channels.Count;
+        for (var i = 0; i < channels.Count; i++)
         {
             if (limit.IsCancellationRequested) break; // the rest wait, cursors untouched, for the next pass
+            var ch = channels[(first + i) % channels.Count];
             var cursor = cursors.GetValueOrDefault(ch.Id);
             // A resumed window keeps its own since with Kapso's cursor (M-1, G0.3); a new one starts no earlier than the Cap.
             var (since, until, after) = cursor?.After is { } resume ? (cursor.Since, cursor.Until, resume) : (cursor is null || cursor.Since < floor ? floor : cursor.Since, now - Grace, (string?)null);
-            int items = 0, skipped = 0, read = 0; string? next = null; var handedOff = new HashSet<Guid>();
+            // done: the cursor after the last page whose items are all saved, where a cut pass resumes (M-9).
+            int items = 0, skipped = 0, read = 0; string? next = null, done = after, asking = after; var handedOff = new HashSet<Guid>();
             try
             {
                 await foreach (var page in kapso.Inbound(ch.PhoneNumberId, since, until, after, limit.Token))
@@ -63,7 +68,10 @@ public static class MessageRecovery
                         if (await WhatsAppEndpoints.Ingest(item, item, k, ch, "whatsapp.message.received", db, scope, config, handedOff) is not null) skipped++;
                         await db.SaveChangesAsync(limit.Token); await tx.CommitAsync(limit.Token);
                     }
-                    next = page.After;
+                    next = done = page.After;
+                    // A cursor Kapso gives back unchanged would never end the window (M-10, G0.3): the window closes here.
+                    if (next is not null && next == asking) { next = null; log.LogWarning("Message recovery: Kapso repeated its page cursor; window closed. Tenant {TenantId}, channel {ChannelId}.", scope.Id, ch.Id); break; }
+                    asking = next;
                     if (++read == pages) break;
                 }
                 cursors[ch.Id] = next is null ? new(until - Grace, until, null) : new(since, until, next);
@@ -72,8 +80,10 @@ public static class MessageRecovery
             }
             catch (Exception ex) when (!ct.IsCancellationRequested)
             {
-                // The cursor stays (INV-9), except a half-read window, dropped so a broken Kapso cursor cannot repeat: the next pass asks again from this since.
-                if (after is not null) cursors[ch.Id] = new(since, until, null);
+                // Cut by the budget: like the page limit, the next pass resumes after the last complete page, and starts from the next number (M-9).
+                // Any other failure keeps the cursor (INV-9), except a half-read window, dropped so a broken Kapso cursor cannot repeat.
+                if (limit.IsCancellationRequested) { if (done is not null) cursors[ch.Id] = new(since, until, done); start[scope.Id] = (first + i + 1) % channels.Count; }
+                else if (after is not null) cursors[ch.Id] = new(since, until, null);
                 db.ChangeTracker.Clear(); // the failed item's rows were rolled back; none may ride on the next SaveChanges
                 log.LogWarning("Message recovery failed {ErrorType}. Tenant {TenantId}, channel {ChannelId}.", ex.GetType().Name, scope.Id, ch.Id);
             }

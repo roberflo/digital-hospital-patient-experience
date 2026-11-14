@@ -154,4 +154,28 @@ public sealed class AgentWaitingTests : IAsyncLifetime
 
         Assert.Empty(h.Sent);
     }
+
+    [Fact]
+    public async Task A01_after_a_recovery_a_tap_is_still_served_while_waiting()
+    {
+        // Criterio 62 after a recovery in a conversation the agent handed over.
+        await Recovered();
+
+        await Say("MISCITAS");
+
+        Assert.Contains("No tienes citas", Assert.Single(h.Sent));
+        Assert.Equal("human", (await h.Fresh()).Status);
+    }
+
+    [Fact]
+    public async Task A01_after_a_recovery_free_text_still_gets_the_wait_notice_and_the_priority()
+    {
+        // Criterio 63 after a recovery in a conversation the agent handed over.
+        await Wait(TimeSpan.FromMinutes(11)); await Recovered();
+
+        await Say("¿Hola? ¿Hay alguien?");
+
+        var notice = Assert.Single(h.Sent); Assert.Contains("sigue con el equipo", notice); Assert.Contains("2200 0000", notice);
+        var conversation = await h.Fresh(); Assert.Equal(("human", "high"), (conversation.Status, conversation.Priority));
+    }
 }
