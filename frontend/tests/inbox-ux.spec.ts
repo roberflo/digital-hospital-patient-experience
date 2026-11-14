@@ -428,21 +428,22 @@ test('AT-8 with more than 30 steps the previous ones are one click away', async 
 });
 
 test('AT-9 the trail refreshes within 10 s only when open and on page 1', async ({ page }) => {
+  // runFor, not fastForward: with fastForward the second poll never fires (measured), so the refresh was untestable.
   await page.clock.install();
   const seen = await serveTrail(page, (p) => feedPage([trailStep(1)], 31, Number(p.get('page'))));
   await openConversation(page, chat('Ana Sintética', { status: 'agent' }));
-  await page.clock.fastForward(11000);
+  await page.clock.runFor(11000);
   expect(seen).toHaveLength(0); // closed: nothing is read
   await trailButton(page).click();
   await expect.poll(() => seen.length).toBe(1);
-  await page.clock.fastForward(11000);
+  await page.clock.runFor(11000);
   await expect.poll(() => seen.length).toBe(2); // open on page 1: it refreshes by itself
   await page
     .getByRole('navigation', { name: 'Páginas del rastro' })
     .getByRole('button', { name: 'Siguiente' })
     .click();
   await expect.poll(() => seen.length).toBe(3);
-  await page.clock.fastForward(11000);
+  await page.clock.runFor(11000);
   await page.waitForTimeout(500);
   expect(seen).toHaveLength(3); // page 2: no polling
 });

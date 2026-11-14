@@ -97,8 +97,11 @@ por la ruta existente.
 
 `test:server` corre en CI (`.github/workflows/verify.yml:26`); `test:ui` y Playwright **no**. Playwright
 además inicia sesión en el Keycloak de Hospital y necesita `KC_DEV_USERS_PASSWORD`. Los criterios 3,
-4 y 6 quedan sin verificar sin una corrida local de `test:ui`; los 7 a 10, sin una de Playwright.
-No en verde: sin verificar.
+4 y 6 quedan sin verificar sin una corrida local de `test:ui`. Playwright corrió el 2026-11-14 contra la API y la web
+de `5dbb68f` y el Keycloak local de Hospital: `AT-1`, `AT-5`, `AT-7`, `AT-8`, `AT-9` y `AT-10`, 12/12 en `desktop` y
+`mobile`, con las respuestas del rastro simuladas por `page.route` (no se ejercitó un rastro real). `AT-9` usa
+`clock.runFor`: con `fastForward` el segundo sondeo no se disparaba (defecto de la prueba, no del producto). Verificados
+los criterios 1 (navegador), 5, 7, 8, 9 y 10, salvo el movimiento reducido (hueco declarado).
 
 ## Anti-criterios
 
