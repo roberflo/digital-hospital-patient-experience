@@ -40,6 +40,24 @@ public sealed class KapsoClient(HttpClient http, IConfiguration config)
         // Accepted but unreadable: it may have gone out, so the caller treats it like a 5xx (uncertain, never retried).
         throw new HttpRequestException("Kapso aceptó el envío sin devolver el id del mensaje");
     }
+    /// <summary>A01: the inbound messages of <paramref name="number"/> between two instants, one page at a time (100 each), each with the cursor of
+    /// the next; it ends when Kapso gives none.</summary>
+    public async IAsyncEnumerable<(JsonElement[] Items, string? After)> Inbound(string number, DateTimeOffset since, DateTimeOffset until, string? after = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        // The shape is docs.kapso.ai's example (data[], paging.cursors.after), not yet seen from a real number (G0). A page without data[] is
+        // Kapso's error, never «nothing more»: the pass fails and its window is asked again.
+        static string Iso(DateTimeOffset t) => Uri.EscapeDataString(t.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'"));
+        do
+        {
+            using var req = Request(HttpMethod.Get, $"{Uri.EscapeDataString(number)}/messages?direction=inbound&since={Iso(since)}&until={Iso(until)}&limit=100&fields=kapso()" + (after is null ? "" : "&after=" + Uri.EscapeDataString(after)));
+            using var res = await http.SendAsync(req, ct); res.EnsureSuccessStatusCode();
+            var page = await res.Content.ReadFromJsonAsync<JsonElement>(ct);
+            if (page.ValueKind != JsonValueKind.Object || !page.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Array) throw new HttpRequestException("Kapso listed messages without data");
+            after = page.TryGetProperty("paging", out var paging) && paging.ValueKind == JsonValueKind.Object && paging.TryGetProperty("cursors", out var cursors) && cursors.ValueKind == JsonValueKind.Object
+                && cursors.TryGetProperty("after", out var next) && next.ValueKind == JsonValueKind.String && next.GetString() is { Length: > 0 } value ? value : null;
+            yield return (data.EnumerateArray().Select(x => x.Clone()).ToArray(), after);
+        } while (after is not null);
+    }
     public async Task<JsonElement> ReminderTemplate(string number, string name, string language, CancellationToken ct = default, bool general = false)
     {
         var raw = await Platform(HttpMethod.Get, "whatsapp/phone_numbers/" + Uri.EscapeDataString(number), ct: ct, general: general);

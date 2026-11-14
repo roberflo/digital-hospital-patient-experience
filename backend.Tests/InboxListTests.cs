@@ -124,4 +124,22 @@ public sealed class InboxListTests : IAsyncLifetime
         var activity = await h.Db.Activities.AsNoTracking().SingleAsync(a => a.ConversationId == h.Conversation.Id && a.Kind == "handoff");
         Assert.Equal("Recepción Sintética tomó la conversación.", activity.Body);
     }
+
+    [Fact]
+    public async Task A01_7_a_recovered_message_is_unread_and_lifts_its_conversation()
+    {
+        // A01 criterio 7: another conversation moved after this one; the recovered message brings this one back to the top of its priority.
+        var config = h.Config(new() { ["PHONE_HASH_KEY"] = "synthetic-phone-key" });
+        h.Contact.PhoneHash = Rules.PhoneHash(h.Contact.Phone, "synthetic-phone-key");
+        var someone = new Contact { TenantId = h.Scope.Id, Name = "Otro Sintético", Phone = "50370000005", PhoneHash = Guid.NewGuid().ToString() }; h.Db.Add(someone);
+        var later = new Conversation { TenantId = h.Scope.Id, ChannelId = h.Conversation.ChannelId, ContactId = someone.Id, Status = "human", UpdatedAt = DateTimeOffset.UtcNow }; h.Db.Add(later);
+        await h.Db.SaveChangesAsync();
+        Assert.Equal(later.Id, (await List()).First().Conversation.Id);
+        var kapso = new KapsoClient(new HttpClient(new AgentHarness.Fake(_ => Task.FromResult(MessageRecoveryTests.Page([MessageRecoveryTests.Item("wamid.rec-inbox", DateTimeOffset.UtcNow.AddMinutes(-10), phone: h.Contact.Phone)])))), config);
+
+        await MessageRecovery.Run(h.Db, h.Scope, kapso, config, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, CancellationToken.None, DateTimeOffset.UtcNow);
+
+        var first = (await List()).First();
+        Assert.Equal((h.Conversation.Id, 2), (first.Conversation.Id, first.UnreadCount)); // the message the harness left and the recovered one
+    }
 }

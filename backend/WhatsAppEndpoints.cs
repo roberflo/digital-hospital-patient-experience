@@ -213,12 +213,15 @@ public static class WhatsAppEndpoints
         }
         return Results.Ok(new { accepted = true });
     }
-    static async Task<string?> Ingest(JsonElement root, JsonElement msg, JsonElement conversation, Channel ch, string evt, CrmDb db, TenantScope scope, IConfiguration config)
+    /// <summary>One received item, from the webhook or (A01, <paramref name="recovered"/> not null) from MessageRecovery: the same contact, conversation,
+    /// type, media and body (INV-10). A recovered one never touches consent nor makes a Job (INV-2, INV-8); its conversation goes to a person, with one
+    /// handoff per conversation in <paramref name="recovered"/>, the pass's set (INV-3).</summary>
+    internal static async Task<string?> Ingest(JsonElement root, JsonElement msg, JsonElement conversation, Channel ch, string evt, CrmDb db, TenantScope scope, IConfiguration config, HashSet<Guid>? recovered = null)
     {
         // Messages are reconciled by their WhatsApp id (echoes, status updates): without one the item is skipped, the rest of the batch goes on.
         var external = Get(msg, "id"); if (external is null) return "message without id"; var k = msg.TryGetProperty("kapso", out var ka) ? ka : default;
         var status = Get(k, "status") ?? "received"; var existing = await db.Messages.SingleOrDefaultAsync(x => x.ExternalId == external);
-        if (existing != null) { if (status == "read" || status == "failed" || (status == "delivered" && existing.Status != "read") || (status == "sent" && existing.Status is "sending" or "uncertain")) existing.Status = status; return null; }
+        if (existing != null) { if (recovered is null && (status == "read" || status == "failed" || (status == "delivered" && existing.Status != "read") || (status == "sent" && existing.Status is "sending" or "uncertain"))) existing.Status = status; return null; }
         var phone = Get(conversation, "phone_number") ?? Get(msg, "from") ?? Get(msg, "to"); if (string.IsNullOrEmpty(phone)) return null;
         string hash; try { hash = Rules.PhoneHash(Rules.WaId(phone), config["PHONE_HASH_KEY"]!); }
         catch (ArgumentException)
@@ -236,7 +239,7 @@ public static class WhatsAppEndpoints
         if (conv is null) { conv = new Conversation { TenantId = scope.Id, ChannelId = ch.Id, ContactId = contact.Id, ExternalId = Get(conversation, "id") ?? "", Status = (await db.Tenants.AnyAsync(x=>x.Id==scope.Id&&x.AgentEnabled))&&ch.Enabled?"agent":"human" }; db.Add(conv); db.Activities.Add(InboxWorkflow.Event(scope,conv,"WhatsApp","conversation_created","Conversación vinculada al contacto CRM.")); }
         // What the patient said, a template tap's payload first (S5: the «No más recordatorios» button is BAJA); text reads as kapso.content, as before.
         var content = WhatsAppContent.Inbound(msg, k);
-        var consentCommand = Get(k,"direction")!="outbound" && Get(k,"origin")!="history_sync" && !(k.ValueKind==JsonValueKind.Object&&k.TryGetProperty("passive",out var consentPassive)&&consentPassive.ValueKind==JsonValueKind.True) && evt=="whatsapp.message.received" ? ReminderRules.ConsentCommand(content) : null;
+        var consentCommand = recovered is null && Get(k,"direction")!="outbound" && Get(k,"origin")!="history_sync" && !(k.ValueKind==JsonValueKind.Object&&k.TryGetProperty("passive",out var consentPassive)&&consentPassive.ValueKind==JsonValueKind.True) && evt=="whatsapp.message.received" ? ReminderRules.ConsentCommand(content) : null;
         if(consentCommand is not null)
         {
             var reminderLock=BitConverter.ToInt64(ReminderRules.LockId(scope.Id).ToByteArray(),0);
@@ -249,14 +252,15 @@ public static class WhatsAppEndpoints
         await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_advisory_xact_lock({conversationLock})");
         if(db.Entry(conv).State!=EntityState.Added)await db.Entry(conv).ReloadAsync();
         var reconciled = await db.Messages.SingleOrDefaultAsync(x => x.ExternalId == external);
-        if (reconciled is not null) { if (status == "read" || status == "failed" || (status == "delivered" && reconciled.Status != "read")) reconciled.Status = status; return null; }
+        if (reconciled is not null) { if (recovered is null && (status == "read" || status == "failed" || (status == "delivered" && reconciled.Status != "read"))) reconciled.Status = status; return null; }
         var origin = Get(k, "origin"); var outbound = Get(k, "direction") == "outbound"; var history = origin == "history_sync"; var passive = k.ValueKind == JsonValueKind.Object && k.TryGetProperty("passive", out var pass) && pass.ValueKind == JsonValueKind.True;
         var type = Get(msg, "type") ?? "text";
         if (k.ValueKind == JsonValueKind.Object && k.TryGetProperty("transcript", out var transcript)) content = Get(transcript, "text") ?? content;
         string? media = null; if (msg.TryGetProperty(type, out var typeData)) media = Get(typeData, "id");
         var timestamp = long.TryParse(Get(msg, "timestamp"), out var unix) && unix > 0 && unix <= DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeSeconds() ? DateTimeOffset.FromUnixTimeSeconds(unix) : DateTimeOffset.UtcNow;
         db.Add(new Message { TenantId = scope.Id, ConversationId = conv.Id, ExternalId = external, Sender = outbound ? "human" : "patient", Body = content, Type = type, MediaId = media, MediaName=msg.TryGetProperty(type,out var mediaContent)?Get(mediaContent,"filename"):null, Status = status, CreatedAt = timestamp, IsHistory=history });
-        if(!history){var shown=outbound?content:WhatsAppContent.Shown(content);conv.LastMessage=shown.Length>160?shown[..160]:shown;conv.UpdatedAt = DateTimeOffset.UtcNow;} conv.Revision++;
+        // A recovered message older than the conversation's last one does not replace its preview (INV-4); it still lifts the conversation.
+        if(!history){var shown=outbound?content:WhatsAppContent.Shown(content);if(recovered is null||!await db.Messages.AnyAsync(x=>x.ConversationId==conv.Id&&x.CreatedAt>timestamp))conv.LastMessage=shown.Length>160?shown[..160]:shown;conv.UpdatedAt = DateTimeOffset.UtcNow;} conv.Revision++;
         if (outbound && origin is "business_app" or "other_app" or "meta_business_agent" || passive || evt == "whatsapp.thread.standby")
         {
             // Only the echo that actually takes over from the agent is a handoff; later ones in a human conversation are just replies.
@@ -266,6 +270,13 @@ public static class WhatsAppEndpoints
         if (!outbound && !history && !passive && evt == "whatsapp.message.received")
         {
             if (conv.LastInboundAt is null || timestamp > conv.LastInboundAt) conv.LastInboundAt = timestamp;
+            if (recovered is not null)
+            {
+                // Late: nobody answered it, so a person does, never the agent (OQ-A01-2). Not ReopenOnInbound, which would hand a closed one back to the agent.
+                conv.State = "open"; conv.SnoozedUntil = null; conv.Status = "human";
+                if (recovered.Add(conv.Id)) db.Activities.Add(InboxWorkflow.Event(scope, conv, "Sistema", "handoff", MessageRecovery.Note));
+                return null;
+            }
             if(InboxWorkflow.ReopenOnInbound(conv,ch.Enabled&&await db.Tenants.AnyAsync(x=>x.Id==scope.Id&&x.AgentEnabled)))db.Activities.Add(InboxWorkflow.Event(scope,conv,"WhatsApp","conversation_state","Conversación reabierta por un nuevo mensaje del cliente."));
             db.Add(new Job { TenantId = scope.Id, ConversationId = conv.Id, Key = "agent:" + external });
         }

@@ -1,8 +1,10 @@
 # A01 — Recuperar los mensajes que el webhook no entregó
 
-**Estado (2026-11-14, medido en `d0c5054`):** spec aceptada; S1 construible con el interruptor
-apagado. Encenderlo espera G0 (contrato real de Kapso) y la revisión de `security-auditor`.
-Sin migración.
+**Estado (2026-11-14):** S1 construida en la rama `feat/a01-recuperar-mensajes` (sin fusionar en
+`main`), con `KAPSO_RECOVERY_ENABLED` apagado por defecto: criterios 1–15 en verde en
+`backend.Tests/MessageRecoveryTests.cs` y `InboxListTests.A01_7_*` contra Postgres. Encenderla espera G0
+(contrato real de Kapso; las pruebas usan el ejemplo de la documentación, sin confirmar), la revisión
+de `security-auditor` (OQ-A01-6) y la decisión del dueño. Sin migración.
 
 Petición (`backlog.md:82`): un job por canal que pida a Kapso los mensajes desde `LastWebhookAt`.
 

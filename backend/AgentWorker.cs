@@ -45,10 +45,14 @@ public sealed class AgentWorker(IServiceScopeFactory scopes, ILogger<AgentWorker
         catch (Exception ex) when (!stoppingToken.IsCancellationRequested) { log.LogWarning("Worker unavailable {ErrorType}", ex.GetType().Name); }
         catch (OperationCanceledException) { }
     }
-    /// <summary>The tenant's turn, then the daily retention sweep: the sweep runs after the claim, and its failure never holds the turn back (MR-39).</summary>
+    /// <summary>The tenant's turn, then the daily retention sweep and (A01, only with KAPSO_RECOVERY_ENABLED=true) the recovery of lost messages:
+    /// both run after the claim, and their failure never holds the turn back (MR-39, INV-9).</summary>
     public static async Task RunTenant(IServiceProvider sp, Guid tid, ILogger log, CancellationToken stoppingToken, bool housekeeping = true)
     {
-        await Turn(sp, tid, log, stoppingToken, housekeeping); if (housekeeping) await Retention.Daily(sp.GetRequiredService<CrmDb>(), tid, log, stoppingToken);
+        await Turn(sp, tid, log, stoppingToken, housekeeping); if (!housekeeping) return;
+        await Retention.Daily(sp.GetRequiredService<CrmDb>(), tid, log, stoppingToken);
+        if (sp.GetService<IConfiguration>() is { } config && config["KAPSO_RECOVERY_ENABLED"] == "true")
+            await MessageRecovery.Run(sp.GetRequiredService<CrmDb>(), sp.GetRequiredService<TenantScope>(), sp.GetRequiredService<KapsoClient>(), config, log, stoppingToken);
     }
     /// <summary>The lock a turn holds from its claim to its end: never two turns of one conversation at once, whatever slot runs them.</summary>
     public static Guid TurnLockId(Guid conversation) => new(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("agent-turn:" + conversation)).AsSpan(0, 16));
