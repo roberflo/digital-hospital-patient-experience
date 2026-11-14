@@ -120,4 +120,38 @@ public sealed class AgentWaitingTests : IAsyncLifetime
         Assert.Contains("emergencia", message); Assert.Contains("2200 0000", message);
         Assert.Equal("human", (await h.Fresh()).Status);
     }
+
+    /// <summary>A01: a message the webhook lost, recovered into this conversation now (it was written ten minutes ago).</summary>
+    async Task Recovered()
+    {
+        h.Contact.PhoneHash = Rules.PhoneHash(h.Contact.Phone, "synthetic-phone-key"); await h.Db.SaveChangesAsync();
+        var config = h.Config(new() { ["PHONE_HASH_KEY"] = "synthetic-phone-key" });
+        var kapso = new Recepcion.Integrations.KapsoClient(new HttpClient(new AgentHarness.Fake(_ => Task.FromResult(MessageRecoveryTests.Page([MessageRecoveryTests.Item("wamid.rec-wait", DateTimeOffset.UtcNow.AddMinutes(-10), "¿Me pueden ayudar?", phone: h.Contact.Phone)])))), config);
+        await MessageRecovery.Run(h.Db, h.Scope, kapso, config, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, CancellationToken.None);
+        Assert.True(await h.Db.Messages.AnyAsync(x => x.ExternalId == "wamid.rec-wait"));
+    }
+
+    [Fact]
+    public async Task A01_a_recovered_message_does_not_end_the_wait_an_emergency_still_gets_the_phone()
+    {
+        // A01 I-1: recovery into a conversation the agent handed over must leave it «waiting» (criterio 64), not silence it.
+        await Recovered();
+
+        await Say("Creo que tomé una sobredosis de mis pastillas.");
+
+        var message = Assert.Single(h.Sent);
+        Assert.Contains("emergencia", message); Assert.Contains("2200 0000", message);
+        Assert.Equal("human", (await h.Fresh()).Status);
+    }
+
+    [Fact]
+    public async Task A01_a_recovered_message_does_not_reopen_the_wait_of_a_conversation_the_people_took()
+    {
+        h.Db.Activities.Add(new Activity { TenantId = h.Scope.Id, ConversationId = h.Conversation.Id, ContactId = h.Contact.Id, Kind = "handoff", Actor = "Recepcionista Sintética", ActorRole = "receptionist", ActorSubject = "staff-1", Body = "Atención humana activada." });
+        await h.Db.SaveChangesAsync(); await Recovered();
+
+        await Say("Creo que tomé una sobredosis de mis pastillas."); await Say("¿Hay alguien?");
+
+        Assert.Empty(h.Sent);
+    }
 }

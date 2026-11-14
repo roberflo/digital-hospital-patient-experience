@@ -51,7 +51,7 @@ public sealed class AgentWorker(IServiceScopeFactory scopes, ILogger<AgentWorker
     {
         await Turn(sp, tid, log, stoppingToken, housekeeping); if (!housekeeping) return;
         await Retention.Daily(sp.GetRequiredService<CrmDb>(), tid, log, stoppingToken);
-        if (sp.GetService<IConfiguration>() is { } config && config["KAPSO_RECOVERY_ENABLED"] == "true")
+        if (sp.GetService<IConfiguration>() is { } config && bool.TryParse(config["KAPSO_RECOVERY_ENABLED"], out var recover) && recover)
             await MessageRecovery.Run(sp.GetRequiredService<CrmDb>(), sp.GetRequiredService<TenantScope>(), sp.GetRequiredService<KapsoClient>(), config, log, stoppingToken);
     }
     /// <summary>The lock a turn holds from its claim to its end: never two turns of one conversation at once, whatever slot runs them.</summary>

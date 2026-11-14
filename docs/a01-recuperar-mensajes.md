@@ -1,10 +1,11 @@
 # A01 — Recuperar los mensajes que el webhook no entregó
 
-**Estado (2026-11-14):** S1 construida en la rama `feat/a01-recuperar-mensajes` (sin fusionar en
-`main`), con `KAPSO_RECOVERY_ENABLED` apagado por defecto: criterios 1–15 en verde en
-`backend.Tests/MessageRecoveryTests.cs` y `InboxListTests.A01_7_*` contra Postgres. Encenderla espera G0
-(contrato real de Kapso; las pruebas usan el ejemplo de la documentación, sin confirmar), la revisión
-de `security-auditor` (OQ-A01-6) y la decisión del dueño. Sin migración.
+**Estado (2026-11-14):** S1 construida y revisada (I-1, M-1, M-2, M-4, M-6 cerrados; ver «Revisión
+adversaria»), con `KAPSO_RECOVERY_ENABLED` apagado por defecto: apagada no hace ninguna llamada. Criterios
+1–15 en verde en `backend.Tests/MessageRecoveryTests.cs`, `InboxListTests.A01_7_*` y
+`AgentWaitingTests.A01_*` contra Postgres. Encenderla espera G0 (contrato real de Kapso; las pruebas
+usan el ejemplo de la documentación, sin confirmar), la revisión de `security-auditor` (OQ-A01-6) y la
+decisión del dueño. Sin migración.
 
 Petición (`backlog.md:82`): un job por canal que pida a Kapso los mensajes desde `LastWebhookAt`.
 
@@ -89,13 +90,17 @@ entero y `ExternalId` absorbe lo repetido.
 - INV-2 (el agente no habla por un mensaje recuperado): la recuperación nunca crea un `Job`, y tras
   ella ningún envío sale por ese mensaje.
 - INV-3 (nadie cree que el agente atiende): tras recuperar un mensaje, su conversación queda en
-  `Status = human`, `State = open`, con una sola `Activity` `handoff` de «Sistema» por conversación y
-  pasada.
+  `Status = human`, `State = open`, con una sola `Activity` de «Sistema» por conversación y pasada:
+  `handoff` si estaba en `agent` o `closed`; `recovered` (mismo texto, OQ-A01-7) si ya estaba en `human`,
+  para no cerrar la espera que abrió un traspaso del agente (`reception-agent.md` criterios 62–64).
+  *Enmendado 2026-11-14 tras la revisión adversaria (I-1).*
 - INV-4 (orden): el mensaje recuperado se guarda con la hora de WhatsApp. `LastInboundAt` sólo
   avanza. `LastMessage` no cambia si la conversación ya tiene un mensaje posterior.
 - INV-5 (gracia): no se recupera un mensaje más joven que la Gracia; ese sigue siendo del webhook y
   dispara al agente como hoy.
-- INV-6 (tope): ninguna recuperación pide ni guarda mensajes anteriores a `ahora − Tope`.
+- INV-6 (tope): ninguna recuperación guarda mensajes anteriores a `ahora − Tope`. Una ventana nueva
+  tampoco los pide; una ventana que se reanuda con el cursor `after` de Kapso conserva su `since`
+  original, que puede quedar unos minutos detrás del Tope (G0.3). *Reformulado 2026-11-14 (M-1).*
 - INV-7 (aislamiento): una recuperación corre dentro del inquilino del canal y sólo escribe filas
   suyas.
 - INV-8 (sin efectos laterales): un mensaje recuperado no cambia el consentimiento de recordatorios
@@ -113,7 +118,8 @@ con un número de pruebas, hecha por quien tenga `KAPSO_API_KEY` del entorno. De
 1. ¿Trae `kapso.phone_number`, `kapso.contact_name`, `kapso.content`, `kapso.origin`, `kapso.direction`
    y `timestamp`?
 2. ¿`since` y `until` filtran por la hora de WhatsApp o por la de alta en Kapso?
-3. ¿En qué orden pagina, y `after` termina con cursor ausente?
+3. ¿En qué orden pagina, y `after` termina con cursor ausente? ¿Sigue valiendo un cursor `after` en
+   la pasada siguiente, con el mismo `since` y `until`? (la reanudación de M-1 lo da por hecho)
 4. ¿Hay límite de frecuencia?
 5. ¿Aparecen los mensajes cuyo webhook falló o se omitió por pausa?
 
@@ -138,7 +144,7 @@ Pruebas de backend en un fichero nuevo `backend.Tests/MessageRecoveryTests.cs`, 
 | 3 | Recuperar dos veces no duplica (INV-1). | Dos pasadas con la misma respuesta: un `Message`, una `Activity` `handoff`; la segunda no añade filas ni sube `Revision`. |
 | 4 | Webhook y recuperación del mismo mensaje, en cualquier orden, dejan uno (INV-1). | (a) recuperación y luego webhook firmado: un `Message`, cero `Jobs`. (b) webhook y luego recuperación: un `Message`, un `Job` (el del webhook), `Status` de la conversación intacto, sin `handoff`. |
 | 5 | La recuperación nunca dispara al agente (INV-2). | Tras recuperar, `Jobs` vacío. Luego `AgentWorker.RunTenant` con `SEND_ENABLED=true`, agente y canal encendidos: el `Fake` cuenta cero `POST …/messages`. |
-| 6 | La conversación queda con una persona y lo dice (INV-3). | Tres casos de partida: `agent`; `closed` sin responsable con agente encendido (el caso en que `InboxWorkflow.ReopenOnInbound` la devolvería al agente, `InboxWorkflow.cs:27-33`); y `human`. En los tres: `Status == "human"`, `State == "open"`, una `Activity` `handoff` de `ActorRole == "system"` con el texto fijo. Tres mensajes de una conversación en una pasada: una sola. |
+| 6 | La conversación queda con una persona y lo dice (INV-3). | Tres casos de partida: `agent`; `closed` sin responsable con agente encendido (el caso en que `InboxWorkflow.ReopenOnInbound` la devolvería al agente, `InboxWorkflow.cs:27-33`); y `human`. En los tres: `Status == "human"`, `State == "open"`, una `Activity` `handoff` de `ActorRole == "system"` con el texto fijo. Tres mensajes de una conversación en una pasada: una sola. *Enmendado 2026-11-14 (I-1):* en el caso `human` esa actividad es `recovered`, no `handoff`; y tras recuperar en una conversación derivada por el agente sin respuesta, una emergencia en vivo sigue recibiendo el teléfono (`AgentWaitingTests.A01_*`). |
 | 7 | La persona lo ve en la bandeja. | Lectura de la lista de conversaciones (`WhatsAppEndpoints.cs:96-111`): `UnreadCount` cuenta el recuperado y la conversación es la primera de su prioridad. Añadir a `backend.Tests/InboxListTests.cs`. |
 | 8 | El orden de la conversación es el real (INV-4). | Conversación con un mensaje en vivo de las 12:00; se recuperan dos de las 10:00 y 10:05. Leídos por `WhatsAppEndpoints.Messages` salen 10:00, 10:05, 12:00; `LastMessage` sigue siendo el de las 12:00; `LastInboundAt` no retrocede. |
 | 9 | No se adelanta al webhook (INV-5). | La petición lleva `until == ahora − Gracia`. Un elemento con `timestamp` más joven que la Gracia no se guarda; su webhook posterior crea `Message` y `Job` como hoy. |
@@ -153,6 +159,32 @@ Pruebas de backend en un fichero nuevo `backend.Tests/MessageRecoveryTests.cs`, 
 contra el ejemplo documentado hasta G0. (b) Nada prueba que Kapso conserve los mensajes de un webhook
 fallido: es G0.5. (c) El audio recuperado puede venir sin transcripción; se guarda como hoy se guarda
 un audio sin ella.
+
+## Revisión adversaria (2026-11-14)
+
+Corregido: I-1 (la nota de un mensaje recuperado en una conversación ya `human` es `recovered`, no
+`handoff`: `HandedOverUnanswered` no la ve y la espera de 62–64 sigue abierta); M-1 (la ventana
+reanudada conserva su `since`; INV-6 se impone al guardar); M-2 (una marca de tiempo fuera de rango,
+p. ej. en milisegundos, se salta y se cuenta con la misma comprobación que `Ingest`); M-4 (cada pasada
+tiene un presupuesto total de 10 s: un Kapso colgado no retiene el turno del inquilino más de eso);
+M-6 (C5 con el `Job` del arnés vivo, estado `read` en el fixture, `fields=kapso()` comprobado). Nits:
+la comprobación «toca pasada» va en memoria antes de leer `Channels`; el interruptor se lee con
+`bool.TryParse`.
+
+Documentado, sin cambio de código:
+
+- **M-3.** La Gracia se mide sobre la hora de WhatsApp (`timestamp`), no sobre la llegada a Kapso. Si
+  Kapso recibe tarde un mensaje (p. ej. un teléfono sin red), puede tener más de 3 min de WhatsApp y
+  seguir dentro de los reintentos del webhook: la recuperación y el webhook se cruzan y `ExternalId`
+  deja una fila, pero el mensaje va a una persona sin agente. Depende de G0.2.
+- **M-5.** Un mensaje recuperado con `kapso.passive = true` en una conversación del agente deja dos
+  actividades (la de atención externa y la de «Sistema»). Con varias réplicas cada proceso hace su
+  pasada y puede dejar su propia nota; `ExternalId` y el bloqueo del canal siguen impidiendo filas
+  `Message` repetidas.
+- **Nit 3.** Una conversación creada por la recuperación queda con `ExternalId = ""`: el listado no
+  trae el id de conversación de Kapso donde el webhook lo trae (`conversation.id`).
+- **Despliegue.** Al encenderla, el dueño añade `KAPSO_RECOVERY_ENABLED` a la documentación de
+  despliegue; hoy no figura porque está apagada.
 
 ## Anti-criterios
 

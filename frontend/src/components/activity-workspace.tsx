@@ -98,6 +98,7 @@ export const titles: Record<string, string> = {
   clinical_review: 'Consultó Hospital',
   error: 'La atención requiere revisión',
   delivery: 'Detectó un problema de entrega',
+  recovered: 'Recuperó un mensaje que WhatsApp no entregó a tiempo',
   agent_tool: 'Realizó una acción automática',
   handoff_offer: 'Ofreció pasar con una persona',
   waiting_notice: 'Avisó al paciente que sigue en espera',

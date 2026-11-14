@@ -31,10 +31,10 @@ public sealed class MessageRecoveryTests : IAsyncLifetime
 
     // ---- doubles ----
     /// <summary>One listed message as the documented example has it: Meta's message plus the kapso() extension.</summary>
-    internal static object Item(string? id, DateTimeOffset? at, string body = "Hola recuperado", string phone = Phone, string direction = "inbound", string? origin = null) => new
+    internal static object Item(string? id, DateTimeOffset? at, string body = "Hola recuperado", string phone = Phone, string direction = "inbound", string? origin = null, string status = "received", string? timestamp = null) => new
     {
-        id, from = phone, timestamp = at?.ToUnixTimeSeconds().ToString(), type = "text", text = new { body },
-        kapso = new { direction, status = "received", processing_status = "processed", phone_number = phone, has_media = false, whatsapp_conversation_id = "wconv-" + phone, contact_name = "Paciente sintético", content = body, origin }
+        id, from = phone, timestamp = timestamp ?? at?.ToUnixTimeSeconds().ToString(), type = "text", text = new { body },
+        kapso = new { direction, status, processing_status = "processed", phone_number = phone, has_media = false, whatsapp_conversation_id = "wconv-" + phone, contact_name = "Paciente sintético", content = body, origin }
     };
     internal static HttpResponseMessage Page(object[] items, string? after = null) => AgentHarness.Json(new { data = items, paging = new { cursors = new { after } } });
     /// <summary>Kapso double: GET …/messages is the list (recorded), anything else a send (counted).</summary>
@@ -44,8 +44,8 @@ public sealed class MessageRecoveryTests : IAsyncLifetime
         posts++; return AgentHarness.KapsoSent("out-" + Guid.NewGuid(), Phone);
     });
     IConfiguration Config(bool enabled = true) => h.Config(new() { ["PHONE_HASH_KEY"] = HashKey, ["KAPSO_RECOVERY_ENABLED"] = enabled ? "true" : null });
-    Task Recover(DateTimeOffset at, HttpMessageHandler? kapso = null, ILogger? log = null, int pages = MessageRecovery.PagesPerPass, AgentHarness? on = null) =>
-        MessageRecovery.Run((on ?? h).Db, (on ?? h).Scope, new KapsoClient(new HttpClient(kapso ?? Kapso()), Config()), Config(), log ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, CancellationToken.None, at, pages);
+    Task Recover(DateTimeOffset at, HttpMessageHandler? kapso = null, ILogger? log = null, int pages = MessageRecovery.PagesPerPass, AgentHarness? on = null, TimeSpan? budget = null, TimeSpan? timeout = null) =>
+        MessageRecovery.Run((on ?? h).Db, (on ?? h).Scope, new KapsoClient(new HttpClient(kapso ?? Kapso()) { Timeout = timeout ?? TimeSpan.FromSeconds(100) }, Config()), Config(), log ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, CancellationToken.None, at, pages, budget);
     /// <summary>What AgentWorker.RunTenant resolves, with the recovery's client and configuration.</summary>
     IServiceProvider Worker(HttpClient list, AgentHarness.Fake sender, bool enabled = true, HttpMessageHandler? hospital = null)
     {
@@ -94,6 +94,7 @@ public sealed class MessageRecoveryTests : IAsyncLifetime
         var first = calls[0].RequestUri!;
         Assert.Equal("api.kapso.ai", first.Host); Assert.Equal($"/meta/whatsapp/v24.0/{number}/messages", first.AbsolutePath);
         Assert.Equal(("inbound", Iso(Now.AddHours(-1)), Iso(Now), "100", ""), (Query(first, "direction"), Query(first, "since"), Query(first, "until"), Query(first, "limit"), Query(first, "after")));
+        Assert.Equal("kapso()", Query(first, "fields"));
         Assert.Equal("synthetic", Assert.Single(calls[0].Headers.GetValues("X-API-Key")));
         Assert.Equal("cursor-2", Query(calls[1].RequestUri!, "after"));
 
@@ -141,23 +142,25 @@ public sealed class MessageRecoveryTests : IAsyncLifetime
     {
         var item = Item("wamid.rec-late", Now.AddMinutes(-10));
         await Webhook(number, item); var status = (await h.Fresh()).Status;
-        answer = _ => Task.FromResult(Page([item]));
+        // The listing reports it read since: recovery stores, it never reconciles a status (Ingest's «recovered is null» guards).
+        answer = _ => Task.FromResult(Page([Item("wamid.rec-late", Now.AddMinutes(-10), status: "read")]));
         await Recover(Now);
 
-        Assert.Single(await Saved("wamid.rec-late"));
+        Assert.Equal("received", Assert.Single(await Saved("wamid.rec-late")).Status);
         Assert.Equal("agent:wamid.rec-late", Assert.Single(await h.Db.Jobs.AsNoTracking().Where(x => x.Key == "agent:wamid.rec-late").Select(x => x.Key).ToListAsync()));
         Assert.Equal("agent", status); Assert.Equal(status, (await h.Fresh()).Status); Assert.Empty(await Handoffs());
     }
 
     [Fact] public async Task C5_recovery_never_wakes_the_agent()
     {
-        h.Db.Jobs.Remove(h.Job); await h.Db.SaveChangesAsync();
-        var kapso = Kapso(); answer = _ => Task.FromResult(Page([Item("wamid.rec-quiet", Now.AddMinutes(-10))]));
+        // The harness's pending Job answers its own live message of this conversation; it must not answer with, or because of, the recovered one.
+        var kapso = Kapso(); answer = _ => Task.FromResult(Page([Item("wamid.rec-quiet", Now.AddMinutes(-10), "Texto recuperado")]));
         await Recover(Now, kapso);
-        Assert.Empty(await h.Db.Jobs.AsNoTracking().ToListAsync());
+        Assert.Equal([h.Job.Id], await h.Db.Jobs.AsNoTracking().Select(x => x.Id).ToListAsync());
 
         await AgentWorker.RunTenant(Worker(new HttpClient(kapso), kapso), h.Scope.Id, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, CancellationToken.None);
         Assert.Equal(0, posts); Assert.Single(await Saved("wamid.rec-quiet"));
+        Assert.Equal("done", await h.Db.Jobs.AsNoTracking().Where(x => x.Id == h.Job.Id).Select(x => x.Status).SingleAsync());
     }
 
     [Theory][InlineData("agent")][InlineData("closed")][InlineData("human")]
@@ -168,8 +171,9 @@ public sealed class MessageRecoveryTests : IAsyncLifetime
         await Recover(Now);
 
         var c = await h.Fresh(); Assert.Equal(("human", "open"), (c.Status, c.State));
-        var handoff = Assert.Single(await Handoffs());
-        Assert.Equal(("system", MessageRecovery.Note, h.Conversation.Id), (handoff.ActorRole, handoff.Body, handoff.ConversationId));
+        // Already with a person (amended 2026-11-14, I-1): no handoff, which would end a wait the agent's handoff opened (criterios 62–64); a «recovered» note says it.
+        var said = Assert.Single(await h.Db.Activities.AsNoTracking().Where(x => x.Kind == "handoff" || x.Kind == "recovered").ToListAsync());
+        Assert.Equal((from == "human" ? "recovered" : "handoff", "system", MessageRecovery.Note, h.Conversation.Id), (said.Kind, said.ActorRole, said.Body, said.ConversationId));
         Assert.Equal(3, (await Saved()).Count);
     }
 
@@ -220,8 +224,32 @@ public sealed class MessageRecoveryTests : IAsyncLifetime
 
         Assert.Equal(250, (await Saved()).Count);
         Assert.Equal(3, asked.Count); Assert.Equal("p3", Query(asked[2], "after"));
-        // The stopped pass did not move the window: same until and Kapso's cursor; since moves only as the Cap does, which no pass may ask past (INV-6).
-        Assert.Equal((Iso(Now + MessageRecovery.Every - MessageRecovery.Cap), Query(asked[0], "until")), (Query(asked[2], "since"), Query(asked[2], "until")));
+        // The stopped pass did not move the window: the same since, until and Kapso's cursor (M-1); the Cap is kept at save time (INV-6).
+        Assert.Equal((Query(asked[0], "since"), Query(asked[0], "until")), (Query(asked[2], "since"), Query(asked[2], "until")));
+    }
+
+    [Fact] public async Task M2_a_timestamp_out_of_range_is_skipped_not_the_end_of_the_pass()
+    {
+        // Milliseconds, as some APIs send them: Ingest's own range check, never a throw that stalls the channel.
+        answer = _ => Task.FromResult(Page([Item("wamid.rec-millis", null, timestamp: Now.AddMinutes(-10).ToUnixTimeMilliseconds().ToString()), Item("wamid.rec-fine", Now.AddMinutes(-10))]));
+        await Recover(Now);
+        await Recover(Now + MessageRecovery.Every);
+
+        Assert.Equal(["wamid.rec-fine"], (await Saved()).Select(x => x.ExternalId));
+        Assert.Equal(Iso(Now - MessageRecovery.Grace - MessageRecovery.Grace), Query(asked[1], "since")); // the pass completed
+    }
+
+    [Fact] public async Task M4_a_hung_Kapso_holds_the_tenant_for_the_budget_at_most()
+    {
+        var log = new Lines(); var hung = new Answering(async (r, ct) => { asked.Add(r.RequestUri!); await Task.Delay(Timeout.Infinite, ct); throw new InvalidOperationException(); });
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        await Recover(Now, hung, log, budget: TimeSpan.FromMilliseconds(300), timeout: Timeout.InfiniteTimeSpan).WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(5), clock.Elapsed.ToString());
+        Assert.Contains(log.All, x => x.StartsWith("Warning Message recovery failed") && x.Contains(h.Scope.Id.ToString()));
+        answer = _ => Task.FromResult(Page([]));
+        await Recover(Now + MessageRecovery.Every);
+        Assert.Equal(Iso(Now + MessageRecovery.Every - MessageRecovery.Cap), Query(asked[1], "since")); // the cut pass left no cursor: the whole Cap again, not until − Grace
     }
 
     [Fact] public async Task C12_a_recovered_message_touches_neither_consent_nor_appointments()

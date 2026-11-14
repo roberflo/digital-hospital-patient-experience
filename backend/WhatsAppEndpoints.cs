@@ -257,7 +257,7 @@ public static class WhatsAppEndpoints
         var type = Get(msg, "type") ?? "text";
         if (k.ValueKind == JsonValueKind.Object && k.TryGetProperty("transcript", out var transcript)) content = Get(transcript, "text") ?? content;
         string? media = null; if (msg.TryGetProperty(type, out var typeData)) media = Get(typeData, "id");
-        var timestamp = long.TryParse(Get(msg, "timestamp"), out var unix) && unix > 0 && unix <= DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeSeconds() ? DateTimeOffset.FromUnixTimeSeconds(unix) : DateTimeOffset.UtcNow;
+        var timestamp = SentAt(msg) ?? DateTimeOffset.UtcNow;
         db.Add(new Message { TenantId = scope.Id, ConversationId = conv.Id, ExternalId = external, Sender = outbound ? "human" : "patient", Body = content, Type = type, MediaId = media, MediaName=msg.TryGetProperty(type,out var mediaContent)?Get(mediaContent,"filename"):null, Status = status, CreatedAt = timestamp, IsHistory=history });
         // A recovered message older than the conversation's last one does not replace its preview (INV-4); it still lifts the conversation.
         if(!history){var shown=outbound?content:WhatsAppContent.Shown(content);if(recovered is null||!await db.Messages.AnyAsync(x=>x.ConversationId==conv.Id&&x.CreatedAt>timestamp))conv.LastMessage=shown.Length>160?shown[..160]:shown;conv.UpdatedAt = DateTimeOffset.UtcNow;} conv.Revision++;
@@ -273,8 +273,10 @@ public static class WhatsAppEndpoints
             if (recovered is not null)
             {
                 // Late: nobody answered it, so a person does, never the agent (OQ-A01-2). Not ReopenOnInbound, which would hand a closed one back to the agent.
+                // One already with a person gets a «recovered» note, not a handoff: a handoff would end the wait the agent's own handoff opened (I-1, criterios 62–64).
+                var kind = conv.Status == "human" ? "recovered" : "handoff";
                 conv.State = "open"; conv.SnoozedUntil = null; conv.Status = "human";
-                if (recovered.Add(conv.Id)) db.Activities.Add(InboxWorkflow.Event(scope, conv, "Sistema", "handoff", MessageRecovery.Note));
+                if (recovered.Add(conv.Id)) db.Activities.Add(InboxWorkflow.Event(scope, conv, "Sistema", kind, MessageRecovery.Note));
                 return null;
             }
             if(InboxWorkflow.ReopenOnInbound(conv,ch.Enabled&&await db.Tenants.AnyAsync(x=>x.Id==scope.Id&&x.AgentEnabled)))db.Activities.Add(InboxWorkflow.Event(scope,conv,"WhatsApp","conversation_state","Conversación reabierta por un nuevo mensaje del cliente."));
@@ -296,6 +298,8 @@ public static class WhatsAppEndpoints
         while ((read = await ctx.Request.Body.ReadAsync(bytes)) > 0) { if (buffer.Length + read > 2 * 1024 * 1024) return null; buffer.Write(bytes, 0, read); }
         return buffer.ToArray();
     }
+    /// <summary>WhatsApp's send time of a message, in seconds; null when absent or out of range (milliseconds, the future), for the caller to decide.</summary>
+    internal static DateTimeOffset? SentAt(JsonElement msg) => long.TryParse(Get(msg, "timestamp"), out var unix) && unix > 0 && unix <= DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeSeconds() ? DateTimeOffset.FromUnixTimeSeconds(unix) : null;
     internal static string? Get(JsonElement e, string key) => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(key, out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
 }
 public record SendInput(string Body);

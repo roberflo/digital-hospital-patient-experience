@@ -20,7 +20,7 @@ public static class ActivityFeed
     {
         "response" => "response", "handoff" or "assignment" or "handoff_offer" or "waiting_notice" => "handoff", "note" => "note",
         "appointment" or "appointment_reminder" or "appointment_confirmed" => "appointment", "clinical_review" or "prescription_delivered" => "clinical",
-        "error" or "delivery" or "guard" or "agent_provider" or "appointment_confirmation_rejected" or "appointment_confirmation_unverified" or "reminder_change_request" => "review",
+        "error" or "delivery" or "recovered" or "guard" or "agent_provider" or "appointment_confirmation_rejected" or "appointment_confirmation_unverified" or "reminder_change_request" => "review",
         "agent_tool" => "ai_action", _ when kind.StartsWith("proposal", StringComparison.Ordinal) => "appointment", _ => "crm"
     };
     // Never disclose proposal JSON (patient/doctor identifiers and confirmation codes) in a general feed.
