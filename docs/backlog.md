@@ -79,7 +79,7 @@ Revisión de QA, UX y arquitectura sobre `d4dce0c`; lo corregido está en la ram
 
 - R06 (antes del primer paciente): respaldo nocturno programado fuera del host y una restauración ensayada en el Easypanel real; monitores externos sobre `/health/ready` y `/health/attention` ([despliegue](deployment.md)).
 - R07 (antes de `SEND_ENABLED`): contrato y acuerdo de tratamiento de datos de salud con NVIDIA (y OpenAI o Anthropic si la pasarela tiene `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`), o endpoint dedicado.
-- A01: mensajes perdidos durante una caída de la API más larga que los reintentos de Kapso no se recuperan; un job por canal que pida a Kapso los mensajes desde `LastWebhookAt`.
+- A01: spec en `a01-recuperar-mensajes.md`. La cota no es `LastWebhookAt` (se sobrescribe); Kapso reintenta ~50 s y pausa el webhook solo.
 - A02: la última receta firmada se busca con una petición por receta (`HospitalClient`); el bridge de Hospital debería devolver `signedAt` en la lista.
 - A03 (a escala): el worker lista todos los hospitales cada 1,5 s; listar sólo los que tienen trabajo o tareas vencidas. Estado en memoria (renovación de sesión, deduplicación del número general, retención) impide más de una réplica.
 - A04 (a escala): Row-Level Security en PostgreSQL como defensa en profundidad del filtro por tenant, y retirar el secreto compartido de cuentas de servicio cuando todas usen client-jwt.
