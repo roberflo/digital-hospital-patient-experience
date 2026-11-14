@@ -344,3 +344,133 @@ test('MR-56 an open chat shows who attends; on a phone it takes the page title�
     await expect(title).toBeVisible();
   }
 });
+
+// docs/agent-trail.md S1: what the agent did in this conversation, inside the attention notice.
+// The feed is simulated with page.route in the shape of GET /api/activity-feed.
+const trailStep = (n: number) => ({
+  id: crypto.randomUUID(),
+  kind: 'agent_tool',
+  category: 'ai_action',
+  actor: 'Agente',
+  actorRole: 'agent_ai',
+  careType: 'ai',
+  body: `Consulta de disponibilidad: completado. (${n})`,
+  createdAt: '2026-10-25T16:30:00Z',
+});
+const trailButton = (page: Page) => page.getByRole('button', { name: 'Qué hizo el agente aquí' });
+async function serveTrail(
+  page: Page,
+  answer: (params: URLSearchParams) => { status?: number; json: object },
+) {
+  const seen: URLSearchParams[] = [];
+  await page.route('**/api/crm/activity-feed?*', (route) => {
+    const params = new URL(route.request().url()).searchParams;
+    seen.push(params);
+    const { status = 200, json } = answer(params);
+    return route.fulfill({ status, json });
+  });
+  return seen;
+}
+const feedPage = (items: object[], total = items.length, pageNumber = 1) => ({
+  json: { items, total, page: pageNumber, pageSize: 30, careCounts: {} },
+});
+async function openConversation(page: Page, row: Row) {
+  await serveInbox(page, () => [row]);
+  await openInbox(page);
+  await card(page, row.contact.name).click();
+}
+
+test('AT-1 the trail asks for this conversation, never the contact, and only once opened', async ({
+  page,
+}) => {
+  const row = chat('Ana Sintética', { status: 'agent' });
+  const seen = await serveTrail(page, () => feedPage([trailStep(1)]));
+  await openConversation(page, row);
+  await expect(trailButton(page)).toHaveAttribute('aria-expanded', 'false');
+  expect(seen).toHaveLength(0);
+  await trailButton(page).click();
+  await expect(page.getByText('Consulta de disponibilidad: completado. (1)')).toBeVisible();
+  expect(seen[0].get('conversationId')).toBe(row.conversation.id);
+  expect(seen[0].has('contactId')).toBe(false);
+});
+
+test('AT-7 a failing trail shows «Reintentar» and the patient can still be answered', async ({
+  page,
+}) => {
+  let failing = true;
+  await serveTrail(page, () =>
+    failing ? { status: 500, json: { error: 'x' } } : feedPage([trailStep(1)]),
+  );
+  await openConversation(page, chat('Ana Sintética', { status: 'human', assignedTo: null }));
+  await trailButton(page).click();
+  const retry = page.getByRole('button', { name: 'Reintentar' });
+  await expect(retry).toBeVisible();
+  await expect(page.getByLabel('Mensaje al paciente')).toBeEnabled();
+  failing = false;
+  await retry.click();
+  await expect(page.getByText('Consulta de disponibilidad: completado. (1)')).toBeVisible();
+});
+
+test('AT-8 with more than 30 steps the previous ones are one click away', async ({ page }) => {
+  const seen = await serveTrail(page, (p) =>
+    feedPage([trailStep(Number(p.get('page')))], 31, Number(p.get('page'))),
+  );
+  await openConversation(page, chat('Ana Sintética', { status: 'agent' }));
+  await trailButton(page).click();
+  await page
+    .getByRole('navigation', { name: 'Páginas del rastro' })
+    .getByRole('button', { name: 'Siguiente' })
+    .click();
+  await expect(page.getByText('Consulta de disponibilidad: completado. (2)')).toBeVisible();
+  expect(seen.at(-1)?.get('page')).toBe('2');
+  expect(seen.at(-1)?.get('conversationId')).not.toBeNull();
+});
+
+test('AT-9 the trail refreshes within 10 s only when open and on page 1', async ({ page }) => {
+  await page.clock.install();
+  const seen = await serveTrail(page, (p) => feedPage([trailStep(1)], 31, Number(p.get('page'))));
+  await openConversation(page, chat('Ana Sintética', { status: 'agent' }));
+  await page.clock.fastForward(11000);
+  expect(seen).toHaveLength(0); // closed: nothing is read
+  await trailButton(page).click();
+  await expect.poll(() => seen.length).toBe(1);
+  await page.clock.fastForward(11000);
+  await expect.poll(() => seen.length).toBe(2); // open on page 1: it refreshes by itself
+  await page.getByRole('button', { name: 'Siguiente' }).click();
+  await expect.poll(() => seen.length).toBe(3);
+  await page.clock.fastForward(11000);
+  await page.waitForTimeout(500);
+  expect(seen).toHaveLength(3); // page 2: no polling
+});
+
+test('AT-10 the trail opens by keyboard, announces its state and fits 360 px', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 800 });
+  await serveTrail(page, () => feedPage([trailStep(1)]));
+  await openConversation(page, chat('Ana Sintética', { status: 'agent' }));
+  await trailButton(page).focus();
+  await page.keyboard.press('Enter');
+  await expect(trailButton(page)).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByText('Consulta de disponibilidad: completado. (1)')).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.keyboard.press('Space');
+  await expect(trailButton(page)).toHaveAttribute('aria-expanded', 'false');
+  // Reduced motion is a visual review, not asserted here (docs/agent-trail.md criterion 10, declared gap).
+});
+
+test('AT-5 a conversation of the agent whose number is off can be taken', async ({ page }) => {
+  await serveTrail(page, () => feedPage([]));
+  await openConversation(
+    page,
+    chat(
+      'Ana Sintética',
+      { status: 'agent' },
+      { agentBlock: { code: 'channel', reason: 'El número está desactivado.' } },
+    ),
+  );
+  await expect(
+    page.getByText('El agente no podría responder: El número está desactivado.'),
+  ).toBeVisible();
+  await expect(page.getByText('El agente está atendiendo')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Tomar conversación' })).toBeEnabled();
+  await expect(header(page).getByText('Sin atender', { exact: true })).toBeVisible();
+});

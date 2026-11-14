@@ -26,6 +26,7 @@ import {
   ExternalLink,
   Forward,
   MessageSquareOff,
+  ChevronDown,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Alert, AlertDescription, AlertTitle } from './ui/alert';
@@ -39,7 +40,8 @@ import { Textarea } from './ui/textarea';
 import { api, fetcher, type Me, type Chat, type Message, type Activity } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { canSaveToRecord, recordBody, recordCategories } from '@/lib/record-file';
-import { dayInZone, whatsAppPhone } from '@/lib/format';
+import { dayInZone, inZone, whatsAppPhone } from '@/lib/format';
+import { agentNotice } from '@/lib/agent-notice';
 import { ConfirmAction } from './confirm-action';
 import { ReminderConsent } from './appointment-reminders';
 import { PatientAppointments } from './patient-appointments';
@@ -55,11 +57,11 @@ import {
   notSent,
   PersonAvatar,
   StatusBadge,
-  attention,
   ErrorBox,
   ActivityTimeline,
 } from './workspace-shared';
 import { FormDialog } from './form-dialog';
+import { EventCard, type Feed } from './activity-workspace';
 /** Tracks a CSS media query; reads the real value on the first client render. */
 function useMediaQuery(query: string) {
   return useSyncExternalStore(
@@ -70,6 +72,88 @@ function useMediaQuery(query: string) {
     },
     () => window.matchMedia(query).matches,
     () => false,
+  );
+}
+/**
+ * docs/agent-trail.md S1: what happened in this conversation, newest first. Closed by default; open, it asks the
+ * server for this conversation only (never the contact: that mixes numbers) and polls only on page 1.
+ */
+export function AgentTrail({
+  conversationId,
+  zone,
+  defaultOpen = false,
+}: {
+  conversationId: string;
+  zone: string;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const [page, setPage] = useState(1);
+  const id = useId();
+  const { data, error, isValidating, mutate } = useSWR<Feed>(
+    open ? `/activity-feed?${new URLSearchParams({ conversationId, page: String(page) })}` : null,
+    fetcher,
+    { refreshInterval: page === 1 ? 10000 : 0 },
+  );
+  return (
+    <div className="flex flex-col gap-2">
+      <Button
+        variant="ghost"
+        size="sm"
+        className="self-start"
+        aria-expanded={open}
+        aria-controls={id}
+        onClick={() => setOpen(!open)}
+      >
+        Qué hizo el agente aquí
+        <ChevronDown className={cn(open && 'rotate-180')} />
+      </Button>
+      {open && (
+        <div id={id} className="flex flex-col gap-2">
+          {error && (
+            <Alert variant="destructive">
+              <AlertDescription className="flex flex-wrap items-center gap-2">
+                No se pudo cargar lo que hizo el agente.
+                <Button variant="outline" size="sm" onClick={() => mutate()}>
+                  Reintentar
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
+          {!error && !data && <Spinner aria-hidden="true" role="presentation" />}
+          {!error && data?.items.length === 0 && (
+            <p className="text-sm text-muted-foreground">
+              El agente no hizo nada en esta conversación.
+            </p>
+          )}
+          {!error &&
+            data?.items.map((event) => <EventCard key={event.id} event={event} zone={zone} />)}
+          {!error && data && data.total > data.pageSize && (
+            <nav className="flex items-center justify-center gap-3" aria-label="Páginas del rastro">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={page <= 1 || isValidating}
+                onClick={() => setPage(page - 1)}
+              >
+                Anterior
+              </Button>
+              <span className="text-xs text-muted-foreground">
+                Página {page} de {Math.ceil(data.total / data.pageSize)}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={page * data.pageSize >= data.total || isValidating}
+                onClick={() => setPage(page + 1)}
+              >
+                Siguiente
+              </Button>
+            </nav>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 export function ChatPanel({
@@ -105,10 +189,14 @@ export function ChatPanel({
   // A chosen file waits for the person to confirm whom it goes to.
   // One key per chosen file: retrying after a lost answer never sends it twice.
   const [file, setFile] = useState<{ file: File; key: string } | null>(null);
-  const agentOff = !me.tenant.agentEnabled && c.status !== 'closed';
+  const notice = agentNotice({
+    status: c.status,
+    agentEnabled: me.tenant.agentEnabled,
+    agentBlock: chat.agentBlock,
+    role: me.role,
+  });
   // MR-48/49: what the server would refuse, said before anyone types or confirms.
   const blocked = chat.sendBlock;
-  const agentBlocked = c.status !== 'agent' && !agentOff ? chat.agentBlock : null;
   const blockId = useId();
   const draft = useRef<HTMLTextAreaElement>(null);
   /** MR-59: a saved reply goes where the cursor is; what was written stays. */
@@ -288,7 +376,7 @@ export function ChatPanel({
               <small className="text-xs whitespace-nowrap text-muted-foreground">
                 {whatsAppPhone(chat.contact.phone)}
               </small>
-              <StatusBadge value={attention(c.status, me.tenant.agentEnabled)} />
+              <StatusBadge value={notice.badge} />
             </div>
           </div>
           <div className="ml-auto flex shrink-0 items-center gap-1">
@@ -333,7 +421,17 @@ export function ChatPanel({
               <Alert>
                 <Forward />
                 <AlertTitle>Transferida por el agente</AlertTitle>
-                <AlertDescription>{chat.handoff.reason}</AlertDescription>
+                <AlertDescription>
+                  {chat.handoff.reason} ·{' '}
+                  <time dateTime={chat.handoff.at}>
+                    {inZone(chat.handoff.at, me.tenant.timeZone, {
+                      day: 'numeric',
+                      month: 'short',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </time>
+                </AlertDescription>
               </Alert>
             )}
             <AssignmentControl
@@ -347,19 +445,7 @@ export function ChatPanel({
             <Alert>
               <Sparkles />
               <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
-                <span>
-                  {agentBlocked
-                    ? `El agente no podría responder: ${agentBlocked.reason}`
-                    : agentOff
-                      ? me.role === 'admin'
-                        ? 'El agente está apagado para todo el hospital. Actívalo en Configuración.'
-                        : 'El agente está apagado para todo el hospital. Pide al administrador que lo active.'
-                      : c.status === 'agent'
-                        ? 'El agente está atendiendo esta conversación.'
-                        : c.status === 'closed'
-                          ? 'La conversación está cerrada.'
-                          : 'Tu equipo está a cargo. El agente está en pausa.'}
-                </span>
+                <span>{notice.text}</span>
                 <ConfirmAction
                   ask={c.status !== 'agent'}
                   title="¿Activar el agente en esta conversación?"
@@ -377,8 +463,7 @@ export function ChatPanel({
                     size="sm"
                     disabled={
                       (!managesTeam(me) && !!c.assignedTo && c.assignedTo !== me.subject) ||
-                      (agentOff && c.status !== 'agent') ||
-                      !!agentBlocked
+                      !notice.canActivate
                     }
                   >
                     {c.status === 'agent' ? 'Tomar conversación' : 'Activar agente'}
@@ -386,6 +471,9 @@ export function ChatPanel({
                   </Button>
                 </ConfirmAction>
               </AlertDescription>
+              <div className="col-start-2 mt-2">
+                <AgentTrail conversationId={c.id} zone={me.tenant.timeZone} />
+              </div>
             </Alert>
             <div className="flex flex-wrap items-center gap-2">
               <PatientClinical

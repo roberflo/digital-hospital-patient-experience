@@ -1,11 +1,12 @@
 # Rastro del agente en la conversación
 
-**Estado (2026-11-14, medido en `d0c5054`):** S1 **aceptada, sin construir**. El panel del chat sigue
-sin pedir el feed por `conversationId` (sólo `activity-workspace.tsx:278`). Cubierto desde la última
-medición: P-1 publicado (OQ-4 cerrada); MR-47 da `handoff { reason, at }`; MR-49 da `agentBlock`,
-que cierra el hueco de `SEND_ENABLED` del criterio 5. Defecto vivo que S1 corrige:
-`chat-panel.tsx:111` ignora `agentBlock` cuando `status === 'agent'` (INV-4). OQ-1/2/3 no bloquean
-S1 (statu quo congelado); OQ-5 bloquea sólo S3.
+**Estado (2026-11-14, S1 construida sobre `a811340`):** S1 **construida**. Verificados: criterios 1 (backend),
+2, 11 (backend; 1613/1613 con `scripts/test-backend.sh`), 3, 4, 5, 6 (`test:ui` 9/9, `test:server` 48/48, typecheck y
+lint limpios). **Sin verificar:** criterios 7–10 y la parte de navegador del 1 (`tests/inbox-ux.spec.ts`, pruebas
+`AT-1`, `AT-5`, `AT-7`…`AT-10` escritas, no corridas: la API y la web de Recepción no estaban levantadas ni se
+pudo levantarlas sin tocar el checkout compartido); el movimiento reducido del 10 sigue siendo revisión visual.
+Defecto de INV-4 corregido (`agent-notice.ts` gobierna aviso e insignia). OQ-1/2/3 no bloquearon S1 (statu quo
+congelado); OQ-5 bloquea sólo S3. Pendiente fuera de alcance: la insignia de la lista y `/overview` (OQ-11).
 
 Petición (2026-10-04): llevar a Recepción la «pestaña Agente» de `trycompai/crm`. Medido contra
 `origin/main` (`6ff1cfd`), el agente de Recepción conversa con el paciente por WhatsApp, no con

@@ -115,4 +115,50 @@ public sealed class AgentTraceTests : IAsyncLifetime
 
         Assert.StartsWith("Gracias, Ana.", h.Sent[^1]);
     }
+
+    // docs/agent-trail.md, S1. The trail of one conversation (criterion 1), in words reception reads (2), read without leaving a mark (11).
+    static async Task<ActivityFeedPage> Feed(CrmDb db, TenantScope scope, Guid conversation) => ((Microsoft.AspNetCore.Http.HttpResults.Ok<ActivityFeedPage>)await ActivityFeed.Read(db, scope, null, null, null, null, conversation, null, null, 1, CancellationToken.None)).Value!;
+
+    [Fact]
+    public async Task TheTrailHoldsOnlyThisConversationAndNothingOfAnotherTenant()
+    {
+        var number = new Channel { TenantId = h.Scope.Id, Name = "Otro número", PhoneNumberId = Guid.NewGuid().ToString("N"), Enabled = true }; h.Db.Add(number);
+        var other = new Conversation { TenantId = h.Scope.Id, ChannelId = number.Id, ContactId = h.Contact.Id, Status = "human" }; h.Db.Add(other); await h.Db.SaveChangesAsync();
+        h.Db.Activities.Add(new Activity { TenantId = h.Scope.Id, ConversationId = h.Conversation.Id, ContactId = h.Contact.Id, Kind = "note", Actor = "Ana", ActorRole = "agent", Body = "aquí" });
+        h.Db.Activities.Add(new Activity { TenantId = h.Scope.Id, ConversationId = other.Id, ContactId = h.Contact.Id, Kind = "note", Actor = "Ana", ActorRole = "agent", Body = "en la otra" });
+        await h.Db.SaveChangesAsync();
+        await using var foreign = new AgentHarness(); await foreign.Start();
+        foreign.Db.Activities.Add(new Activity { TenantId = foreign.Scope.Id, ConversationId = foreign.Conversation.Id, Kind = "note", Actor = "Ana", ActorRole = "agent", Body = "ajena" }); await foreign.Db.SaveChangesAsync();
+
+        var mine = await Feed(h.Db, h.Scope, h.Conversation.Id);
+        Assert.Contains(mine.Items, i => i.Body == "aquí"); Assert.DoesNotContain(mine.Items, i => i.Body == "en la otra" || i.Body == "ajena");
+        Assert.All(mine.Items, i => Assert.Equal(h.Conversation.Id, i.ConversationId));
+        Assert.Equal(0, (await Feed(h.Db, h.Scope, foreign.Conversation.Id)).Total); // another tenant's id: no rows, never a refusal
+    }
+
+    [Theory]
+    [InlineData("handoff"), InlineData("record_note"), InlineData("hospital_availability"), InlineData("my_appointments"), InlineData("my_prescriptions"), InlineData("get_prescription"), InlineData("send_prescription"), InlineData("send_latest_prescription"),
+     InlineData("propose_action"), InlineData("propose_registration"), InlineData("start_registration"), InlineData("remember"), InlineData("recall"), InlineData("hospital_services"), InlineData("hospital_contact"), InlineData("hospital_disciplines"),
+     InlineData("hospital_agreement"), InlineData("herramienta_que_no_existe")]
+    public void EveryStepOfTheAgentReadsInReceptionsWordsNeverAsATool(string tool)
+    {
+        foreach (var outcome in new[] { "completado", "requiere revisión" })
+        {
+            var shown = ActivityFeed.DisplayBody(new Activity { Kind = "agent_tool", Body = $"Herramienta: {tool}. Resultado: {outcome}." });
+            Assert.DoesNotContain("Herramienta", shown); Assert.DoesNotContain(tool, shown);
+            Assert.EndsWith(outcome == "completado" ? ": completado." : ": requiere revisión.", shown);
+        }
+    }
+
+    [Fact]
+    public async Task OpeningTheTrailWritesNothing()
+    {
+        h.Db.Activities.Add(new Activity { TenantId = h.Scope.Id, ConversationId = h.Conversation.Id, ContactId = h.Contact.Id, Kind = "agent_tool", Actor = "Agente", ActorRole = "agent_ai", Body = "Herramienta: recall. Resultado: completado." }); await h.Db.SaveChangesAsync();
+        async Task<(int, int, long)> Marks() { await using var db = h.NewContext(); return (await db.Activities.CountAsync(), await db.Audits.CountAsync(), (await db.Conversations.AsNoTracking().SingleAsync(c => c.Id == h.Conversation.Id)).Revision); }
+        var before = await Marks();
+
+        Assert.NotEmpty((await Feed(h.Db, h.Scope, h.Conversation.Id)).Items);
+
+        Assert.Equal(before, await Marks());
+    }
 }

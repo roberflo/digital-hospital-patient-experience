@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createElement as h } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { SWRConfig } from 'swr';
-import { ChatPanel } from '../src/components/chat-panel.tsx';
+import { AgentTrail, ChatPanel } from '../src/components/chat-panel.tsx';
 
 // RXE-C1/C2/C4 on the real inbox bubble: the action is where the person reads the message, and only there.
 const LABEL = 'Guardar en el expediente';
@@ -79,4 +79,111 @@ test('RXE_C4_a_saved_message_shows_it_is_in_the_record_instead_of_the_action', (
   const html = render({ saved: 'a-1' });
   assert.ok(html.includes('Guardado en el expediente'));
   assert.ok(!html.includes(LABEL));
+});
+
+// docs/agent-trail.md S1: the agent notice (criteria 3, 5) and the trail inside it (3, 4, 6).
+const zone = {
+  id: 't-1',
+  name: 'Hospital Sintético',
+  timeZone: 'America/El_Salvador',
+  agentEnabled: true,
+};
+function notice(chat: object, tenant: object = {}) {
+  const base = {
+    unreadCount: 0,
+    sendBlock: null,
+    agentBlock: null,
+    handoff: null,
+    contact: { id: 'k-1', name: 'Paciente Sintético', phone: '50370000000' },
+    channel: { id: 'ch-1', name: 'WhatsApp' },
+  };
+  const me = { subject: 'doc-1', name: 'Ana', role: 'agent', tenant: { ...zone, ...tenant } };
+  const swr = { fallback: { '/conversations/c-1/messages': [] }, provider: () => new Map() };
+  return renderToStaticMarkup(
+    h(
+      SWRConfig,
+      { value: swr },
+      h(ChatPanel, {
+        chat: { ...base, ...chat },
+        me,
+        onClose() {},
+        refresh() {},
+      } as unknown as Parameters<typeof ChatPanel>[0]),
+    ),
+  );
+}
+const tomar = (html: string) => /<button[^>]*>Tomar conversación/.exec(html)?.[0] ?? '';
+test('AT_5_an_agent_conversation_whose_number_is_off_does_not_claim_the_agent_attends_and_can_be_taken', () => {
+  const html = notice({
+    conversation: { id: 'c-1', status: 'agent' },
+    agentBlock: { code: 'channel', reason: 'El número está desactivado.' },
+  });
+  assert.ok(!html.includes('El agente está atendiendo'));
+  assert.ok(html.includes('El agente no podría responder: El número está desactivado.'));
+  assert.ok(tomar(html) && !/\sdisabled=/.test(tomar(html)), tomar(html));
+});
+test('AT_3_the_handoff_notice_says_the_reason_and_the_hour_in_the_tenants_zone', () => {
+  const html = notice({
+    conversation: { id: 'c-1', status: 'human' },
+    handoff: { reason: 'Pidió hablar con una persona', at: '2026-10-25T16:30:00Z' },
+  });
+  assert.ok(html.includes('Pidió hablar con una persona'));
+  assert.ok(html.includes('10:30'), 'hora de El Salvador (UTC-6)');
+});
+function trail(items: object[], extra: Record<string, unknown> = {}) {
+  const fallback = {
+    '/activity-feed?conversationId=c-1&page=1': {
+      items,
+      total: items.length,
+      page: 1,
+      pageSize: 30,
+      careCounts: {},
+    },
+  };
+  return renderToStaticMarkup(
+    h(
+      SWRConfig,
+      { value: { fallback, provider: () => new Map() } },
+      h(AgentTrail, { conversationId: 'c-1', zone: zone.timeZone, defaultOpen: true, ...extra }),
+    ),
+  );
+}
+const step = (o: object) => ({
+  id: 's-1',
+  kind: 'note',
+  category: 'note',
+  actor: 'Sistema',
+  actorRole: 'system',
+  careType: 'system',
+  body: '',
+  createdAt: '2026-10-25T16:30:00Z',
+  ...o,
+});
+test('AT_3_a_handoff_step_shows_who_when_and_the_reason', () => {
+  const html = trail([
+    step({ kind: 'handoff', actor: 'Agente', body: 'Pidió hablar con una persona' }),
+  ]);
+  for (const text of ['Agente', '10:30', 'Pidió hablar con una persona'])
+    assert.ok(html.includes(text), text);
+});
+test('AT_4_a_withheld_answer_reads_as_such_with_its_category_and_says_the_text_was_not_kept', () => {
+  const html = trail([
+    step({ kind: 'guard', category: 'review', body: 'Respuesta automática retenida: dosis.' }),
+  ]);
+  for (const text of ['Retuvo una respuesta automática', 'dosis', 'El texto retenido no se guardó'])
+    assert.ok(html.includes(text), text);
+});
+test('AT_6_an_empty_trail_says_so_in_one_sentence', () => {
+  assert.ok(trail([]).includes('El agente no hizo nada en esta conversación.'));
+});
+test('AT_closed_by_default_it_shows_no_steps_and_asks_for_nothing', () => {
+  const html = renderToStaticMarkup(
+    h(
+      SWRConfig,
+      { value: { provider: () => new Map() } },
+      h(AgentTrail, { conversationId: 'c-1', zone: zone.timeZone }),
+    ),
+  );
+  assert.ok(html.includes('aria-expanded="false"'));
+  assert.ok(!html.includes('El agente no hizo nada'));
 });

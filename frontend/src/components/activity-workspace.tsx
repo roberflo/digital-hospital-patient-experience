@@ -38,7 +38,7 @@ import { NativeSelect, NativeSelectOption } from './ui/native-select';
 import { Spinner } from './ui/spinner';
 import { Toggle } from './ui/toggle';
 
-type Event = {
+export type Event = {
   id: string;
   kind: string;
   category: string;
@@ -54,7 +54,7 @@ type Event = {
   channelName?: string;
   deliveryStatus?: string;
 };
-type Feed = {
+export type Feed = {
   items: Event[];
   total: number;
   page: number;
@@ -82,7 +82,7 @@ const categories = [
   ['ai_action', 'Acciones del agente'],
   ['crm', 'Cambios en la ficha'],
 ];
-const titles: Record<string, string> = {
+export const titles: Record<string, string> = {
   response: 'Respondió al paciente',
   handoff: 'Cambió la atención de la conversación',
   assignment: 'Asignó la conversación',
@@ -144,14 +144,15 @@ function ActorIcon({ type }: { type: string }) {
     <Users />
   );
 }
-function EventCard({
+/** Without `onPatient` the card sits inside one conversation (the agent trail): no patient heading, no links out. */
+export function EventCard({
   event,
   zone,
   onPatient,
 }: {
   event: Event;
   zone: string;
-  onPatient: () => void;
+  onPatient?: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const deliveryProblem = ['failed', 'uncertain'].includes(event.deliveryStatus ?? '');
@@ -174,9 +175,11 @@ function EventCard({
               })}
             </time>
           </div>
-          <ItemTitle>
-            <h3>{event.patientName ?? 'Actividad general del hospital'}</h3>
-          </ItemTitle>
+          {onPatient && (
+            <ItemTitle>
+              <h3>{event.patientName ?? 'Actividad general del hospital'}</h3>
+            </ItemTitle>
+          )}
           <p className="text-sm text-muted-foreground">
             <strong className="font-medium text-foreground">{event.actor}</strong> ·{' '}
             {event.kind === 'response' && deliveryProblem
@@ -185,6 +188,9 @@ function EventCard({
                 ? 'Está enviando una respuesta'
                 : (titles[event.kind] ?? 'Registró una acción')}
           </p>
+          {event.kind === 'guard' && (
+            <small className="text-xs text-muted-foreground">El texto retenido no se guardó.</small>
+          )}
           {event.careType === 'unknown' && (
             <small className="text-xs text-muted-foreground">
               Este registro anterior no guardó el rol de quien realizó la acción.
@@ -221,7 +227,7 @@ function EventCard({
               </span>
             )}
             <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
-              {event.contactId && (
+              {onPatient && event.contactId && (
                 <Button
                   variant="ghost"
                   size="sm"
@@ -231,7 +237,7 @@ function EventCard({
                   Historial del paciente
                 </Button>
               )}
-              {event.conversationId && (
+              {onPatient && event.conversationId && (
                 <Button variant="ghost" size="sm" asChild>
                   <a href={`/?view=inbox&conversationId=${event.conversationId}`}>
                     Abrir conversación <ArrowUpRight />

@@ -29,8 +29,13 @@ public static class ActivityFeed
         if (activity.Kind.StartsWith("proposal", StringComparison.Ordinal)) return activity.Kind.StartsWith("proposal_used:", StringComparison.Ordinal) ? "Confirmación de agenda procesada en la conversación." : "Propuesta de agenda enviada para confirmación del paciente.";
         if (activity.Kind == "agent_tool")
         {
-            var actions = new Dictionary<string,string> { ["handoff"]="Transferencia a una persona", ["record_note"]="Nota de seguimiento", ["hospital_availability"]="Consulta de disponibilidad", ["my_appointments"]="Consulta de citas del paciente", ["my_prescriptions"]="Consulta de recetas emitidas", ["get_prescription"]="Consulta de una receta", ["send_prescription"]="Envío de receta", ["send_latest_prescription"]="Envío de la última receta", ["propose_action"]="Propuesta de cambio en la agenda", ["propose_registration"]="Propuesta de registro del paciente", ["start_registration"]="Inicio del registro guiado", ["remember"]="Preferencia del paciente guardada", ["recall"]="Consulta de mensajes anteriores" };
-            foreach(var (name,label) in actions) if(activity.Body.StartsWith($"Herramienta: {name}.", StringComparison.Ordinal)) return label + (activity.Body.Contains("requiere revisión",StringComparison.Ordinal)?": requiere revisión.":": completado.");
+            var actions = new Dictionary<string,string> { ["handoff"]="Transferencia a una persona", ["record_note"]="Nota de seguimiento", ["hospital_availability"]="Consulta de disponibilidad", ["my_appointments"]="Consulta de citas del paciente", ["my_prescriptions"]="Consulta de recetas emitidas", ["get_prescription"]="Consulta de una receta", ["send_prescription"]="Envío de receta", ["send_latest_prescription"]="Envío de la última receta", ["propose_action"]="Propuesta de cambio en la agenda", ["propose_registration"]="Propuesta de registro del paciente", ["start_registration"]="Inicio del registro guiado", ["remember"]="Preferencia del paciente guardada", ["recall"]="Consulta de mensajes anteriores", ["hospital_services"]="Consulta del catálogo de servicios", ["hospital_contact"]="Consulta de dirección y teléfono", ["hospital_disciplines"]="Consulta de disciplinas", ["hospital_agreement"]="Consulta de convenio" };
+            // A tool without a label is still a step, never its internal name (docs/agent-trail.md INV-2).
+            if(activity.Body.StartsWith("Herramienta: ", StringComparison.Ordinal))
+            {
+                var name = activity.Body["Herramienta: ".Length..].Split('.')[0];
+                return actions.GetValueOrDefault(name, "Acción automática") + (activity.Body.Contains("requiere revisión",StringComparison.Ordinal)?": requiere revisión.":": completado.");
+            }
         }
         return activity.Body;
     }
