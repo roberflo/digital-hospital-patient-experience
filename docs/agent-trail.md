@@ -5,7 +5,7 @@
 48/48, typecheck y lint limpios) y 5: la parte del aviso con `agent-notice` y `test:ui`; la insignia de la
 cabecera sólo queda verificada con la prueba `AT_5` de `ui-tests`. **Sin verificar:** criterios 7–10 y la parte
 de navegador del 1 (`tests/inbox-ux.spec.ts`, pruebas `AT-1`, `AT-5`, `AT-7`…`AT-10` escritas, no corridas: la
-API y la web de Recepción no estaban levantadas); el movimiento reducido del 10 sigue siendo revisión visual.
+API y la web de Recepción no estaban levantadas).
 OQ-1/2/3 no bloquearon S1 (statu quo congelado); OQ-5 bloquea sólo S3. Pendiente fuera de alcance: la
 insignia de la lista y `/overview` (OQ-11).
 
@@ -92,7 +92,7 @@ por la ruta existente.
 | 7 | Si el rastro no carga, veo el error con «Reintentar» y sigo pudiendo responder al paciente. | Navegador (`inbox-ux.spec.ts`): feed simulado con 500; «Mensaje al paciente» sigue habilitado (etiqueta verificada en `activity.spec.ts:148`). |
 | 8 | Puedo llegar a los pasos anteriores cuando hay más de 30. | Navegador: `total: 31`, segunda página pedida con `page=2` (patrón `activity.spec.ts:116-136`). |
 | 9 | Con el rastro abierto en la página 1, un paso nuevo aparece solo en 10 s o menos; cerrado, o en otra página, no se consulta. | Navegador: contar peticiones al feed simulado con el rastro cerrado (0) y abierto. |
-| 10 | Lo uso con teclado y lector de pantalla, en 360 px sin desplazamiento horizontal y sin animación con movimiento reducido. | Navegador, proyectos `desktop` y `mobile` de `playwright.config.ts`: abrir por teclado, `aria-expanded`, `scrollWidth <= innerWidth` (patrón `activity.spec.ts:99`). El movimiento reducido es revisión visual: **hueco declarado**. |
+| 10 | Lo uso con teclado y lector de pantalla, en 360 px sin desplazamiento horizontal y sin animación con movimiento reducido. | Navegador, proyectos `desktop` y `mobile` de `playwright.config.ts`: abrir por teclado, `aria-expanded`, `scrollWidth <= innerWidth` (patrón `activity.spec.ts:99`). Movimiento reducido: `ui-tests/chat-panel.test.ts` (`AT_10_…spinner…`) comprueba que el spinner de carga lleva `motion-reduce:animate-none` (el rastro no tiene otra animación: el chevron no transiciona). |
 | 11 | Abrir el rastro no deja huella en los datos (INV-3). | Backend (`AgentTraceTests.cs`): contar `Activities`, `Audits` y `Conversation.Revision` antes y después de `ActivityFeed.Read`. |
 
 `test:server` corre en CI (`.github/workflows/verify.yml:26`); `test:ui` y Playwright **no**. Playwright
@@ -101,7 +101,7 @@ además inicia sesión en el Keycloak de Hospital y necesita `KC_DEV_USERS_PASSW
 de `5dbb68f` y el Keycloak local de Hospital: `AT-1`, `AT-5`, `AT-7`, `AT-8`, `AT-9` y `AT-10`, 12/12 en `desktop` y
 `mobile`, con las respuestas del rastro simuladas por `page.route` (no se ejercitó un rastro real). `AT-9` usa
 `clock.runFor`: con `fastForward` el segundo sondeo no se disparaba (defecto de la prueba, no del producto). Verificados
-los criterios 1 (navegador), 5, 7, 8, 9 y 10, salvo el movimiento reducido (hueco declarado).
+los criterios 1 (navegador), 5, 7, 8 y 9, y 10 (el movimiento reducido, con `test:ui`).
 
 ## Anti-criterios
 

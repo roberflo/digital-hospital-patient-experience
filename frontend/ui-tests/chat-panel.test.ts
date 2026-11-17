@@ -198,3 +198,16 @@ test('AT_closed_the_trail_asks_for_nothing_the_key_is_null_and_open_it_names_the
   assert.equal(trailKey(true, 'c-1', 2), '/activity-feed?conversationId=c-1&page=2');
   assert.ok(!String(trailKey(true, 'c-1', 1)).includes('contactId'));
 });
+
+test('AT_10_the_trail_loading_spinner_does_not_animate_with_reduced_motion', () => {
+  // No fallback: the open trail has no data yet and shows the spinner.
+  const html = renderToStaticMarkup(
+    h(
+      SWRConfig,
+      { value: { provider: () => new Map(), fetcher: () => new Promise(() => {}) } },
+      h(AgentTrail, { conversationId: 'c-1', zone: 'America/El_Salvador', defaultOpen: true }),
+    ),
+  );
+  assert.match(html, /aria-label="Cargando"/);
+  assert.match(html, /motion-reduce:animate-none/);
+});

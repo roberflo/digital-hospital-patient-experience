@@ -459,7 +459,7 @@ test('AT-10 the trail opens by keyboard, announces its state and fits 360 px', a
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.keyboard.press('Space');
   await expect(trailButton(page)).toHaveAttribute('aria-expanded', 'false');
-  // Reduced motion is a visual review, not asserted here (docs/agent-trail.md criterion 10, declared gap).
+  // Reduced motion: ui-tests/chat-panel.test.ts AT_10 (spinner motion-reduce:animate-none).
 });
 
 test('AT-5 a conversation of the agent whose number is off can be taken', async ({ page }) => {
